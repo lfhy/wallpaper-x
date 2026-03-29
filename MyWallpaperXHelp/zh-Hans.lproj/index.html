@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="AppleTitle" content="MyWallpaperX 帮助">
+    <title>MyWallpaperX 帮助</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- Header -->
+<div class="help-header">
+    <img class="app-icon" src="icon.png" alt="MyWallpaperX">
+    <h1>MyWallpaperX</h1>
+    <div class="subtitle">遵循 macOS 26 原生设计规范，以简洁优雅的界面风格，<br>为 Mac 带来沉浸式动态视频壁纸体验。</div>
+    <div class="version-badge">版本 1.0 &nbsp;·&nbsp; 仅支持 macOS</div>
+</div>
+
+<!-- Navigation -->
+<nav class="toc">
+    <a href="#features">功能特色</a>
+    <a href="#getting-started">快速上手</a>
+    <a href="#shortcuts">快捷键</a>
+    <a href="#playback">播放控制</a>
+    <a href="#library">壁纸库</a>
+    <a href="#display">显示设置</a>
+    <a href="#performance">性能省电</a>
+    <a href="#faq">常见问题</a>
+    <a href="#tech">技术实现</a>
+</nav>
+
+<div class="content">
+
+<!-- 功能特色 -->
+<div id="features" class="section">
+    <div class="section-header">
+        <span class="icon">✦</span>
+        <h2>功能特色</h2>
+    </div>
+    <div class="feature-grid">
+        <div class="feature-card">
+            <span class="feature-icon">🎬</span>
+            <h3>视频壁纸播放</h3>
+            <p>将任意本地视频文件设为桌面壁纸，支持循环、顺序与随机切换。</p>
+        </div>
+        <div class="feature-card">
+            <span class="feature-icon">📚</span>
+            <h3>壁纸库管理</h3>
+            <p>导入、整理、收藏、标签分类，所有壁纸一目了然，随时快速定位。</p>
+        </div>
+        <div class="feature-card">
+            <span class="feature-icon">⚡</span>
+            <h3>自动切换</h3>
+            <p>按设定时间间隔自动轮播，支持秒、分、小时三种时间单位。</p>
+        </div>
+        <div class="feature-card">
+            <span class="feature-icon">🖥</span>
+            <h3>多屏适配</h3>
+            <p>在所有已连接显示器上同步播放壁纸，适配多种分辨率。</p>
+        </div>
+        <div class="feature-card">
+            <span class="feature-icon">🔋</span>
+            <h3>智能省电</h3>
+            <p>未连接电源、闲置或其他应用全屏时，自动暂停播放节省电量。</p>
+        </div>
+        <div class="feature-card">
+            <span class="feature-icon">⌨️</span>
+            <h3>全局快捷键</h3>
+            <p>支持 F1–F12 系统快捷键绑定，无需打开主界面即可控制播放。</p>
+        </div>
+        <div class="feature-card">
+            <span class="feature-icon">🔇</span>
+            <h3>音量控制</h3>
+            <p>独立调整壁纸音量或一键静音，不影响系统其他音频输出。</p>
+        </div>
+        <div class="feature-card">
+            <span class="feature-icon">📤</span>
+            <h3>配置备份</h3>
+            <p>一键导出全部壁纸配置、标签与收藏，换机后快速恢复。</p>
+        </div>
+        <div class="feature-card">
+            <span class="feature-icon">🔍</span>
+            <h3>快速检索</h3>
+            <p>实时搜索壁纸文件名，结合标签、收藏侧边栏，毫秒级定位目标壁纸。</p>
+        </div>
+    </div>
+</div>
+
+<!-- 快速上手 -->
+<div id="getting-started" class="section">
+    <div class="section-header">
+        <span class="icon">🚀</span>
+        <h2>快速上手</h2>
+    </div>
+    <div class="section-body">
+        <p><strong>第一步：导入视频</strong><br>
+        点击工具栏「导入」按钮，或按 <span class="key">⌘</span><span class="key">O</span>，选择本地视频文件（支持 MP4、MOV、M4V 等格式）导入壁纸库。支持批量选择多个文件。</p>
+
+        <p><strong>第二步：设为壁纸</strong><br>
+        在壁纸库中单击选中一张视频，双击卡片或按 <span class="key">↩</span> 回车键，即可立即将其设为桌面壁纸。</p>
+
+        <p><strong>第三步：调整播放设置</strong><br>
+        点击工具栏右侧偏好设置图标，或按 <span class="key">⌘</span><span class="key">,</span>，在「播放」分区调整循环、随机、自动切换等选项。</p>
+
+        <p><strong>第四步：常驻菜单栏</strong><br>
+        关闭主窗口后，MyWallpaperX 将继续在菜单栏托盘运行。点击托盘图标可快速控制播放、切换壁纸或重新打开主界面。</p>
+
+        <div class="note-box">
+            <strong>提示：</strong>首次启动时，系统可能弹出权限请求，这是壁纸引擎正常工作所必需的，请点击「好」授权。
+        </div>
+    </div>
+</div>
+
+<!-- 快捷键 -->
+<div id="shortcuts" class="section">
+    <div class="section-header">
+        <span class="icon">⌨</span>
+        <h2>键盘快捷键</h2>
+    </div>
+    <table class="shortcut-table">
+        <thead>
+            <tr>
+                <th style="width:55%">操作</th>
+                <th>快捷键</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td class="shortcut-group" colspan="2">壁纸控制</td></tr>
+            <tr><td class="action">将选中壁纸设为桌面</td><td class="keys"><span class="key">↩</span></td></tr>
+            <tr><td class="action">切换下一张壁纸</td><td class="keys"><span class="key">⌘</span> <span class="key">→</span></td></tr>
+            <tr><td class="action">切换上一张壁纸</td><td class="keys"><span class="key">⌘</span> <span class="key">←</span></td></tr>
+            <tr><td class="shortcut-group" colspan="2">文件操作</td></tr>
+            <tr><td class="action">导入视频</td><td class="keys"><span class="key">⌘</span> <span class="key">O</span></td></tr>
+            <tr><td class="action">删除选中壁纸（无确认弹窗）</td><td class="keys"><span class="key">⌘</span> <span class="key">⌫</span></td></tr>
+            <tr><td class="action">在访达中定位文件</td><td class="keys"><span class="key">⌘</span> <span class="key">R</span></td></tr>
+            <tr><td class="action">查看壁纸详细信息</td><td class="keys"><span class="key">⌘</span> <span class="key">I</span></td></tr>
+            <tr><td class="shortcut-group" colspan="2">整理与标注</td></tr>
+            <tr><td class="action">收藏 / 取消收藏</td><td class="keys"><span class="key">⌘</span> <span class="key">D</span></td></tr>
+            <tr><td class="action">添加标签</td><td class="keys"><span class="key">⌘</span> <span class="key">T</span></td></tr>
+            <tr><td class="shortcut-group" colspan="2">选择操作</td></tr>
+            <tr><td class="action">进入 / 退出多选模式</td><td class="keys"><span class="key">⌘</span> <span class="key">E</span></td></tr>
+            <tr><td class="action">全选（多选模式下）</td><td class="keys"><span class="key">⌘</span> <span class="key">A</span></td></tr>
+            <tr><td class="action">方向键导航卡片</td><td class="keys"><span class="key">↑</span> <span class="key">↓</span> <span class="key">←</span> <span class="key">→</span></td></tr>
+            <tr><td class="shortcut-group" colspan="2">视图</td></tr>
+            <tr><td class="action">放大缩略图（减少列数）</td><td class="keys"><span class="key">⌘</span> <span class="key">−</span></td></tr>
+            <tr><td class="action">缩小缩略图（增加列数）</td><td class="keys"><span class="key">⌘</span> <span class="key">+</span></td></tr>
+            <tr><td class="shortcut-group" colspan="2">应用</td></tr>
+            <tr><td class="action">打开主界面</td><td class="keys"><span class="key">⌘</span> <span class="key">N</span></td></tr>
+            <tr><td class="action">偏好设置</td><td class="keys"><span class="key">⌘</span> <span class="key">,</span></td></tr>
+            <tr><td class="action">退出应用</td><td class="keys"><span class="key">⌘</span> <span class="key">Q</span></td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- 播放控制 -->
+<div id="playback" class="section">
+    <div class="section-header">
+        <span class="icon">▶</span>
+        <h2>播放控制</h2>
+    </div>
+    <div class="section-body">
+        <p><strong>循环播放</strong>：开启后，单张壁纸播放结束后从头重播，不自动切换到下一张。</p>
+        <p><strong>顺序播放</strong>：按壁纸库排列顺序依次切换，播放到最后一张后回到第一张。</p>
+        <p><strong>随机播放</strong>：每次切换时从壁纸库中随机选择下一张，尽量不重复。</p>
+        <p><strong>自动切换</strong>：按设定的时间间隔自动切换壁纸，间隔时间支持秒、分钟或小时单位。</p>
+        <p><strong>播放速率</strong>：在偏好设置中开启后，可将视频播放速率调整为 0.25× 至 2.0×，步长 0.25。</p>
+        <p><strong>音量控制</strong>：独立调整壁纸视频的音量（0–100%），静音开关不影响其他应用的系统音量。</p>
+        <div class="note-box">
+            <strong>注意：</strong>开启「自动切换」后，当前视频将循环播放直至计时器到期再切换下一张。关闭后，视频播完会自然过渡到下一张（取决于顺序/随机设置）。
+        </div>
+    </div>
+</div>
+
+<!-- 壁纸库管理 -->
+<div id="library" class="section">
+    <div class="section-header">
+        <span class="icon">📁</span>
+        <h2>壁纸库管理</h2>
+    </div>
+    <div class="section-body">
+        <p><strong>导入视频</strong>：支持拖放文件到主窗口，或通过菜单「文件 → 导入视频」（<span class="key">⌘O</span>）批量导入。</p>
+        <p><strong>收藏</strong>：选中壁纸后按 <span class="key">⌘D</span>，收藏的壁纸可在侧边栏「收藏」分类中快速访问。</p>
+        <p><strong>标签</strong>：按 <span class="key">⌘T</span> 为壁纸添加自定义标签，在侧边栏按标签筛选浏览。</p>
+        <p><strong>多选删除</strong>：按 <span class="key">⌘E</span> 进入多选模式，框选或逐一点击多张壁纸，再按 <span class="key">⌘⌫</span> 批量删除。删除操作仅移除库中的引用，<strong>不会删除原始视频文件</strong>。</p>
+        <p><strong>最近使用</strong>：侧边栏「最近使用」自动记录最近播放的 25 张壁纸，方便快速回切。</p>
+        <p><strong>排序</strong>：工具栏「排序」按钮支持按名称、导入时间、最近播放时间等排序，每个分类独立保存排序状态。</p>
+        <p><strong>配置备份</strong>：在「偏好设置 → 导出个人设置」中导出为 JSON 文件，换机后通过「导入个人设置」恢复。</p>
+    </div>
+</div>
+
+<!-- 显示设置 -->
+<div id="display" class="section">
+    <div class="section-header">
+        <span class="icon">🖥</span>
+        <h2>显示设置</h2>
+    </div>
+    <div class="section-body">
+        <p><strong>缩略图大小</strong>：使用工具栏缩放按钮或快捷键 <span class="key">⌘−</span> / <span class="key">⌘+</span> 调整网格列数（2–6 列），偏好自动保存并在下次启动时恢复。</p>
+        <p><strong>视频填充模式</strong>：</p>
+        <p>• <strong>适应（Fit）</strong>：保持视频原始比例，两侧可能出现留白。<br>
+           • <strong>填充（Fill）</strong>：裁剪视频以完全覆盖桌面，不留边框。</p>
+        <p><strong>多屏适配</strong>：在偏好设置中开启「多屏适配」后，所有已连接显示器将同步播放同一壁纸。</p>
+        <p><strong>同步系统壁纸</strong>：开启后，每次切换壁纸时自动将视频当前帧同步为系统静态壁纸，方便截图或锁屏显示。</p>
+    </div>
+</div>
+
+<!-- 性能与电源 -->
+<div id="performance" class="section">
+    <div class="section-header">
+        <span class="icon">🔋</span>
+        <h2>性能与电源管理</h2>
+    </div>
+    <div class="section-body">
+        <p><strong>其他应用获得焦点时暂停</strong>：当前台有其他应用运行时暂停壁纸播放，释放 GPU 资源。</p>
+        <p><strong>其他应用全屏时暂停</strong>：检测到游戏、视频等全屏应用时自动暂停，避免后台占用帧率。</p>
+        <p><strong>未连接电源时暂停</strong>：使用电池供电时自动暂停播放，延长续航时间。</p>
+        <p><strong>电脑不活跃时暂停</strong>：系统闲置超过设定时间（默认 10 分钟）后暂停播放，恢复活动后自动继续。</p>
+        <div class="note-box">
+            <strong>建议：</strong>在 MacBook 上建议开启「未连接电源时暂停」，可显著降低电池消耗。台式机用户可关闭所有暂停选项以获得连续播放体验。
+        </div>
+    </div>
+</div>
+
+<!-- 常见问题 -->
+<div id="faq" class="section">
+    <div class="section-header">
+        <span class="icon">❓</span>
+        <h2>常见问题</h2>
+    </div>
+    <div class="faq-item">
+        <h3>为什么壁纸播放后系统风扇转速上升？</h3>
+        <p>视频解码会占用 GPU/CPU 资源，高分辨率视频尤为明显。建议使用 H.264 或 HEVC 编码的视频，并开启「其他应用全屏时暂停」减少不必要的后台渲染。</p>
+    </div>
+    <div class="faq-item">
+        <h3>删除壁纸后，原始视频文件还在吗？</h3>
+        <p>在。MyWallpaperX 的删除操作仅从壁纸库中移除引用记录及缩略图缓存，不会删除磁盘上的原始视频文件。</p>
+    </div>
+    <div class="faq-item">
+        <h3>支持哪些视频格式？</h3>
+        <p>支持 macOS AVFoundation 框架能解码的所有格式，包括 MP4（H.264/HEVC）、MOV、M4V 等。不支持需要第三方解码器的格式（如 MKV、AVI 含特殊编码）。</p>
+    </div>
+    <div class="faq-item">
+        <h3>如何让壁纸开机自动播放？</h3>
+        <p>在「偏好设置 → 系统 → 开机自启动」中开启即可。MyWallpaperX 会在登录时自动启动并恢复上次的壁纸设置。</p>
+    </div>
+    <div class="faq-item">
+        <h3>缩略图显示空白或加载缓慢怎么办？</h3>
+        <p>缩略图首次加载需要生成缓存，请耐心等待。若长时间空白，可在「偏好设置 → 清空缓存」中重置缩略图缓存，再重新打开主界面触发重建。</p>
+    </div>
+    <div class="faq-item">
+        <h3>更换 Mac 后如何迁移壁纸库？</h3>
+        <p>在旧 Mac 上通过「偏好设置 → 导出个人设置」导出 JSON 配置文件，将配置文件与视频文件一同复制到新 Mac，再通过「导入个人设置」恢复。注意视频文件路径需与导出时保持一致。</p>
+    </div>
+</div>
+
+</div><!-- /content -->
+
+<!-- 技术实现 -->
+<div class="content">
+<div id="tech" class="section">
+    <div class="section-header">
+        <span class="icon">⚙</span>
+        <h2>技术实现</h2>
+    </div>
+    <div class="section-body">
+        <p><strong>原生 macOS 架构</strong><br>
+        MyWallpaperX 完全采用 Apple 原生技术栈构建——SwiftUI 负责声明式界面层，AppKit 处理高性能网格渲染与键盘交互，两者通过精确的状态同步机制无缝协同，避免了混合框架常见的性能损耗与渲染抖动。</p>
+
+        <p><strong>双进程壁纸引擎</strong><br>
+        壁纸播放由独立的 XPC Daemon 进程（WallpaperDaemon）承载，与主进程完全隔离。主进程崩溃不影响壁纸继续播放；Daemon 崩溃会自动重启并恢复播放状态。两者通过自定义 XPC 协议通信，延迟控制在毫秒级以内。</p>
+
+        <p><strong>AVFoundation 硬件解码</strong><br>
+        视频播放层基于 AVFoundation + AVSampleBufferDisplayLayer，全程走 Apple Silicon / Intel 硬件解码通道（VideoToolbox），CPU 占用极低。4K HEVC 视频在 M 系列芯片上解码功耗不足 1W，对日常使用几乎无感知。</p>
+
+        <p><strong>高性能缩略图管道</strong><br>
+        缩略图采用多级缓存架构：内存 LRU 缓存（最多 360 张）+ 磁盘持久化缓存。首次生成通过 AVAssetImageGenerator 异步提取关键帧，后续加载直接命中内存缓存，网格滚动帧率稳定在 60fps。</p>
+
+        <p><strong>精准的状态管理</strong><br>
+        核心数据层基于 Combine + @Published 构建响应式状态树，所有 UI 变更由单一数据源驱动，彻底消除多处状态不一致问题。删除、收藏、标签、选中态等操作均在主线程原子提交，保证界面与数据的强一致性。</p>
+
+        <p><strong>智能系统感知</strong><br>
+        通过 IOKit 实时监听电源状态、NSWorkspace 订阅屏幕睡眠与应用全屏事件、系统空闲计时器三路信号融合，在毫秒级内响应系统状态变化，自动暂停或恢复播放，兼顾流畅体验与电池续航。</p>
+    </div>
+</div>
+</div>
+
+<div class="help-footer">
+    <p>MyWallpaperX &nbsp;·&nbsp; 版本 1.0 &nbsp;·&nbsp; 仅支持 macOS</p>
+    <p style="margin-top: 8px; font-size: 13px;">有任何建议或反馈，欢迎来信 &nbsp;<a href="mailto:719897632@qq.com?subject=MyWallpaperX%20反馈" style="color: var(--accent); text-decoration: none; font-weight: 500;">719897632@qq.com</a></p>
+</div>
+
+</body>
+</html>

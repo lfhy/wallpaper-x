@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="AppleTitle" content="MyWallpaperX Help">
+    <title>MyWallpaperX Help</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="help-header">
+    <img class="app-icon" src="icon.png" alt="MyWallpaperX">
+    <h1>MyWallpaperX</h1>
+    <div class="subtitle">Built on native macOS technologies, delivering an elegant and immersive<br>dynamic video wallpaper experience for your Mac.</div>
+    <div class="version-badge">Version 1.0 &nbsp;·&nbsp; macOS only</div>
+</div>
+
+<nav class="toc">
+    <a href="#features">Features</a>
+    <a href="#getting-started">Getting Started</a>
+    <a href="#shortcuts">Shortcuts</a>
+    <a href="#playback">Playback</a>
+    <a href="#library">Library</a>
+    <a href="#display">Display</a>
+    <a href="#performance">Performance</a>
+    <a href="#faq">FAQ</a>
+    <a href="#tech">Technology</a>
+</nav>
+
+<div class="content">
+
+<div id="features" class="section">
+    <div class="section-header"><span class="icon">✦</span><h2>Features</h2></div>
+    <div class="feature-grid">
+        <div class="feature-card"><span class="feature-icon">🎬</span><h3>Video Wallpapers</h3><p>Set any local video as your desktop wallpaper with loop, sequential, or shuffle playback.</p></div>
+        <div class="feature-card"><span class="feature-icon">📚</span><h3>Library Management</h3><p>Import, organize, favorite, and tag wallpapers — find anything at a glance.</p></div>
+        <div class="feature-card"><span class="feature-icon">⚡</span><h3>Auto Switch</h3><p>Automatically cycle wallpapers on a timer — seconds, minutes, or hours.</p></div>
+        <div class="feature-card"><span class="feature-icon">🖥</span><h3>Multi-Display</h3><p>Sync playback across all connected displays at any resolution.</p></div>
+        <div class="feature-card"><span class="feature-icon">🔋</span><h3>Smart Power Saving</h3><p>Automatically pauses on battery, idle, or when another app goes fullscreen.</p></div>
+        <div class="feature-card"><span class="feature-icon">⌨️</span><h3>Global Shortcuts</h3><p>Bind F1–F12 keys to control playback without opening the main window.</p></div>
+        <div class="feature-card"><span class="feature-icon">🔇</span><h3>Volume Control</h3><p>Adjust wallpaper volume independently or mute without affecting system audio.</p></div>
+        <div class="feature-card"><span class="feature-icon">📤</span><h3>Backup &amp; Restore</h3><p>Export your entire configuration and restore it in seconds on a new Mac.</p></div>
+        <div class="feature-card"><span class="feature-icon">🔍</span><h3>Instant Search</h3><p>Real-time filename search combined with tag and favorites filters for instant access.</p></div>
+    </div>
+</div>
+
+<div id="getting-started" class="section">
+    <div class="section-header"><span class="icon">🚀</span><h2>Getting Started</h2></div>
+    <div class="section-body">
+        <p><strong>Step 1: Import Videos</strong><br>Click Import in the toolbar or press <span class="key">⌘</span><span class="key">O</span>. Supports MP4, MOV, M4V and any AVFoundation-decodable format. Batch import supported.</p>
+        <p><strong>Step 2: Set as Wallpaper</strong><br>Select a wallpaper, then double-click the card or press <span class="key">↩</span> to set it as your desktop wallpaper immediately.</p>
+        <p><strong>Step 3: Configure Playback</strong><br>Click the preferences icon or press <span class="key">⌘</span><span class="key">,</span> to adjust loop, shuffle, auto-switch, and more.</p>
+        <p><strong>Step 4: Lives in the Menu Bar</strong><br>After closing the main window, MyWallpaperX keeps running in the menu bar. Click the icon to control playback or reopen the window.</p>
+        <div class="note-box"><strong>Note:</strong> On first launch, macOS may prompt for permission requests required by the wallpaper engine. Please approve them.</div>
+    </div>
+</div>
+
+<div id="shortcuts" class="section">
+    <div class="section-header"><span class="icon">⌨</span><h2>Keyboard Shortcuts</h2></div>
+    <table class="shortcut-table">
+        <thead><tr><th style="width:55%">Action</th><th>Shortcut</th></tr></thead>
+        <tbody>
+            <tr><td class="shortcut-group" colspan="2">Wallpaper Control</td></tr>
+            <tr><td class="action">Set selected as desktop</td><td class="keys"><span class="key">↩</span></td></tr>
+            <tr><td class="action">Next wallpaper</td><td class="keys"><span class="key">⌘</span> <span class="key">→</span></td></tr>
+            <tr><td class="action">Previous wallpaper</td><td class="keys"><span class="key">⌘</span> <span class="key">←</span></td></tr>
+            <tr><td class="shortcut-group" colspan="2">File</td></tr>
+            <tr><td class="action">Import videos</td><td class="keys"><span class="key">⌘</span> <span class="key">O</span></td></tr>
+            <tr><td class="action">Delete selected (no confirmation)</td><td class="keys"><span class="key">⌘</span> <span class="key">⌫</span></td></tr>
+            <tr><td class="action">Reveal in Finder</td><td class="keys"><span class="key">⌘</span> <span class="key">R</span></td></tr>
+            <tr><td class="action">Get info</td><td class="keys"><span class="key">⌘</span> <span class="key">I</span></td></tr>
+            <tr><td class="shortcut-group" colspan="2">Organize</td></tr>
+            <tr><td class="action">Favorite / Unfavorite</td><td class="keys"><span class="key">⌘</span> <span class="key">D</span></td></tr>
+            <tr><td class="action">Add tag</td><td class="keys"><span class="key">⌘</span> <span class="key">T</span></td></tr>
+            <tr><td class="shortcut-group" colspan="2">Selection</td></tr>
+            <tr><td class="action">Enter / Exit multi-select</td><td class="keys"><span class="key">⌘</span> <span class="key">E</span></td></tr>
+            <tr><td class="action">Select all (multi-select)</td><td class="keys"><span class="key">⌘</span> <span class="key">A</span></td></tr>
+            <tr><td class="action">Navigate cards</td><td class="keys"><span class="key">↑</span> <span class="key">↓</span> <span class="key">←</span> <span class="key">→</span></td></tr>
+            <tr><td class="shortcut-group" colspan="2">View</td></tr>
+            <tr><td class="action">Larger thumbnails</td><td class="keys"><span class="key">⌘</span> <span class="key">−</span></td></tr>
+            <tr><td class="action">Smaller thumbnails</td><td class="keys"><span class="key">⌘</span> <span class="key">+</span></td></tr>
+            <tr><td class="shortcut-group" colspan="2">App</td></tr>
+            <tr><td class="action">Open main window</td><td class="keys"><span class="key">⌘</span> <span class="key">N</span></td></tr>
+            <tr><td class="action">Preferences</td><td class="keys"><span class="key">⌘</span> <span class="key">,</span></td></tr>
+            <tr><td class="action">Quit</td><td class="keys"><span class="key">⌘</span> <span class="key">Q</span></td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div id="playback" class="section">
+    <div class="section-header"><span class="icon">▶</span><h2>Playback Control</h2></div>
+    <div class="section-body">
+        <p><strong>Loop</strong>: The current wallpaper replays from the beginning after finishing, without switching.</p>
+        <p><strong>Sequential</strong>: Wallpapers play in library order, wrapping back to the first after the last.</p>
+        <p><strong>Shuffle</strong>: Each switch picks a random wallpaper, avoiding repeats until all have played.</p>
+        <p><strong>Auto Switch</strong>: Switches on a set interval. Supports seconds, minutes, or hours.</p>
+        <p><strong>Playback Speed</strong>: Adjust from 0.25× to 2.0× in 0.25 steps (enable in Preferences).</p>
+        <p><strong>Volume</strong>: Set wallpaper audio volume (0–100%) independently from system volume.</p>
+        <div class="note-box"><strong>Note:</strong> With Auto Switch enabled, the current video loops until the timer expires, then switches. With it disabled, the video naturally transitions to the next one.</div>
+    </div>
+</div>
+
+<div id="library" class="section">
+    <div class="section-header"><span class="icon">📁</span><h2>Library Management</h2></div>
+    <div class="section-body">
+        <p><strong>Import</strong>: Drag files onto the main window, or use File → Import Videos (<span class="key">⌘O</span>). Batch import supported.</p>
+        <p><strong>Favorites</strong>: Press <span class="key">⌘D</span> to favorite a wallpaper. Access favorites in the sidebar.</p>
+        <p><strong>Tags</strong>: Press <span class="key">⌘T</span> to add custom tags. Filter by tag in the sidebar.</p>
+        <p><strong>Bulk Delete</strong>: Press <span class="key">⌘E</span> for multi-select, then <span class="key">⌘⌫</span> to delete. Only removes library references — <strong>original video files are never deleted</strong>.</p>
+        <p><strong>Recents</strong>: The sidebar auto-tracks the last 25 played wallpapers for quick access.</p>
+        <p><strong>Sort</strong>: Sort by name, import date, or last played — each category remembers its own sort order.</p>
+        <p><strong>Backup</strong>: Export your configuration as JSON via Preferences → Export. Restore it on a new Mac via Import.</p>
+    </div>
+</div>
+
+<div id="display" class="section">
+    <div class="section-header"><span class="icon">🖥</span><h2>Display Settings</h2></div>
+    <div class="section-body">
+        <p><strong>Thumbnail Size</strong>: Use toolbar zoom buttons or <span class="key">⌘−</span> / <span class="key">⌘+</span> to adjust grid columns (2–6). Preference is saved automatically.</p>
+        <p><strong>Fill Mode</strong>:<br>
+        • <strong>Fit</strong>: Preserves aspect ratio; letterboxing may appear.<br>
+        • <strong>Fill</strong>: Crops video to fully cover the desktop with no borders.</p>
+        <p><strong>Multi-Display</strong>: Enable in Preferences to sync wallpaper across all connected displays.</p>
+        <p><strong>Sync System Wallpaper</strong>: Auto-updates the macOS static wallpaper to the current video frame on each switch.</p>
+    </div>
+</div>
+
+<div id="performance" class="section">
+    <div class="section-header"><span class="icon">🔋</span><h2>Performance &amp; Power</h2></div>
+    <div class="section-body">
+        <p><strong>Pause when another app is active</strong>: Pauses playback when another app is in the foreground, freeing GPU resources.</p>
+        <p><strong>Pause when another app is fullscreen</strong>: Auto-pauses for games, videos, and other fullscreen apps to avoid background rendering overhead.</p>
+        <p><strong>Pause on battery</strong>: Auto-pauses when unplugged to extend battery life.</p>
+        <p><strong>Pause when idle</strong>: Pauses after system idle for a set duration (default: 10 min), resuming on activity.</p>
+        <div class="note-box"><strong>Tip:</strong> On MacBook, enabling "Pause on battery" significantly reduces power consumption. Desktop users can disable all pause options for continuous playback.</div>
+    </div>
+</div>
+
+<div id="faq" class="section">
+    <div class="section-header"><span class="icon">❓</span><h2>FAQ</h2></div>
+    <div class="faq-item">
+        <h3>Why does the fan spin up after setting a wallpaper?</h3>
+        <p>Video decoding uses GPU/CPU resources, especially at high resolutions. Use H.264 or HEVC-encoded videos and enable "Pause when another app is fullscreen" to reduce background rendering.</p>
+    </div>
+    <div class="faq-item">
+        <h3>Are original video files deleted when I remove a wallpaper?</h3>
+        <p>No. Removing a wallpaper only deletes its library reference and thumbnail cache. Original files on disk are never touched.</p>
+    </div>
+    <div class="faq-item">
+        <h3>What video formats are supported?</h3>
+        <p>Any format decodable by macOS AVFoundation, including MP4 (H.264/HEVC), MOV, and M4V. Formats requiring third-party decoders (e.g. MKV with unusual codecs) are not supported.</p>
+    </div>
+    <div class="faq-item">
+        <h3>How do I make wallpapers play automatically at login?</h3>
+        <p>Enable "Launch at Login" in Preferences → System. MyWallpaperX will start automatically and restore your last wallpaper state.</p>
+    </div>
+    <div class="faq-item">
+        <h3>Thumbnails are blank or loading slowly. What should I do?</h3>
+        <p>Thumbnails are generated on first load. If they stay blank, go to Preferences → Clear Cache to reset the thumbnail cache, then reopen the main window to trigger a rebuild.</p>
+    </div>
+    <div class="faq-item">
+        <h3>How do I migrate my library to a new Mac?</h3>
+        <p>On your old Mac, go to Preferences → Export Settings to save a JSON file. Copy both the config file and video files to your new Mac, then use Import Settings to restore. Video file paths must match.</p>
+    </div>
+</div>
+
+</div><!-- /content -->
+
+<div class="content">
+<div id="tech" class="section">
+    <div class="section-header"><span class="icon">⚙</span><h2>Technology</h2></div>
+    <div class="section-body">
+        <p><strong>Native macOS Architecture</strong><br>
+        Built entirely on Apple's native stack — SwiftUI for the declarative UI layer, AppKit for high-performance grid rendering and keyboard interaction. The two communicate through a precise state-sync mechanism, eliminating the rendering jitter common in hybrid frameworks.</p>
+
+        <p><strong>Dual-Process Wallpaper Engine</strong><br>
+        Playback runs in a dedicated XPC Daemon process (WallpaperDaemon), fully isolated from the main app. A main process crash won't interrupt your wallpaper; a daemon crash auto-restarts and restores playback state. The two communicate via a custom XPC protocol with sub-millisecond latency.</p>
+
+        <p><strong>AVFoundation Hardware Decoding</strong><br>
+        The video layer is built on AVFoundation + AVSampleBufferDisplayLayer, routing all decoding through Apple Silicon / Intel hardware (VideoToolbox). CPU usage is minimal — 4K HEVC on an M-series chip draws under 1W, virtually imperceptible in daily use.</p>
+
+        <p><strong>High-Performance Thumbnail Pipeline</strong><br>
+        Thumbnails use a multi-tier cache: in-memory LRU cache (up to 360 entries) + persistent disk cache. First-time generation asynchronously extracts keyframes via AVAssetImageGenerator; subsequent loads hit memory instantly, keeping the grid scrolling at a steady 60 fps.</p>
+
+        <p><strong>Reactive State Management</strong><br>
+        The data layer is built on Combine + @Published, forming a reactive state tree where all UI changes are driven by a single source of truth. Delete, favorite, tag, and selection operations are atomically committed on the main thread, guaranteeing strong consistency between UI and data.</p>
+
+        <p><strong>Intelligent System Awareness</strong><br>
+        Three signal sources — IOKit power state monitoring, NSWorkspace screen sleep and fullscreen event subscriptions, and a system idle timer — are fused to respond to system state changes in milliseconds, automatically pausing or resuming playback while balancing experience and battery life.</p>
+    </div>
+</div>
+</div>
+
+<div class="help-footer">
+    <p>MyWallpaperX &nbsp;·&nbsp; Version 1.0 &nbsp;·&nbsp; macOS only</p>
+    <p style="margin-top: 8px; font-size: 13px;">Suggestions and feedback welcome &nbsp;<a href="mailto:719897632@qq.com?subject=MyWallpaperX%20Feedback" style="color: var(--accent); text-decoration: none; font-weight: 500;">719897632@qq.com</a></p>
+</div>
+
+</body>
+</html>

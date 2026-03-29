@@ -1,0 +1,237 @@
+//
+//  WallpaperManager+CachePipeline.swift
+//  MyWallpaperX
+//
+
+import Foundation
+import AVFoundation
+import AppKit
+import CryptoKit
+
+extension WallpaperManager {
+    func currentCacheGeneration() -> UInt64 {
+        cacheGenerationLock.lock()
+        defer { cacheGenerationLock.unlock() }
+        return cacheGeneration
+    }
+
+    func bumpCacheGeneration() {
+        // 代际递增后，旧的后台生成任务会自然失效，避免清缓存后旧结果回写。
+        cacheGenerationLock.lock()
+        cacheGeneration &+= 1
+        cacheGenerationLock.unlock()
+    }
+
+    func cachedThumbnailPath(for key: String) -> String? {
+        thumbnailCacheLock.lock()
+        defer { thumbnailCacheLock.unlock() }
+        return thumbnailCache[key]
+    }
+
+    func setCachedThumbnailPath(_ path: String?, for key: String) {
+        thumbnailCacheLock.lock()
+        defer { thumbnailCacheLock.unlock() }
+        if let path {
+            thumbnailCache[key] = path
+        } else {
+            thumbnailCache.removeValue(forKey: key)
+        }
+    }
+
+    func enqueueThumbnailCompletion(_ completion: @escaping (String?) -> Void, for normalizedPath: String) -> Bool {
+        thumbnailInFlightLock.lock()
+        defer { thumbnailInFlightLock.unlock() }
+        if thumbnailInFlightHandlers[normalizedPath] != nil {
+            thumbnailInFlightHandlers[normalizedPath]?.append(completion)
+            return true
+        }
+        thumbnailInFlightHandlers[normalizedPath] = [completion]
+        return false
+    }
+
+    func completeThumbnailGeneration(for normalizedPath: String, with outputPath: String?) {
+        // 统一从主线程回调，卡片刷新和索引回写都依赖这一点。
+        thumbnailInFlightLock.lock()
+        let handlers = thumbnailInFlightHandlers.removeValue(forKey: normalizedPath) ?? []
+        thumbnailInFlightLock.unlock()
+
+        DispatchQueue.main.async {
+            for handler in handlers {
+                handler(outputPath)
+            }
+        }
+    }
+
+    func removeThumbnailInFlight(for normalizedPath: String) {
+        thumbnailInFlightLock.lock()
+        thumbnailInFlightHandlers.removeValue(forKey: normalizedPath)
+        thumbnailInFlightLock.unlock()
+    }
+
+    func clearThumbnailInFlight() {
+        thumbnailInFlightLock.lock()
+        thumbnailInFlightHandlers.removeAll()
+        thumbnailInFlightLock.unlock()
+    }
+
+    func clearThumbnailMemoryCache() {
+        thumbnailCacheLock.lock()
+        thumbnailCache.removeAll()
+        thumbnailCacheLock.unlock()
+    }
+
+    func beginStaticFrameSchedule(for normalizedPath: String) -> Bool {
+        staticFrameScheduleLock.lock()
+        defer { staticFrameScheduleLock.unlock() }
+        if scheduledStaticFramePaths.contains(normalizedPath) {
+            return false
+        }
+        scheduledStaticFramePaths.insert(normalizedPath)
+        return true
+    }
+
+    func finishStaticFrameSchedule(for normalizedPath: String) {
+        staticFrameScheduleLock.lock()
+        scheduledStaticFramePaths.remove(normalizedPath)
+        staticFrameScheduleLock.unlock()
+    }
+
+    func clearStaticFrameSchedule() {
+        staticFrameScheduleLock.lock()
+        scheduledStaticFramePaths.removeAll()
+        staticFrameScheduleLock.unlock()
+    }
+
+    func cacheKey(for url: URL) -> String {
+        let normalized = normalizedPath(url.path)
+        let digest = SHA256.hash(data: Data(normalized.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    func thumbnailOutputURL(for url: URL) -> URL {
+        thumbnailCacheDirectory.appendingPathComponent("\(cacheKey(for: url))_thumb.jpg")
+    }
+
+    func existingThumbnailPath(for url: URL) -> String? {
+        existingCachePath(for: url, output: thumbnailOutputURL(for:))
+    }
+
+    func resolvedThumbnailPath(for wallpaper: VideoWallpaper) -> String? {
+        if let configuredPath = wallpaper.thumbnailPath,
+           pathExists(configuredPath) {
+            return configuredPath
+        }
+
+        let sourceURL = URL(fileURLWithPath: wallpaper.path)
+        let key = cacheKey(for: sourceURL)
+        if let memoryPath = cachedThumbnailPath(for: key),
+           pathExists(memoryPath) {
+            return memoryPath
+        }
+
+        return existingThumbnailPath(for: sourceURL)
+    }
+
+    func generateThumbnail(for url: URL, completion: @escaping (String?) -> Void) {
+        let capturedGeneration = currentCacheGeneration()
+        // 生成缓存键
+        let cacheKey = cacheKey(for: url)
+
+        // 检查缓存
+        if let cachedPath = cachedThumbnailPath(for: cacheKey) {
+            if pathExists(cachedPath) {
+                completion(cachedPath)
+                return
+            } else {
+                setCachedThumbnailPath(nil, for: cacheKey)
+            }
+        }
+
+        // 检查磁盘缓存（跨重启仍可命中），避免重复解码生成缩略图。
+        let diskCachedPath = thumbnailOutputURL(for: url).path
+        if pathExists(diskCachedPath) {
+            setCachedThumbnailPath(diskCachedPath, for: cacheKey)
+            completion(diskCachedPath)
+            return
+        }
+
+        // 检查文件是否存在
+        guard pathExists(url.path) else {
+            completion(nil)
+            return
+        }
+
+        let normalized = normalizedPath(url.path)
+        if enqueueThumbnailCompletion(completion, for: normalized) {
+            return
+        }
+
+        // 使用后台限并发队列生成缩略图，避免导入大量文件时瞬时抢占资源。
+        thumbnailQueue.async {
+            guard self.currentCacheGeneration() == capturedGeneration else {
+                self.completeThumbnailGeneration(for: normalized, with: nil)
+                return
+            }
+            self.thumbnailGenerationLimiter.wait()
+            defer { self.thumbnailGenerationLimiter.signal() }
+
+            autoreleasepool {
+                guard self.currentCacheGeneration() == capturedGeneration else {
+                    self.completeThumbnailGeneration(for: normalized, with: nil)
+                    return
+                }
+                let asset = AVURLAsset(url: url)
+                let imageGenerator = AVAssetImageGenerator(asset: asset)
+                imageGenerator.appliesPreferredTrackTransform = true
+                imageGenerator.maximumSize = CGSize(width: 400, height: 400)
+                var outputPath: String?
+
+                let candidateTimes = [
+                    CMTime(seconds: 1, preferredTimescale: 600),
+                    CMTime.zero
+                ]
+
+                for time in candidateTimes {
+                    guard self.currentCacheGeneration() == capturedGeneration else {
+                        break
+                    }
+                    if let cgImage = self.generateCGImage(using: imageGenerator, at: time) {
+                        let saveURL = self.thumbnailOutputURL(for: url)
+                        let rep = NSBitmapImageRep(cgImage: cgImage)
+                        if let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.7]) {
+                            do {
+                                guard self.currentCacheGeneration() == capturedGeneration else {
+                                    break
+                                }
+                                try data.write(to: saveURL)
+                                self.setCachedThumbnailPath(saveURL.path, for: cacheKey)
+                                outputPath = saveURL.path
+                                break
+                            } catch {
+                            }
+                        }
+                    }
+                }
+                self.completeThumbnailGeneration(for: normalized, with: outputPath)
+            }
+        }
+    }
+
+    func generateCGImage(using generator: AVAssetImageGenerator, at time: CMTime) -> CGImage? {
+        // macOS 15 废弃了同步 copyCGImage，改用异步 API + Semaphore。
+        // 回调派到独立的全局队列（.userInitiated），不派回 thumbnailQueue，避免同队列死锁。
+        var result: CGImage?
+        let semaphore = DispatchSemaphore(value: 0)
+        generator.generateCGImageAsynchronously(for: time) { cgImage, _, _ in
+            result = cgImage
+            semaphore.signal()
+        }
+        semaphore.wait()
+        return result
+    }
+
+    func existingCachePath(for url: URL, output: (URL) -> URL) -> String? {
+        let path = output(url).path
+        return pathExists(path) ? path : nil
+    }
+}
