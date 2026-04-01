@@ -8,10 +8,10 @@ import Combine
 
 extension NSToolbarItem.Identifier {
     static let steamSource = NSToolbarItem.Identifier("ToolbarSteamSource")
+    static let steamAccount = NSToolbarItem.Identifier("ToolbarSteamAccount")
     static let steamRefresh = NSToolbarItem.Identifier("ToolbarSteamRefresh")
     static let steamZoom = NSToolbarItem.Identifier("ToolbarSteamZoom")
     static let steamSearch = NSToolbarItem.Identifier("ToolbarSteamSearch")
-    static let steamDownload = NSToolbarItem.Identifier("ToolbarSteamDownload")
     static let steamDownloadsTitle = NSToolbarItem.Identifier("ToolbarSteamDownloadsTitle")
     static let steamDownloadsReveal = NSToolbarItem.Identifier("ToolbarSteamDownloadsReveal")
     static let steamDownloadsSearch = NSToolbarItem.Identifier("ToolbarSteamDownloadsSearch")
@@ -37,7 +37,7 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
         .sidebarTrackingSeparator,
         NSToolbarItem.Identifier("ToolbarTitle"),
         .flexibleSpace,
-        .steamDownload,
+        .steamAccount,
         .space,
         .steamRefresh,
         .space,
@@ -90,6 +90,26 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
                 self?.configureZoomItem()
             }
             .store(in: &cancellables)
+
+        Publishers.CombineLatest(
+            SteamWorkshopService.shared.$requiresLogin,
+            SteamWorkshopService.shared.$isAnonymousBrowsing
+        )
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _, _ in
+            self?.configureAuthItems()
+        }
+        .store(in: &cancellables)
+
+        Publishers.CombineLatest(
+            SteamWorkshopService.shared.$isPreparingRuntime,
+            SteamWorkshopService.shared.$isValidatingLoginState
+        )
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _, _ in
+            self?.configureAuthItems()
+        }
+        .store(in: &cancellables)
     }
 
     private func switchMode(enabled: Bool, isDownloads: Bool) {
@@ -108,6 +128,7 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
             titleUpdateHandler?(Title.browser)
             syncSourceControl()
             syncSearchField()
+            configureAuthItems()
         }
         configureZoomItem()
     }
@@ -115,10 +136,10 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
     func makeItem(for identifier: NSToolbarItem.Identifier) -> NSToolbarItem? {
         switch identifier {
         case .steamSource: return sourceToolbarItem
+        case .steamAccount: return accountToolbarItem
         case .steamRefresh: return refreshToolbarItem
         case .steamZoom: return zoomToolbarItem
         case .steamSearch: return searchToolbarItem
-        case .steamDownload: return downloadToolbarItem
         case .steamDownloadsTitle: return downloadsTitleItem
         case .steamDownloadsReveal: return downloadsRevealItem
         case .steamDownloadsSearch: return downloadsSearchItem
@@ -249,25 +270,25 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
         return item
     }()
 
-    lazy var downloadButton: NSButton = {
-        let button = NSButton(frame: NSRect(x: 0, y: 0, width: 28, height: 28))
+    lazy var accountButton: NSButton = {
+        let button = NSButton(frame: NSRect(x: 0, y: 0, width: 32, height: 32))
         button.bezelStyle = .texturedRounded
+        button.setButtonType(.momentaryPushIn)
         button.isBordered = true
-        button.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: "下载当前项目")
+        button.imagePosition = .imageOnly
         button.imageScaling = .scaleProportionallyDown
         button.target = self
-        button.action = #selector(handleDownloadCurrent)
-        button.toolTip = "下载当前创意工坊项目"
+        button.action = #selector(handleAccountMenu)
         return button
     }()
 
-    lazy var downloadToolbarItem: NSToolbarItem = {
-        let item = NSToolbarItem(itemIdentifier: .steamDownload)
-        item.label = "下载"
-        item.paletteLabel = "下载当前项目"
-        item.toolTip = "下载当前创意工坊项目"
+    lazy var accountToolbarItem: NSToolbarItem = {
+        let item = NSToolbarItem(itemIdentifier: .steamAccount)
+        item.label = "账号"
+        item.paletteLabel = "Steam 账号"
+        item.toolTip = "打开 Steam 登录页"
         item.autovalidates = false
-        item.view = downloadButton
+        item.view = accountButton
         return item
     }()
 
@@ -315,6 +336,28 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
         zoomControl.setEnabled(availability.canZoomOut, forSegment: 1)
     }
 
+    private func configureAuthItems() {
+        let service = SteamWorkshopService.shared
+        let isAuthenticated = !service.requiresLogin && !service.isAnonymousBrowsing
+        let isBusy = service.isPreparingRuntime || service.isValidatingLoginState || service.isAuthenticating
+
+        let symbolName: String
+        if service.isPreparingRuntime {
+            symbolName = "hourglass.circle"
+        } else if service.isValidatingLoginState {
+            symbolName = "arrow.triangle.2.circlepath.circle"
+        } else if isAuthenticated {
+            symbolName = "person.crop.circle.badge.checkmark"
+        } else {
+            symbolName = "person.crop.circle"
+        }
+        accountButton.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "Steam 账号")
+        accountButton.contentTintColor = isAuthenticated ? .controlAccentColor : .labelColor
+        accountButton.toolTip = isAuthenticated ? "Steam 账号菜单" : "登录或匿名浏览"
+        accountButton.isEnabled = !isBusy
+        accountToolbarItem.toolTip = accountButton.toolTip
+    }
+
     private func syncSourceControl() {
         let allSources = SteamWorkshopSource.allCases
         sourceControl.selectedSegment = allSources.firstIndex(of: SteamWorkshopService.shared.source) ?? 0
@@ -343,12 +386,59 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
         SteamWorkshopService.shared.refresh()
     }
 
+    @objc private func handleAccountMenu() {
+        let service = SteamWorkshopService.shared
+        let isAuthenticated = !service.requiresLogin && !service.isAnonymousBrowsing
+
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        if isAuthenticated {
+            let switchItem = NSMenuItem(title: "切换账号", action: #selector(handlePresentLogin), keyEquivalent: "")
+            switchItem.target = self
+            switchItem.isEnabled = !service.isPreparingRuntime && !service.isAuthenticating
+            menu.addItem(switchItem)
+
+            let logoutItem = NSMenuItem(title: "退出登录", action: #selector(handleLogout), keyEquivalent: "")
+            logoutItem.target = self
+            logoutItem.isEnabled = !service.isPreparingRuntime && !service.isAuthenticating
+            menu.addItem(logoutItem)
+        } else {
+            let loginItem = NSMenuItem(title: "登录 Steam", action: #selector(handlePresentLogin), keyEquivalent: "")
+            loginItem.target = self
+            loginItem.isEnabled = !service.isPreparingRuntime && !service.isAuthenticating
+            menu.addItem(loginItem)
+
+            let anonymousItem = NSMenuItem(title: "匿名浏览", action: #selector(handleBrowseAnonymously), keyEquivalent: "")
+            anonymousItem.target = self
+            anonymousItem.isEnabled = !service.isPreparingRuntime && !service.isAuthenticating
+            menu.addItem(anonymousItem)
+        }
+
+        let buttonBounds = accountButton.bounds
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: buttonBounds.height + 4), in: accountButton)
+    }
+
+    @objc private func handlePresentLogin() {
+        DispatchQueue.main.async {
+            SteamWorkshopService.shared.presentLoginGate()
+        }
+    }
+
+    @objc private func handleLogout() {
+        DispatchQueue.main.async {
+            SteamWorkshopService.shared.logout()
+        }
+    }
+
     @objc private func handleRevealDownloads() {
         SteamWorkshopService.shared.revealDownloadsDirectory()
     }
 
-    @objc private func handleDownloadCurrent() {
-        SteamWorkshopService.shared.downloadCurrentItem()
+    @objc private func handleBrowseAnonymously() {
+        DispatchQueue.main.async {
+            SteamWorkshopService.shared.browseAnonymously()
+        }
     }
 
     @objc private func handleZoomAction(_ sender: NSSegmentedControl) {
@@ -367,10 +457,10 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
     var allowedItemIdentifiers: [NSToolbarItem.Identifier] {
         [
             .steamSource,
+            .steamAccount,
             .steamRefresh,
             .steamZoom,
             .steamSearch,
-            .steamDownload,
             .steamDownloadsTitle,
             .steamDownloadsReveal,
             .steamDownloadsSearch,

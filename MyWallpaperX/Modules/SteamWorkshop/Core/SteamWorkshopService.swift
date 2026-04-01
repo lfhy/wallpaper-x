@@ -6,6 +6,8 @@
 import Foundation
 import AppKit
 import Combine
+import Security
+import Darwin
 
 enum SteamWorkshopSource: String, CaseIterable, Identifiable {
     case featured
@@ -28,6 +30,49 @@ enum SteamWorkshopSource: String, CaseIterable, Identifiable {
         case .recent: return "mostrecent"
         case .subscribed: return "mysubscriptions"
         }
+    }
+}
+
+enum SteamWorkshopBrowserLoadState: Equatable {
+    case idle
+    case loading
+    case loaded
+    case failed(String)
+}
+
+enum SteamWorkshopAuthenticationPhase: Equatable {
+    case credentials
+    case awaitingGuardCode
+    case authenticated
+}
+
+struct SteamWorkshopBrowserItem: Identifiable, Equatable, Codable {
+    let id: String
+    let title: String
+    let author: String
+    let summary: String
+    let descriptionText: String
+    let tags: [String]
+    let previewImageURL: URL?
+    let previewVideoURL: URL?
+    let fileSizeText: String?
+    let resolutionText: String?
+    let updatedText: String?
+    let favoritesText: String?
+    let subscriptionsText: String?
+    let scoreText: String?
+    let detailURL: URL
+
+    var primaryMetaText: String {
+        [fileSizeText, resolutionText]
+            .compactMap { $0 }
+            .joined(separator: "  ")
+    }
+
+    var secondaryMetaText: String {
+        [updatedText, favoritesText, subscriptionsText, scoreText]
+            .compactMap { $0 }
+            .joined(separator: "  ")
     }
 }
 
@@ -71,6 +116,103 @@ private struct SteamWorkshopProject: Decodable {
     let type: String?
 }
 
+private struct SteamWorkshopDetailParseResult {
+    let title: String
+    let author: String
+    let summary: String
+    let descriptionText: String
+    let tags: [String]
+    let previewImageURL: URL?
+    let previewVideoURL: URL?
+    let fileSizeText: String?
+    let resolutionText: String?
+    let updatedText: String?
+    let favoritesText: String?
+    let subscriptionsText: String?
+    let scoreText: String?
+}
+
+private struct SteamWorkshopBrowserCacheSnapshot: Codable {
+    let fetchedAt: Date
+    let items: [SteamWorkshopBrowserItem]
+}
+
+private struct SteamWorkshopRuntimeManifest: Codable {
+    let bundleSignature: String
+    let extractedAt: Date
+}
+
+private struct SteamWorkshopBundledRuntimeMetadata: Codable {
+    let channel: String
+    let version: String
+    let releaseDate: String
+    let notes: String
+}
+
+private struct SteamWorkshopPendingDownloadRequest {
+    let id: String
+    let pageTitle: String?
+}
+
+private struct SteamWorkshopPTYSession {
+    let master: FileHandle
+    let slave: FileHandle
+}
+
+private enum SteamWorkshopCredentialStore {
+    private static let service = "com.songziqiang.MyWallpaperX.steam"
+    private static let account = "steamPassword"
+
+    static func save(password: String) {
+        let data = Data(password.utf8)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+
+        let attributes: [String: Any] = [
+            kSecValueData as String: data
+        ]
+
+        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if status == errSecItemNotFound {
+            var create = query
+            create[kSecValueData as String] = data
+            SecItemAdd(create as CFDictionary, nil)
+        }
+    }
+
+    static func loadPassword() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess,
+              let data = item as? Data,
+              let password = String(data: data, encoding: .utf8),
+              !password.isEmpty else {
+            return nil
+        }
+        return password
+    }
+
+    static func deletePassword() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+}
+
 @MainActor
 final class SteamWorkshopService: ObservableObject {
     static let shared = SteamWorkshopService()
@@ -78,10 +220,34 @@ final class SteamWorkshopService: ObservableObject {
     private enum Constants {
         static let workshopAppID = "431960"
         static let steamCommunityBase = "https://steamcommunity.com/workshop/browse/"
-        static let steamCmdPath = "/Users/songziqiang/Steam/steamcmd.sh"
-        static let installRoot = "/Users/songziqiang/Steam/wallpaper_engine"
+        static let detailBase = "https://steamcommunity.com/sharedfiles/filedetails/"
+        static let bundledSteamBundleName = "SteamCMDRuntime.bundle"
+        static let bundledSteamRootName = "Steam"
+        static let bundledSteamMetadataName = "runtime-metadata.json"
+        static let browserPageSize = 24
+        static let cacheTTL: TimeInterval = 60 * 15
+        static let defaultsLastUsername = "SteamWorkshop.lastUsername"
+        static let defaultsAuthenticated = "SteamWorkshop.authenticated"
+        static let runtimeManifestName = ".runtime-manifest.json"
+        static let requiredBundledItems = [
+            "steamcmd.sh",
+            "steamcmd",
+            "steamclient.dylib",
+            "libtier0_s.dylib",
+            "libvstdlib_s.dylib",
+            "crashhandler.dylib",
+            "libaudio.dylib",
+            "libsteaminput.dylib",
+            "steamconsole.dylib",
+            "update_hosts_cached.vdf",
+            "package",
+            "public",
+            "Frameworks"
+        ]
     }
 
+    @Published private(set) var browserItems: [SteamWorkshopBrowserItem] = []
+    @Published private(set) var browserState: SteamWorkshopBrowserLoadState = .idle
     @Published private(set) var downloads: [SteamWorkshopDownloadRecord] = []
     @Published var source: SteamWorkshopSource = .featured {
         didSet { navigateToBrowse() }
@@ -91,27 +257,135 @@ final class SteamWorkshopService: ObservableObject {
     }
     @Published var downloadsQuery: String = ""
     @Published var zoomOffset: Int = 0
-    @Published var statusMessage: String = "使用内嵌 Workshop 浏览，下载通过本机 steamcmd 匿名执行。"
+    @Published var statusMessage: String = "浏览页使用原生网格展示，后台抓取 Wallpaper Engine 创意工坊视频信息。"
     @Published var currentWorkshopItemID: String?
     @Published var currentPageTitle: String = "Steam 创意工坊"
     @Published var requestedURL: URL
     @Published var navigationVersion: Int = 0
     @Published var activeDownloadItemID: String?
     @Published var downloadError: String?
+    @Published var selectedBrowserItem: SteamWorkshopBrowserItem?
+    @Published var requiresLogin: Bool = true
+    @Published private(set) var isAnonymousBrowsing = false
+    @Published private(set) var authPhase: SteamWorkshopAuthenticationPhase = .credentials
+    @Published var isLoginSheetPresented = false
+    @Published var isAuthenticating = false
+    @Published private(set) var isPreparingRuntime = false
+    @Published private(set) var isValidatingLoginState = false
+    @Published var authStatusMessage: String = "首次进入请登录 Steam，软件会使用随 App 打包的 SteamCMD 并保留登录态。"
+    @Published var authError: String?
+    @Published private(set) var steamRuntimeVersion: String = "未检测"
+    @Published private(set) var steamRuntimeUpdateStatus: String = "当前使用 App 内置 SteamCMD 基线版本。"
+    @Published var steamUsername: String = ""
+    @Published var steamPassword: String = ""
+    @Published var steamGuardCode: String = ""
+
+    private var browserFetchTask: Task<Void, Never>?
+    private let defaults = UserDefaults.standard
+    private var loginProcess: Process?
+    private var loginInputHandle: FileHandle?
+    private var loginOutputHandle: FileHandle?
+    private var loginOutputBuffer: String = ""
+    private var loginPasswordSent = false
+    private var loginSucceeded = false
+    private var pendingLoginUsername: String = ""
+    private var pendingLoginPassword: String = ""
+    private var pendingLoginCommand: String?
+    private var startupTask: Task<Void, Never>?
+    private var loginValidationTask: Task<Void, Never>?
+    private var loginBootstrapTimeoutTask: Task<Void, Never>?
+    private var loginSessionID: String = ""
+    private var pendingDownloadRequest: SteamWorkshopPendingDownloadRequest?
 
     private init() {
         requestedURL = SteamWorkshopService.makeBrowseURL(source: .featured, query: "")
+        loadAuthenticationState()
+        refreshSteamRuntimeStatus()
+        loadCachedBrowserItemsIfPossible()
         reloadInstalledItems()
+        fetchBrowserItems()
     }
 
-    var steamCmdURL: URL { URL(fileURLWithPath: Constants.steamCmdPath) }
-    var installRootURL: URL { URL(fileURLWithPath: Constants.installRoot, isDirectory: true) }
-    var workshopContentRootURL: URL {
-        installRootURL
+    var managedSteamRootURL: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("MyWallpaperX", isDirectory: true)
+            .appendingPathComponent("SteamCMD", isDirectory: true)
+    }
+
+    var bundledSteamBundleURL: URL? {
+        Bundle.main.resourceURL?
+            .appendingPathComponent(Constants.bundledSteamBundleName, isDirectory: true)
+    }
+
+    var bundledSteamRootURL: URL? {
+        bundledSteamBundleURL?
+            .appendingPathComponent(Constants.bundledSteamRootName, isDirectory: true)
+    }
+
+    var managedSteamCmdURL: URL {
+        managedSteamRootURL.appendingPathComponent("steamcmd.sh")
+    }
+
+    var bundledSteamCmdURL: URL? {
+        bundledSteamRootURL?.appendingPathComponent("steamcmd.sh")
+    }
+
+    var activeSteamRootURL: URL? {
+        guard let bundledSteamRootURL, validateSteamRuntime(at: bundledSteamRootURL) else {
+            return nil
+        }
+        return bundledSteamRootURL
+    }
+
+    var activeSteamCmdURL: URL? {
+        guard let bundledSteamCmdURL,
+              let bundledSteamRootURL,
+              validateSteamRuntime(at: bundledSteamRootURL) else {
+            return nil
+        }
+        return bundledSteamCmdURL
+    }
+
+    var runtimeManifestURL: URL {
+        managedSteamRootURL.appendingPathComponent(Constants.runtimeManifestName)
+    }
+
+    var runtimeInstallRootURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("MyWallpaperX", isDirectory: true)
+            .appendingPathComponent("SteamWorkshopRuntime", isDirectory: true)
+    }
+
+    var stagingWorkshopContentRootURL: URL {
+        runtimeInstallRootURL
             .appendingPathComponent("steamapps", isDirectory: true)
             .appendingPathComponent("workshop", isDirectory: true)
             .appendingPathComponent("content", isDirectory: true)
             .appendingPathComponent(Constants.workshopAppID, isDirectory: true)
+    }
+
+    var libraryRootURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Movies", isDirectory: true)
+            .appendingPathComponent("MyWallpaperX", isDirectory: true)
+            .appendingPathComponent("创意工坊", isDirectory: true)
+    }
+
+    var cacheDirectoryURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Caches", isDirectory: true)
+            .appendingPathComponent("MyWallpaperX", isDirectory: true)
+            .appendingPathComponent("SteamWorkshop", isDirectory: true)
+    }
+
+    var steamAuthDebugLogURL: URL {
+        cacheDirectoryURL.appendingPathComponent("steamcmd-auth-debug.log")
+    }
+
+    var bundledSteamMetadataURL: URL? {
+        bundledSteamBundleURL?
+            .appendingPathComponent(Constants.bundledSteamMetadataName)
     }
 
     var filteredDownloads: [SteamWorkshopDownloadRecord] {
@@ -133,35 +407,182 @@ final class SteamWorkshopService: ObservableObject {
         navigationVersion += 1
         currentWorkshopItemID = nil
         currentPageTitle = "Steam 创意工坊"
+        fetchBrowserItems()
     }
 
     func refresh() {
         navigationVersion += 1
-        if currentWorkshopItemID == nil {
-            requestedURL = Self.makeBrowseURL(source: source, query: browserQuery)
-        }
         reloadInstalledItems()
+        fetchBrowserItems(forceRefresh: true)
     }
 
-    func updateCurrentPage(url: URL?, title: String?) {
-        guard let url else { return }
-        requestedURL = url
-        currentWorkshopItemID = Self.extractWorkshopID(from: url)
-        if let title, !title.isEmpty {
-            currentPageTitle = title
-        } else if let itemID = currentWorkshopItemID {
-            currentPageTitle = "Workshop #\(itemID)"
-        } else {
-            currentPageTitle = "Steam 创意工坊"
+    func prepareForBrowserEntry() {
+        startupTask?.cancel()
+        startupTask = Task { [weak self] in
+            guard let self else { return }
+            await self.prepareRuntimeIfNeeded()
         }
     }
 
-    func downloadCurrentItem() {
-        guard let itemID = currentWorkshopItemID else {
-            downloadError = "当前页面不是具体的创意工坊项目，无法下载。"
+    func presentItemDetail(_ item: SteamWorkshopBrowserItem) {
+        selectedBrowserItem = item
+        currentWorkshopItemID = item.id
+        currentPageTitle = item.title
+        statusMessage = "已加载 \(item.title)"
+    }
+
+    func dismissItemDetail() {
+        selectedBrowserItem = nil
+    }
+
+    func authenticateUser() {
+        Task { @MainActor [weak self] in
+            self?.authenticateUserImmediately()
+        }
+    }
+
+    private func authenticateUserImmediately() {
+        guard !steamUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            authError = "请输入 Steam 用户名。"
             return
         }
-        downloadWorkshopItem(id: itemID, pageTitle: currentPageTitle)
+        guard !steamPassword.isEmpty else {
+            authError = "请输入 Steam 密码。"
+            return
+        }
+
+        let username = steamUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        let password = steamPassword
+        cancelActiveLoginSession()
+        isAnonymousBrowsing = false
+        authPhase = .credentials
+        isAuthenticating = true
+        authError = nil
+        authStatusMessage = "正在启动内置 SteamCMD，并向 Steam 发起登录请求…"
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.ensureManagedSteamRuntime()
+                await MainActor.run {
+                    self.beginInteractiveSteamLogin(username: username, password: password)
+                }
+            } catch {
+                await MainActor.run {
+                    self.isAuthenticating = false
+                    self.authError = error.localizedDescription
+                    self.authStatusMessage = "SteamCMD 启动失败，请检查随 App 打包的运行资源。"
+                }
+            }
+        }
+    }
+
+    func submitSteamGuardCode() {
+        Task { @MainActor [weak self] in
+            self?.submitSteamGuardCodeImmediately()
+        }
+    }
+
+    private func submitSteamGuardCodeImmediately() {
+        let guardCode = steamGuardCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard authPhase == .awaitingGuardCode else {
+            authError = "当前没有等待输入的 Steam Guard 验证。"
+            return
+        }
+        guard !guardCode.isEmpty else {
+            authError = "请输入 Steam Guard 令牌。"
+            return
+        }
+        guard let inputHandle = loginInputHandle else {
+            authError = "登录会话已失效，请重新输入账号和密码。"
+            authPhase = .credentials
+            isAuthenticating = false
+            return
+        }
+
+        authError = nil
+        isAuthenticating = true
+        authStatusMessage = "正在验证 Steam Guard 令牌…"
+        inputHandle.write(Data("\(guardCode)\r".utf8))
+    }
+
+    func browseAnonymously() {
+        Task { @MainActor [weak self] in
+            self?.browseAnonymouslyImmediately()
+        }
+    }
+
+    private func browseAnonymouslyImmediately() {
+        cancelActiveLoginSession()
+        requiresLogin = !hasSavedCredentials
+        isAnonymousBrowsing = true
+        authPhase = .credentials
+        authError = nil
+        isAuthenticating = false
+        isLoginSheetPresented = false
+        authStatusMessage = "当前为匿名浏览模式：可以查看创意工坊视频列表，下载前需要先登录 Steam。"
+        fetchBrowserItems()
+    }
+
+    func presentLoginGate() {
+        Task { @MainActor [weak self] in
+            self?.presentLoginGateImmediately()
+        }
+    }
+
+    private func presentLoginGateImmediately() {
+        cancelActiveLoginSession()
+        authPhase = .credentials
+        isAuthenticating = false
+        steamGuardCode = ""
+        authError = nil
+        isLoginSheetPresented = false
+
+        Task { [weak self] in
+            guard let self else { return }
+            await MainActor.run {
+                self.isPreparingRuntime = true
+                self.authStatusMessage = "正在准备 SteamCMD 运行环境…"
+            }
+
+            do {
+                try await self.ensureManagedSteamRuntime()
+                await MainActor.run {
+                    self.isPreparingRuntime = false
+                    self.authStatusMessage = "请输入 Steam 账号密码。若 Steam 要求验证，下一步再填写 Guard 令牌。"
+                    self.isLoginSheetPresented = true
+                }
+            } catch {
+                await MainActor.run {
+                    self.isPreparingRuntime = false
+                    self.authError = error.localizedDescription
+                    self.authStatusMessage = "SteamCMD 启动失败，请检查随 App 打包的运行资源。"
+                }
+            }
+        }
+    }
+
+    func logout() {
+        Task { @MainActor [weak self] in
+            self?.logoutImmediately()
+        }
+    }
+
+    private func logoutImmediately() {
+        cancelActiveLoginSession()
+        defaults.set(false, forKey: Constants.defaultsAuthenticated)
+        defaults.removeObject(forKey: Constants.defaultsLastUsername)
+        SteamWorkshopCredentialStore.deletePassword()
+        pendingDownloadRequest = nil
+        steamUsername = ""
+        steamPassword = ""
+        steamGuardCode = ""
+        requiresLogin = true
+        isAnonymousBrowsing = true
+        authPhase = .credentials
+        isLoginSheetPresented = false
+        authError = nil
+        authStatusMessage = "已退出当前 Steam 登录态。"
     }
 
     func downloadWorkshopItem(id: String, pageTitle: String? = nil) {
@@ -169,57 +590,38 @@ final class SteamWorkshopService: ObservableObject {
             statusMessage = "已有下载任务在执行，请稍候。"
             return
         }
+
+        guard !requiresLogin && hasSavedCredentials else {
+            pendingDownloadRequest = SteamWorkshopPendingDownloadRequest(id: id, pageTitle: pageTitle)
+            authStatusMessage = "下载需要登录 Steam。请先完成登录，成功后会自动继续刚才的下载。"
+            presentLoginGate()
+            return
+        }
+
         activeDownloadItemID = id
-        statusMessage = "正在通过 steamcmd 下载 Workshop #\(id)"
+        statusMessage = "正在准备 Steam 下载环境…"
         upsertTransientRecord(id: id, title: pageTitle ?? "Workshop #\(id)", status: .downloading)
 
-        let process = Process()
-        process.executableURL = steamCmdURL
-        process.arguments = [
-            "+force_install_dir", installRootURL.path,
-            "+login", "anonymous",
-            "+workshop_download_item", Constants.workshopAppID, id, "validate",
-            "+quit"
-        ]
-
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = outputPipe
-
-        process.terminationHandler = { [weak self] process in
-            let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8) ?? ""
-            Task { @MainActor [weak self, output, id, pageTitle] in
-                guard let self else { return }
-                self.activeDownloadItemID = nil
-                if process.terminationStatus == 0,
-                   output.localizedCaseInsensitiveContains("Success. Downloaded item") {
-                    self.statusMessage = "已完成 Workshop #\(id) 下载"
-                    self.reloadInstalledItems()
-                } else {
-                    let message = output.isEmpty ? "steamcmd 下载失败，请检查网络与项目可见性。" : output
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.ensureManagedSteamRuntime()
+                try await self.performWorkshopDownload(id: id, pageTitle: pageTitle)
+            } catch {
+                await MainActor.run {
+                    self.activeDownloadItemID = nil
+                    let message = error.localizedDescription
                     self.downloadError = message
-                    self.statusMessage = "Workshop #\(id) 下载失败"
+                    self.statusMessage = message
                     self.upsertTransientRecord(id: id, title: pageTitle ?? "Workshop #\(id)", status: .failed(message))
                 }
             }
-        }
-
-        do {
-            try FileManager.default.createDirectory(at: installRootURL, withIntermediateDirectories: true)
-            try process.run()
-        } catch {
-            activeDownloadItemID = nil
-            let message = "无法启动 steamcmd：\(error.localizedDescription)"
-            downloadError = message
-            statusMessage = message
-            upsertTransientRecord(id: id, title: pageTitle ?? "Workshop #\(id)", status: .failed(message))
         }
     }
 
     func reloadInstalledItems() {
         let fileManager = FileManager.default
-        let root = workshopContentRootURL
+        let root = libraryRootURL
         guard let directories = try? fileManager.contentsOfDirectory(
             at: root,
             includingPropertiesForKeys: [.contentModificationDateKey],
@@ -252,7 +654,7 @@ final class SteamWorkshopService: ObservableObject {
     }
 
     func revealDownloadsDirectory() {
-        NSWorkspace.shared.activateFileViewerSelecting([workshopContentRootURL])
+        NSWorkspace.shared.activateFileViewerSelecting([libraryRootURL])
     }
 
     func revealItem(_ record: SteamWorkshopDownloadRecord) {
@@ -270,6 +672,654 @@ final class SteamWorkshopService: ObservableObject {
             userInfo: ["localURL": videoURL]
         )
         statusMessage = "已将 \(record.title) 发送到视频库并准备播放"
+    }
+
+    private func loadAuthenticationState() {
+        let storedUsername = defaults.string(forKey: Constants.defaultsLastUsername) ?? ""
+        let storedPassword = SteamWorkshopCredentialStore.loadPassword() ?? ""
+        steamUsername = storedUsername
+        steamPassword = storedPassword
+        requiresLogin = storedUsername.isEmpty || storedPassword.isEmpty
+        isAnonymousBrowsing = requiresLogin
+        authPhase = requiresLogin ? .credentials : .authenticated
+    }
+
+    private func saveAuthenticationState(username: String, password: String) {
+        defaults.set(username, forKey: Constants.defaultsLastUsername)
+        defaults.set(true, forKey: Constants.defaultsAuthenticated)
+        SteamWorkshopCredentialStore.save(password: password)
+        requiresLogin = false
+        isAnonymousBrowsing = false
+        authPhase = .authenticated
+    }
+
+    private var hasSavedCredentials: Bool {
+        !steamUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !steamPassword.isEmpty
+    }
+
+    private func prepareRuntimeIfNeeded() async {
+        await MainActor.run {
+            self.isPreparingRuntime = true
+            self.statusMessage = "正在检查 SteamCMD 环境…"
+        }
+
+        do {
+            try await ensureManagedSteamRuntime()
+            await MainActor.run {
+                self.isPreparingRuntime = false
+                if self.browserState == .idle {
+                    self.statusMessage = "SteamCMD 环境已就绪，正在加载创意工坊列表…"
+                }
+            }
+        } catch {
+            await MainActor.run {
+                self.isPreparingRuntime = false
+                self.requiresLogin = true
+                self.isAnonymousBrowsing = true
+                self.authPhase = .credentials
+                self.authError = error.localizedDescription
+                self.authStatusMessage = "SteamCMD 环境准备失败。"
+            }
+            return
+        }
+    }
+
+    private func performWorkshopDownload(id: String, pageTitle: String?) async throws {
+        await MainActor.run {
+            self.statusMessage = "正在通过内置 SteamCMD 下载 Workshop #\(id)"
+        }
+        let output = try await runSteamProcess(arguments: [
+            "+force_install_dir", runtimeInstallRootURL.path,
+            "+login", steamUsername, steamPassword,
+            "+workshop_download_item", Constants.workshopAppID, id, "validate",
+            "+quit"
+        ])
+
+        guard output.localizedCaseInsensitiveContains("Success. Downloaded item") else {
+            if outputIndicatesAuthenticationFailure(output) {
+                await MainActor.run {
+                    self.pendingDownloadRequest = SteamWorkshopPendingDownloadRequest(id: id, pageTitle: pageTitle)
+                    self.requiresLogin = true
+                    self.isAnonymousBrowsing = true
+                    self.authPhase = .credentials
+                    self.authStatusMessage = "当前 Steam 登录态已失效，请重新登录并完成 Guard 验证。"
+                    self.isLoginSheetPresented = true
+                }
+                throw NSError(domain: "SteamWorkshop", code: 11, userInfo: [
+                    NSLocalizedDescriptionKey: "当前 Steam 登录态已失效，请重新登录。登录成功后会自动继续下载。"
+                ])
+            }
+            throw NSError(domain: "SteamWorkshop", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: output.isEmpty ? "SteamCMD 未返回成功下载结果。" : output
+            ])
+        }
+
+        try syncDownloadedItemToLibrary(id: id)
+
+        await MainActor.run {
+            self.activeDownloadItemID = nil
+            self.statusMessage = "已完成 Workshop #\(id) 下载"
+            self.reloadInstalledItems()
+        }
+    }
+
+    private func ensureManagedSteamRuntime() async throws {
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(at: libraryRootURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: cacheDirectoryURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: runtimeInstallRootURL, withIntermediateDirectories: true)
+
+        guard let bundledSteamRootURL,
+              validateSteamRuntime(at: bundledSteamRootURL) else {
+            throw NSError(domain: "SteamWorkshop", code: 8, userInfo: [
+                NSLocalizedDescriptionKey: "App 包内没有找到可用的 SteamCMD 基线资源。"
+            ])
+        }
+
+        steamRuntimeUpdateStatus = "当前直接运行 App 内置 SteamCMD 基线版本。后续 SteamCMD 升级随应用更新一起分发。"
+    }
+
+    private func runSteamProcess(arguments: [String], stdinText: String? = nil) async throws -> String {
+        let steamRootURL = try resolvedSteamRuntimeExecutionRootURL()
+        return try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/bash")
+            process.currentDirectoryURL = steamRootURL
+            process.arguments = ["./steamcmd.sh"] + arguments
+            process.environment = steamProcessEnvironment()
+
+            let outputPipe = Pipe()
+            process.standardOutput = outputPipe
+            process.standardError = outputPipe
+
+            let inputPipe = Pipe()
+            process.standardInput = inputPipe
+
+            process.terminationHandler = { process in
+                let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8) ?? ""
+                if process.terminationStatus == 0 {
+                    continuation.resume(returning: output)
+                } else {
+                    continuation.resume(throwing: NSError(domain: "SteamWorkshop", code: Int(process.terminationStatus), userInfo: [
+                        NSLocalizedDescriptionKey: output.isEmpty ? "SteamCMD 执行失败，退出码 \(process.terminationStatus)。" : output
+                    ]))
+                }
+            }
+
+            do {
+                try process.run()
+                if let stdinText, !stdinText.isEmpty {
+                    inputPipe.fileHandleForWriting.write(Data(stdinText.utf8))
+                    try? inputPipe.fileHandleForWriting.close()
+                }
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+
+    private func syncDownloadedItemToLibrary(id: String) throws {
+        let fileManager = FileManager.default
+        let sourceURL = stagingWorkshopContentRootURL.appendingPathComponent(id, isDirectory: true)
+        let targetURL = libraryRootURL.appendingPathComponent(id, isDirectory: true)
+        guard fileManager.fileExists(atPath: sourceURL.path) else {
+            throw NSError(domain: "SteamWorkshop", code: 6, userInfo: [
+                NSLocalizedDescriptionKey: "SteamCMD 已完成下载，但没有找到下载结果目录。"
+            ])
+        }
+
+        if fileManager.fileExists(atPath: targetURL.path) {
+            try? fileManager.removeItem(at: targetURL)
+        }
+        try fileManager.copyItem(at: sourceURL, to: targetURL)
+    }
+
+    private func fetchBrowserItems(forceRefresh: Bool = false) {
+        browserFetchTask?.cancel()
+        let source = self.source
+        let query = browserQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let cached = loadBrowserCache(source: source, query: query) {
+            browserItems = cached.items
+            browserState = .loaded
+            statusMessage = "已载入缓存的创意工坊列表"
+            if !forceRefresh && Date().timeIntervalSince(cached.fetchedAt) < Constants.cacheTTL {
+                return
+            }
+        } else {
+            browserState = .loading
+            browserItems = []
+            statusMessage = "正在抓取 Wallpaper Engine 创意工坊视频列表…"
+        }
+
+        browserFetchTask = Task { [weak self] in
+            do {
+                let ids = try await Self.fetchWorkshopIDs(source: source, query: query)
+                guard !Task.isCancelled else { return }
+                let items = try await Self.fetchWorkshopItems(ids: ids)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self else { return }
+                    self.browserItems = items
+                    self.browserState = .loaded
+                    self.statusMessage = items.isEmpty
+                        ? "没有抓取到符合条件的视频项目。"
+                        : "已加载 \(items.count) 个创意工坊视频项目"
+                    self.saveBrowserCache(source: source, query: query, items: items)
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self else { return }
+                    if self.browserItems.isEmpty {
+                        self.browserState = .failed(error.localizedDescription)
+                    }
+                    self.statusMessage = "创意工坊列表抓取失败"
+                }
+            }
+        }
+    }
+
+    private func beginInteractiveSteamLogin(username: String, password: String) {
+        resetSteamAuthDebugLog()
+        loginSessionID = UUID().uuidString.lowercased()
+        appendSteamAuthDebugLog("=== Steam login session started ===")
+        appendSteamAuthDebugLog("Session ID: \(loginSessionID)")
+        appendSteamAuthDebugLog("Local time: \(Date().formatted(date: .complete, time: .standard))")
+        appendSteamAuthDebugLog("Bundle path: \(Bundle.main.bundleURL.path)")
+        appendSteamAuthDebugLog("Log file path: \(steamAuthDebugLogURL.path)")
+        appendSteamAuthDebugLog("Execution mode: app -> /bin/bash ./steamcmd.sh")
+        pendingLoginUsername = username
+        pendingLoginPassword = password
+        pendingLoginCommand = "login \(username) \(password)\r"
+        appendSteamAuthDebugLog("Prepared command: \(redactedLoginCommand(username: username, password: password))")
+        steamGuardCode = ""
+        loginPasswordSent = false
+        loginSucceeded = false
+        loginOutputBuffer = ""
+
+        let process = Process()
+        let steamRootURL: URL
+        do {
+            steamRootURL = try resolvedSteamRuntimeExecutionRootURL()
+            appendSteamAuthDebugLog("Resolved runtime root: \(steamRootURL.path)")
+        } catch {
+            appendSteamAuthDebugLog("Failed to resolve runtime root: \(error.localizedDescription)")
+            isAuthenticating = false
+            authError = error.localizedDescription
+            authStatusMessage = "SteamCMD 启动失败。"
+            cancelActiveLoginSession()
+            return
+        }
+
+        let pty: SteamWorkshopPTYSession
+        do {
+            pty = try makeSteamPTYSession()
+            appendSteamAuthDebugLog("Created local PTY session for interactive login.")
+        } catch {
+            appendSteamAuthDebugLog("Failed to create local PTY: \(error.localizedDescription)")
+            isAuthenticating = false
+            authError = "无法创建 SteamCMD 交互会话。"
+            authStatusMessage = "SteamCMD 启动失败。"
+            cancelActiveLoginSession()
+            return
+        }
+
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.currentDirectoryURL = steamRootURL
+        process.arguments = ["./steamcmd.sh"]
+        process.environment = steamProcessEnvironment()
+        process.standardInput = pty.slave
+        process.standardOutput = pty.slave
+        process.standardError = pty.slave
+        appendSteamAuthDebugLog("Launch path: /bin/bash")
+        appendSteamAuthDebugLog("Launch arguments: ./steamcmd.sh")
+
+        pty.master.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            let chunk = String(data: data, encoding: .utf8) ?? ""
+            Task { @MainActor [weak self] in
+                self?.handleInteractiveLoginOutput(chunk)
+            }
+        }
+
+        process.terminationHandler = { [weak self] process in
+            Task { @MainActor [weak self] in
+                self?.appendSteamAuthDebugLog("Process terminated with status \(process.terminationStatus).")
+                try? pty.master.close()
+                try? pty.slave.close()
+                self?.handleInteractiveLoginTermination(status: process.terminationStatus)
+            }
+        }
+
+        do {
+            try process.run()
+            appendSteamAuthDebugLog("Process started successfully.")
+            loginProcess = process
+            loginInputHandle = pty.master
+            loginOutputHandle = pty.master
+            authStatusMessage = "SteamCMD 已启动，正在等待控制台就绪…"
+            loginBootstrapTimeoutTask?.cancel()
+            loginBootstrapTimeoutTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self,
+                          !self.loginPasswordSent,
+                          self.authPhase == .credentials else { return }
+                    self.appendSteamAuthDebugLog("Bootstrap timeout reached before Steam prompt was observed.")
+                    self.finalizeInteractiveLoginFailure(message: "SteamCMD 控制台未进入可登录状态，登录命令没有被执行。")
+                }
+            }
+        } catch {
+            try? pty.master.close()
+            try? pty.slave.close()
+            appendSteamAuthDebugLog("Process start failed: \(error.localizedDescription)")
+            isAuthenticating = false
+            authError = error.localizedDescription
+            authStatusMessage = "SteamCMD 启动失败。"
+            cancelActiveLoginSession()
+        }
+    }
+
+    private func handleInteractiveLoginOutput(_ chunk: String) {
+        loginOutputBuffer.append(chunk)
+        let lowered = loginOutputBuffer.localizedLowercase
+        appendSteamAuthDebugLog("STDOUT chunk: \(sanitizeSteamOutput(chunk))")
+
+        if lowered.contains("createboundsocket") {
+            appendSteamAuthDebugLog("Observed network socket bind failure while SteamCMD attempted to connect.")
+        }
+
+        if lowered.contains("error (no connection)") {
+            appendSteamAuthDebugLog("SteamCMD reported ERROR (No Connection) and returned to the Steam prompt.")
+        }
+
+        if !loginPasswordSent,
+           lowered.contains("steam>") {
+            appendSteamAuthDebugLog("Detected Steam prompt. About to send login command.")
+            sendPendingLoginCommandIfPossible()
+        }
+
+        if authPhase != .awaitingGuardCode, outputRequestsGuardCode(lowered) {
+            authPhase = .awaitingGuardCode
+            isAuthenticating = false
+            authStatusMessage = "Steam 已要求进行 Steam Guard 验证，请输入刚收到的令牌。"
+            return
+        }
+
+        if outputIndicatesLoginSuccess(lowered) {
+            finalizeInteractiveLoginSuccess()
+            return
+        }
+
+        if loginPasswordSent && authPhase != .awaitingGuardCode && outputIndicatesAuthenticationFailure(chunk) {
+            finalizeInteractiveLoginFailure(message: loginOutputBuffer)
+        }
+    }
+
+    private func handleInteractiveLoginTermination(status: Int32) {
+        loginOutputHandle?.readabilityHandler = nil
+        appendSteamAuthDebugLog("Handling process termination. status=\(status), loginSucceeded=\(loginSucceeded), authPhase=\(authPhase)")
+
+        if loginSucceeded {
+            cancelActiveLoginSession(keepStatus: true)
+            return
+        }
+
+        if authPhase == .awaitingGuardCode {
+            finalizeInteractiveLoginFailure(message: "Steam Guard 验证会话已结束，请重新输入账号和密码。")
+            return
+        }
+
+        if status == 0, outputIndicatesLoginSuccess(loginOutputBuffer.localizedLowercase) {
+            finalizeInteractiveLoginSuccess()
+            return
+        }
+
+        let message = loginOutputBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        finalizeInteractiveLoginFailure(message: message.isEmpty ? "Steam 登录失败，请检查账号密码是否正确。" : message)
+    }
+
+    private func finalizeInteractiveLoginSuccess() {
+        guard !loginSucceeded else { return }
+        loginBootstrapTimeoutTask?.cancel()
+        appendSteamAuthDebugLog("Login marked successful.")
+        loginSucceeded = true
+        defaults.set(true, forKey: Constants.defaultsAuthenticated)
+        saveAuthenticationState(username: pendingLoginUsername, password: pendingLoginPassword)
+        steamGuardCode = ""
+        isAuthenticating = false
+        isValidatingLoginState = false
+        isLoginSheetPresented = false
+        authError = nil
+        authStatusMessage = "Steam 登录已建立，后续返回页面会继续保留登录态。"
+        loginInputHandle?.write(Data("quit\r".utf8))
+        fetchBrowserItems()
+        let pendingDownload = pendingDownloadRequest
+        pendingDownloadRequest = nil
+        if let pendingDownload {
+            DispatchQueue.main.async {
+                SteamWorkshopService.shared.downloadWorkshopItem(
+                    id: pendingDownload.id,
+                    pageTitle: pendingDownload.pageTitle
+                )
+            }
+        }
+    }
+
+    private func finalizeInteractiveLoginFailure(message: String) {
+        loginBootstrapTimeoutTask?.cancel()
+        appendSteamAuthDebugLog("Login marked failed: \(sanitizeSteamOutput(message))")
+        defaults.set(false, forKey: Constants.defaultsAuthenticated)
+        requiresLogin = true
+        isAnonymousBrowsing = true
+        authPhase = .credentials
+        isAuthenticating = false
+        isValidatingLoginState = false
+        authError = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        authStatusMessage = "Steam 登录失败，请重新输入账号密码后再试。"
+        cancelActiveLoginSession(keepStatus: true)
+    }
+
+    private func cancelActiveLoginSession(keepStatus: Bool = false) {
+        loginBootstrapTimeoutTask?.cancel()
+        loginBootstrapTimeoutTask = nil
+        appendSteamAuthDebugLog("Cancelling login session. keepStatus=\(keepStatus)")
+        loginOutputHandle?.readabilityHandler = nil
+        try? loginOutputHandle?.close()
+        try? loginInputHandle?.close()
+        if let process = loginProcess, process.isRunning {
+            process.terminate()
+        }
+        loginProcess = nil
+        loginInputHandle = nil
+        loginOutputHandle = nil
+        loginOutputBuffer = ""
+        loginPasswordSent = false
+        loginSucceeded = false
+        pendingLoginUsername = ""
+        pendingLoginPassword = ""
+        pendingLoginCommand = nil
+        if !keepStatus, authPhase != .authenticated {
+            authPhase = .credentials
+        }
+    }
+
+    private func sendPendingLoginCommandIfPossible() {
+        guard !loginPasswordSent,
+              let command = pendingLoginCommand,
+              let loginInputHandle else { return }
+        appendSteamAuthDebugLog("Writing login command to PTY: \(redactedCommand(command))")
+        loginInputHandle.write(Data(command.utf8))
+        loginPasswordSent = true
+        authStatusMessage = "SteamCMD 控制台已就绪，正在向 Steam 发起账号登录请求…"
+        loginBootstrapTimeoutTask?.cancel()
+        loginBootstrapTimeoutTask = nil
+    }
+
+    private func resetSteamAuthDebugLog() {
+        try? FileManager.default.createDirectory(at: cacheDirectoryURL, withIntermediateDirectories: true)
+        try? Data().write(to: steamAuthDebugLogURL, options: [.atomic])
+    }
+
+    private func appendSteamAuthDebugLog(_ message: String) {
+        let formatter = ISO8601DateFormatter()
+        let line = "[\(formatter.string(from: Date()))][session:\(loginSessionID.isEmpty ? "n/a" : loginSessionID)] \(message)\n"
+        try? FileManager.default.createDirectory(at: cacheDirectoryURL, withIntermediateDirectories: true)
+        if let data = line.data(using: .utf8) {
+            if FileManager.default.fileExists(atPath: steamAuthDebugLogURL.path),
+               let handle = try? FileHandle(forWritingTo: steamAuthDebugLogURL) {
+                defer { try? handle.close() }
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: data)
+            } else {
+                try? data.write(to: steamAuthDebugLogURL, options: [.atomic])
+            }
+        }
+    }
+
+    private func redactedLoginCommand(username: String, password: String) -> String {
+        "login \(username) \(String(repeating: "*", count: max(8, password.count)))\\r"
+    }
+
+    private func redactedCommand(_ command: String) -> String {
+        if command.hasPrefix("login ") {
+            let parts = command.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: false)
+            if parts.count == 3 {
+                return "login \(parts[1]) \(String(repeating: "*", count: 8))\\r"
+            }
+        }
+        return sanitizeSteamOutput(command)
+    }
+
+    private func sanitizeSteamOutput(_ text: String) -> String {
+        let sanitizedLogin = text.replacingOccurrences(
+            of: #"login\s+(\S+)\s+([^\r\n]+)"#,
+            with: "login $1 ********",
+            options: .regularExpression
+        )
+
+        return sanitizedLogin
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func isManagedSteamRuntimeValid(expectedSignature: String) -> Bool {
+        let fileManager = FileManager.default
+        guard let data = try? Data(contentsOf: runtimeManifestURL),
+              let manifest = try? JSONDecoder().decode(SteamWorkshopRuntimeManifest.self, from: data),
+              manifest.bundleSignature == expectedSignature else {
+            return false
+        }
+
+        return Constants.requiredBundledItems.allSatisfy { name in
+            fileManager.fileExists(atPath: managedSteamRootURL.appendingPathComponent(name).path)
+        }
+    }
+
+    private func validateSteamRuntime(at rootURL: URL) -> Bool {
+        let fileManager = FileManager.default
+        guard Constants.requiredBundledItems.allSatisfy({ name in
+            fileManager.fileExists(atPath: rootURL.appendingPathComponent(name).path)
+        }) else {
+            return false
+        }
+
+        for executableName in ["steamcmd.sh", "steamcmd"] {
+            let executablePath = rootURL.appendingPathComponent(executableName).path
+            guard fileManager.isExecutableFile(atPath: executablePath) else {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func makeSteamPTYSession() throws -> SteamWorkshopPTYSession {
+        var masterFD: Int32 = -1
+        var slaveFD: Int32 = -1
+        guard openpty(&masterFD, &slaveFD, nil, nil, nil) == 0 else {
+            throw NSError(
+                domain: NSPOSIXErrorDomain,
+                code: Int(errno),
+                userInfo: [NSLocalizedDescriptionKey: String(cString: strerror(errno))]
+            )
+        }
+
+        return SteamWorkshopPTYSession(
+            master: FileHandle(fileDescriptor: masterFD, closeOnDealloc: true),
+            slave: FileHandle(fileDescriptor: slaveFD, closeOnDealloc: true)
+        )
+    }
+
+    private func resolvedSteamRuntimeExecutionRootURL() throws -> URL {
+        if let activeSteamRootURL {
+            return activeSteamRootURL
+        }
+        throw NSError(domain: "SteamWorkshop", code: 12, userInfo: [
+            NSLocalizedDescriptionKey: "内置 SteamCMD 运行目录无效，未执行任何旧缓存回退。请确认应用包中的 SteamCMDRuntime.bundle 完整存在。"
+        ])
+    }
+
+    private func steamProcessEnvironment() -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = NSHomeDirectory()
+        return environment
+    }
+
+    private func makeBundledSteamRuntimeSignature(rootURL: URL) throws -> String {
+        var components: [String] = []
+
+        if let metadataURL = bundledSteamMetadataURL,
+           let data = try? Data(contentsOf: metadataURL) {
+            components.append(String(decoding: data, as: UTF8.self))
+        }
+
+        for name in Constants.requiredBundledItems.sorted() {
+            let url = rootURL.appendingPathComponent(name)
+            let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            let size = values.fileSize ?? 0
+            let modified = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+            components.append("\(name):\(size):\(Int(modified))")
+        }
+
+        return components.joined(separator: "|")
+    }
+
+    private func makeManagedSteamExecutablesRunnable() throws {
+        let fileManager = FileManager.default
+        for name in ["steamcmd.sh", "steamcmd"] {
+            let path = managedSteamRootURL.appendingPathComponent(name).path
+            guard fileManager.fileExists(atPath: path) else { continue }
+            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        }
+    }
+
+    private func refreshSteamRuntimeStatus() {
+        if let metadataURL = bundledSteamMetadataURL,
+           let data = try? Data(contentsOf: metadataURL),
+           let metadata = try? JSONDecoder().decode(SteamWorkshopBundledRuntimeMetadata.self, from: data) {
+            steamRuntimeVersion = metadata.version
+            steamRuntimeUpdateStatus = "当前内置基线版本为 \(metadata.version)。运行时直接使用 App 内置 SteamCMD，后续版本更新随应用更新一起分发。"
+        } else {
+            steamRuntimeVersion = "未知"
+            steamRuntimeUpdateStatus = "未读取到 SteamCMD 基线版本信息。"
+        }
+    }
+
+    private func outputRequestsGuardCode(_ output: String) -> Bool {
+        output.contains("steam guard")
+        || output.contains("two-factor code")
+        || output.contains("two factor code")
+        || output.contains("access code")
+        || output.contains("email code")
+    }
+
+    private func outputIndicatesLoginSuccess(_ output: String) -> Bool {
+        output.contains("logged in ok")
+        || output.contains("successfully logged in")
+        || output.contains("waiting for user info...ok")
+    }
+
+    private func outputIndicatesAuthenticationFailure(_ output: String) -> Bool {
+        let lowered = output.localizedLowercase
+        return lowered.contains("invalid password")
+            || lowered.contains("login failure")
+            || lowered.contains("failed to log in")
+            || lowered.contains("account logon denied")
+            || lowered.contains("incorrect login")
+            || lowered.contains("too many login failures")
+    }
+
+    private func loadCachedBrowserItemsIfPossible() {
+        let query = browserQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let cached = loadBrowserCache(source: source, query: query) {
+            browserItems = cached.items
+            browserState = .loaded
+        }
+    }
+
+    private func loadBrowserCache(source: SteamWorkshopSource, query: String) -> SteamWorkshopBrowserCacheSnapshot? {
+        let url = cacheFileURL(source: source, query: query)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(SteamWorkshopBrowserCacheSnapshot.self, from: data)
+    }
+
+    private func saveBrowserCache(source: SteamWorkshopSource, query: String, items: [SteamWorkshopBrowserItem]) {
+        let snapshot = SteamWorkshopBrowserCacheSnapshot(fetchedAt: Date(), items: items)
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        try? FileManager.default.createDirectory(at: cacheDirectoryURL, withIntermediateDirectories: true)
+        try? data.write(to: cacheFileURL(source: source, query: query), options: [.atomic])
+    }
+
+    private func cacheFileURL(source: SteamWorkshopSource, query: String) -> URL {
+        let normalized = query.isEmpty
+            ? "all"
+            : query.lowercased().replacingOccurrences(of: #"[^a-z0-9]+"#, with: "-", options: .regularExpression)
+        return cacheDirectoryURL.appendingPathComponent("\(source.rawValue)-\(normalized).json")
     }
 
     private func buildInstalledRecord(at directory: URL) -> SteamWorkshopDownloadRecord? {
@@ -323,14 +1373,7 @@ final class SteamWorkshopService: ObservableObject {
         guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int64 else {
             return nil
         }
-        let mb = Double(size) / (1024 * 1024)
-        if mb >= 1024 {
-            return String(format: "%.1fGB", mb / 1024)
-        }
-        if mb >= 100 {
-            return String(format: "%.0fMB", mb)
-        }
-        return String(format: "%.1fMB", mb)
+        return Self.fileSizeText(forBytes: size)
     }
 
     private func upsertTransientRecord(id: String, title: String, status: SteamWorkshopDownloadRecord.Status) {
@@ -351,7 +1394,7 @@ final class SteamWorkshopService: ObservableObject {
             return
         }
 
-        let folderURL = workshopContentRootURL.appendingPathComponent(id, isDirectory: true)
+        let folderURL = libraryRootURL.appendingPathComponent(id, isDirectory: true)
         downloads.insert(
             SteamWorkshopDownloadRecord(
                 id: id,
@@ -378,25 +1421,276 @@ final class SteamWorkshopService: ObservableObject {
             URLQueryItem(name: "section", value: "readytouseitems"),
             URLQueryItem(name: "requiredtags[]", value: "Video"),
             URLQueryItem(name: "actualsort", value: source.browseFilter),
+            URLQueryItem(name: "numperpage", value: "\(Constants.browserPageSize)"),
             URLQueryItem(name: "p", value: "1")
         ]
         return components.url!
     }
 
-    private static func extractWorkshopID(from url: URL) -> String? {
-        if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-           let id = components.queryItems?.first(where: { $0.name == "id" })?.value,
-           !id.isEmpty {
-            return id
+    private static func makeDetailURL(id: String) -> URL {
+        var components = URLComponents(string: Constants.detailBase)!
+        components.queryItems = [URLQueryItem(name: "id", value: id)]
+        return components.url!
+    }
+
+    private static func fetchWorkshopIDs(source: SteamWorkshopSource, query: String) async throws -> [String] {
+        if source == .subscribed {
+            throw NSError(domain: "SteamWorkshop", code: 7, userInfo: [
+                NSLocalizedDescriptionKey: "订阅列表需要完整的 Steam 社区登录态，这一版先不抓取该页面。"
+            ])
         }
-        let pathComponents = url.pathComponents
-        if let index = pathComponents.firstIndex(of: "filedetails"),
-           pathComponents.indices.contains(index + 1) {
-            let next = pathComponents[index + 1]
-            if next.allSatisfy(\.isNumber) {
-                return next
+        let url = makeBrowseURL(source: source, query: query)
+        let html = try await fetchHTML(url: url)
+        let pattern = #"sharedfiles/filedetails/\?id=(\d+)"#
+        let matches = firstCaptureMatches(pattern: pattern, in: html)
+        var ordered: [String] = []
+        var seen = Set<String>()
+        for id in matches where seen.insert(id).inserted {
+            ordered.append(id)
+        }
+        return Array(ordered.prefix(Constants.browserPageSize))
+    }
+
+    private static func fetchWorkshopItems(ids: [String]) async throws -> [SteamWorkshopBrowserItem] {
+        return try await withThrowingTaskGroup(of: (Int, SteamWorkshopBrowserItem?).self) { group in
+            for (index, id) in ids.enumerated() {
+                group.addTask {
+                    let item = try await fetchWorkshopItem(id: id)
+                    return (index, item)
+                }
+            }
+
+            var results = Array<SteamWorkshopBrowserItem?>(repeating: nil, count: ids.count)
+            for try await (index, item) in group {
+                results[index] = item
+            }
+            return results.compactMap { $0 }
+        }
+    }
+
+    private static func fetchWorkshopItem(id: String) async throws -> SteamWorkshopBrowserItem {
+        let detailURL = makeDetailURL(id: id)
+        let html = try await fetchHTML(url: detailURL)
+        let parsed = parseDetailPage(html: html, fallbackID: id)
+        return SteamWorkshopBrowserItem(
+            id: id,
+            title: parsed.title,
+            author: parsed.author,
+            summary: parsed.summary,
+            descriptionText: parsed.descriptionText,
+            tags: parsed.tags,
+            previewImageURL: parsed.previewImageURL,
+            previewVideoURL: parsed.previewVideoURL,
+            fileSizeText: parsed.fileSizeText,
+            resolutionText: parsed.resolutionText,
+            updatedText: parsed.updatedText,
+            favoritesText: parsed.favoritesText,
+            subscriptionsText: parsed.subscriptionsText,
+            scoreText: parsed.scoreText,
+            detailURL: detailURL
+        )
+    }
+
+    private static func fetchHTML(url: URL) async throws -> String {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) MyWallpaperX/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("zh-CN,zh;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        guard let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .unicode) else {
+            throw URLError(.cannotDecodeRawData)
+        }
+        return html
+    }
+
+    private static func parseDetailPage(html: String, fallbackID: String) -> SteamWorkshopDetailParseResult {
+        let title = firstCapture(
+            pattern: #"<div[^>]*class="workshopItemTitle"[^>]*>\s*(.*?)\s*</div>"#,
+            in: html
+        )
+        ?? metaContent(property: "og:title", in: html)
+        ?? "Workshop #\(fallbackID)"
+
+        let author = firstCapture(
+            pattern: #"<div[^>]*class="friendBlockContent"[^>]*>\s*(.*?)\s*<br"#,
+            in: html
+        ) ?? "未知作者"
+
+        let summary = metaContent(property: "og:description", in: html)
+            ?? firstCapture(pattern: #"<div[^>]*class="workshopItemDescription"[^>]*>(.*?)</div>"#, in: html)
+            ?? ""
+
+        let descriptionText = firstCapture(
+            pattern: #"<div[^>]*class="workshopItemDescription"[^>]*>(.*?)</div>"#,
+            in: html
+        ) ?? summary
+
+        let rawTags = firstCaptureMatches(
+            pattern: #"<a[^>]*class="app_tag"[^>]*>\s*(.*?)\s*</a>"#,
+            in: html
+        )
+        let tags = Array(NSOrderedSet(array: rawTags.filter { !$0.isEmpty })) as? [String] ?? []
+
+        let stats = parseStatsMap(from: html)
+        let previewImageURL = metaURL(property: "og:image", in: html)
+        let previewVideoURL = firstURLMatch(
+            pattern: #"https:[^"'\\]+?\.(?:mp4|webm)(?:\?[^"'\\<]*)?"#,
+            in: html
+        )
+
+        return SteamWorkshopDetailParseResult(
+            title: normalizeText(title),
+            author: normalizeText(author),
+            summary: normalizeText(summary),
+            descriptionText: normalizeText(descriptionText),
+            tags: tags.map(normalizeText),
+            previewImageURL: previewImageURL,
+            previewVideoURL: previewVideoURL,
+            fileSizeText: normalizedStatValue(forKey: "File Size", in: stats),
+            resolutionText: normalizedStatValue(forKey: "Resolution", in: stats)
+                ?? resolutionFallback(in: html),
+            updatedText: normalizedStatValue(forKey: "Updated", in: stats),
+            favoritesText: normalizedStatValue(forKey: "Favorite", in: stats)
+                ?? normalizedStatValue(forKey: "Favorited", in: stats),
+            subscriptionsText: normalizedStatValue(forKey: "Subscriptions", in: stats),
+            scoreText: normalizedStatValue(forKey: "Score", in: stats)
+        )
+    }
+
+    private static func parseStatsMap(from html: String) -> [String: String] {
+        let pattern = #"<div[^>]*class="detailsStatLeft"[^>]*>\s*(.*?)\s*</div>\s*<div[^>]*class="detailsStatRight"[^>]*>\s*(.*?)\s*</div>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else {
+            return [:]
+        }
+        let range = NSRange(html.startIndex..<html.endIndex, in: html)
+        var map: [String: String] = [:]
+        for match in regex.matches(in: html, options: [], range: range) {
+            guard match.numberOfRanges >= 3,
+                  let leftRange = Range(match.range(at: 1), in: html),
+                  let rightRange = Range(match.range(at: 2), in: html) else { continue }
+            let key = normalizeText(String(html[leftRange]))
+            let value = normalizeText(String(html[rightRange]))
+            if !key.isEmpty, !value.isEmpty {
+                map[key] = value
             }
         }
-        return nil
+        return map
+    }
+
+    private static func normalizedStatValue(forKey key: String, in stats: [String: String]) -> String? {
+        if let direct = stats[key], !direct.isEmpty {
+            return direct
+        }
+        return stats.first { candidate, _ in
+            candidate.localizedCaseInsensitiveContains(key)
+        }?.value
+    }
+
+    private static func resolutionFallback(in html: String) -> String? {
+        guard let match = firstCapture(
+            pattern: #"(\d{3,5}\s*[xX×]\s*\d{3,5})"#,
+            in: html
+        ) else {
+            return nil
+        }
+        return normalizeText(match.replacingOccurrences(of: "x", with: "×"))
+    }
+
+    private static func metaContent(property: String, in html: String) -> String? {
+        firstCapture(
+            pattern: #"<meta[^>]+property="\#(property)"[^>]+content="([^"]+)""#,
+            in: html
+        )
+    }
+
+    private static func metaURL(property: String, in html: String) -> URL? {
+        guard let value = metaContent(property: property, in: html) else { return nil }
+        return URL(string: htmlDecode(value))
+    }
+
+    private static func firstURLMatch(pattern: String, in html: String) -> URL? {
+        guard let value = firstCapture(pattern: pattern, in: html) else { return nil }
+        return URL(string: htmlDecode(value))
+    }
+
+    private static func firstCapture(pattern: String, in html: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else {
+            return nil
+        }
+        let range = NSRange(html.startIndex..<html.endIndex, in: html)
+        guard let match = regex.firstMatch(in: html, options: [], range: range) else {
+            return nil
+        }
+        let targetRange = match.numberOfRanges > 1 ? match.range(at: 1) : match.range(at: 0)
+        guard let swiftRange = Range(targetRange, in: html) else { return nil }
+        return String(html[swiftRange])
+    }
+
+    private static func firstCaptureMatches(pattern: String, in html: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else {
+            return []
+        }
+        let range = NSRange(html.startIndex..<html.endIndex, in: html)
+        return regex.matches(in: html, options: [], range: range).compactMap { match in
+            let targetRange = match.numberOfRanges > 1 ? match.range(at: 1) : match.range(at: 0)
+            guard let swiftRange = Range(targetRange, in: html) else { return nil }
+            return normalizeText(String(html[swiftRange]))
+        }
+    }
+
+    private static func normalizeText(_ text: String) -> String {
+        let noBreaks = text
+            .replacingOccurrences(of: "<br>", with: "\n")
+            .replacingOccurrences(of: "<br/>", with: "\n")
+            .replacingOccurrences(of: "<br />", with: "\n")
+        let withoutTags = noBreaks.replacingOccurrences(
+            of: #"<[^>]+>"#,
+            with: " ",
+            options: .regularExpression
+        )
+        let decoded = htmlDecode(withoutTags)
+        let compacted = decoded.replacingOccurrences(
+            of: #"[ \t\r\f\v]+"#,
+            with: " ",
+            options: .regularExpression
+        )
+        return compacted.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func htmlDecode(_ text: String) -> String {
+        var decoded = text
+        let entities: [String: String] = [
+            "&amp;": "&",
+            "&quot;": "\"",
+            "&#34;": "\"",
+            "&apos;": "'",
+            "&#39;": "'",
+            "&lt;": "<",
+            "&gt;": ">",
+            "&nbsp;": " ",
+            "&#x27;": "'",
+            "&#x2F;": "/"
+        ]
+        for (entity, replacement) in entities {
+            decoded = decoded.replacingOccurrences(of: entity, with: replacement)
+        }
+        return decoded
+    }
+
+    private static func fileSizeText(forBytes bytes: Int64) -> String {
+        let mb = Double(bytes) / (1024 * 1024)
+        if mb >= 1024 {
+            return String(format: "%.1fGB", mb / 1024)
+        }
+        if mb >= 100 {
+            return String(format: "%.0fMB", mb)
+        }
+        if mb >= 10 {
+            return String(format: "%.1fMB", mb)
+        }
+        return String(format: "%.2fMB", mb)
     }
 }

@@ -1,6 +1,6 @@
 # MyWallpaperX 框架架构备忘
 
-> 最后更新：2026-04-01
+> 最后更新：2026-04-02
 > 基准 Git 分支：`dev`
 
 本备忘录作为后续构建唯一参考。如有不合理之处可与用户讨论后修正。
@@ -200,7 +200,7 @@ final class XxxCollectionView: NSCollectionView, GridCollectionViewProtocol {
 
 ⚠️ **特例**（已更新）：OnlineLibrary 已于 2026-03-31 从纯 SwiftUI `LazyVGrid` 迁移到 AppKit `NSCollectionView`（`AppKitOLBrowserGridView` / `AppKitOLBrowserContainerView`），并已接入 `ModuleFocusable`。当前在线库浏览页与已下载项页面均通过容器视图监听 `moduleDidBecomeActive` 自动接管焦点。`BoxSelectionState` 和框选功能在线库暂不需要，不视为违规。
 
-⚠️ **Steam 模块当前状态**（2026-04-01）：`SteamWorkshop` 已完成路由、侧边栏、工具栏、菜单与焦点协议接入。浏览页通过 `WKWebView` 加载真实 Steam Workshop 页面，并使用 `requiredtags[]=Video` 仅筛选视频；下载动作通过本机 `steamcmd` 匿名执行，目标目录固定为 Wallpaper Engine workshop 内容目录；下载页扫描本地 `project.json` 和视频文件生成卡片。现阶段不接入多选、QuickLook 与 Return 设为壁纸。
+⚠️ **Steam 模块当前状态**（2026-04-02）：`SteamWorkshop` 已完成路由、侧边栏、工具栏、菜单与焦点协议接入。浏览页已改为原生网格，不直接呈现网页，而是在后台抓取 Wallpaper Engine 创意工坊视频条目并缓存列表；卡片点击后弹出原生二级详情面板，展示标题、作者、摘要、标签、文件大小、分辨率、更新时间等信息，并支持动态预览。浏览页首次进入支持匿名浏览，只加载 `appid=431960` 且 `requiredtags[]=Video` 的公开列表；若用户需要下载，程序会直接运行 App 内置 `SteamCMDRuntime.bundle` 中的 `steamcmd.sh`，按官方 `login <username> <password>` 流程发起登录，请求到 Steam Guard 时再输入令牌；下载命令使用 `workshop_download_item 431960 <itemID>`。登录工具栏已收敛为单一头像入口，点击后弹出菜单处理登录、匿名浏览、切换账号与退出登录，不再额外暴露独立下载按钮。下载成品统一落地到 `~/Movies/MyWallpaperX/创意工坊`，下载页扫描该目录并保留关键元数据。现阶段不接入多选、QuickLook 与 Return 设为壁纸。
 
 ### 3.6 模块焦点管理（AppKit 模块必须实现）
 

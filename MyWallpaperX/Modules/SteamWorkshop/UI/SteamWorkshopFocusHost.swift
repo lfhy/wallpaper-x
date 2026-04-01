@@ -15,7 +15,7 @@ struct SteamWorkshopFocusHost<Content: View>: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: SteamWorkshopFocusableContainer<Content>, context: Context) {
-        nsView.update(rootView: content)
+        // Keep the hosting tree stable to avoid nested publish cycles while SwiftUI is updating.
     }
 }
 
