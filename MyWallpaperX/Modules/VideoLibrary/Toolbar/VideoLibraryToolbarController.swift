@@ -57,6 +57,8 @@ final class VideoLibraryToolbarController: NSObject, NSToolbarDelegate, NSSearch
     var lastRefreshSignature: ToolbarRefreshSignature?
     // 在线图库工具栏控制器
     lazy var onlineLibraryToolbarController = OnlineLibraryToolbarController(toolbar: toolbar, window: window)
+    // Steam 创意工坊工具栏控制器
+    lazy var steamWorkshopToolbarController = SteamWorkshopToolbarController(toolbar: toolbar, window: window)
     // 图片壁纸库工具栏控制器
     private(set) lazy var staticImageLibraryToolbarController = SILToolbarController(toolbar: toolbar, window: window)
 
@@ -255,6 +257,12 @@ final class VideoLibraryToolbarController: NSObject, NSToolbarDelegate, NSSearch
             self?.titleLabel.stringValue = title
             self?.titleItem.toolTip = title
         }
+        steamWorkshopToolbarController.localModeIdentifiers = standardIdentifiers
+        _ = steamWorkshopToolbarController
+        steamWorkshopToolbarController.titleUpdateHandler = { [weak self] title in
+            self?.titleLabel.stringValue = title
+            self?.titleItem.toolTip = title
+        }
         // 关联 bridge，使工具栏控制器能响应选择态变化
         OnlineDownloadsBridge.shared.toolbarController = onlineLibraryToolbarController
         staticImageLibraryToolbarController.localModeIdentifiers = standardIdentifiers
@@ -283,6 +291,11 @@ final class VideoLibraryToolbarController: NSObject, NSToolbarDelegate, NSSearch
             let isDownloads = n.userInfo?["isDownloads"] as? Bool ?? false
             self?.handleModuleLayoutSwitch(to: enabled ? (isDownloads ? .onlineDownloads : .onlineLibrary) : .videoLibrary)
         }
+        NotificationCenter.default.addObserver(forName: .steamWorkshopModeDidChange, object: nil, queue: .main) { [weak self] n in
+            guard let enabled = n.userInfo?["enabled"] as? Bool else { return }
+            let isDownloads = n.userInfo?["isDownloads"] as? Bool ?? false
+            self?.handleModuleLayoutSwitch(to: enabled ? (isDownloads ? .steamDownloads : .steamWorkshop) : .videoLibrary)
+        }
     }
 
     private enum LayoutModule {
@@ -290,6 +303,8 @@ final class VideoLibraryToolbarController: NSObject, NSToolbarDelegate, NSSearch
         case staticImageLibrary
         case onlineLibrary
         case onlineDownloads
+        case steamWorkshop
+        case steamDownloads
     }
 
     private var currentLayoutModule: LayoutModule = .videoLibrary
@@ -299,6 +314,9 @@ final class VideoLibraryToolbarController: NSObject, NSToolbarDelegate, NSSearch
         if module == .videoLibrary {
             // 检查当前是否真的没有任何其他模块激活了
             if !staticImageLibraryToolbarController.isSILMode && !onlineLibraryToolbarController.isOnlineLibraryMode {
+                if steamWorkshopToolbarController.isSteamWorkshopMode {
+                    return
+                }
                 applyIdentifiers(toolbarDefaultItemIdentifiers(toolbar))
                 currentLayoutModule = .videoLibrary
             }
@@ -315,6 +333,10 @@ final class VideoLibraryToolbarController: NSObject, NSToolbarDelegate, NSSearch
             applyIdentifiers(onlineLibraryToolbarController.onlineIdentifiers)
         case .onlineDownloads:
             applyIdentifiers(onlineLibraryToolbarController.downloadsIdentifiers)
+        case .steamWorkshop:
+            applyIdentifiers(steamWorkshopToolbarController.browserIdentifiers)
+        case .steamDownloads:
+            applyIdentifiers(steamWorkshopToolbarController.downloadsIdentifiers)
         case .videoLibrary: break
         }
     }
@@ -689,6 +711,7 @@ extension VideoLibraryToolbarController {
         [IDs.sidebar, IDs.title, IDs.import, IDs.select, IDs.navigation, IDs.delete, IDs.favorite, IDs.tag, IDs.info, IDs.sort, IDs.zoom, IDs.search, .space, .flexibleSpace,
          .olCategory, .olRefresh, .olZoom, .olSearch, .olOrder, .olSettings,
          .olDownloadsTitle, .olDownloadsSelect, .olDownloadsDelete, .olDownloadsInfo, .olDownloadsSort, .olDownloadsReveal, .olDownloadsSearch,
+         .steamSource, .steamRefresh, .steamZoom, .steamSearch, .steamDownload, .steamDownloadsTitle, .steamDownloadsReveal, .steamDownloadsSearch,
          .silImport, .silSelect, .silDelete, .silInfo, .silSort, .silZoom, .silSearch]
     }
 
@@ -725,6 +748,7 @@ extension VideoLibraryToolbarController {
         default:
             // 代理给在线图库工具栏控制器处理
             if let item = onlineLibraryToolbarController.makeItem(for: itemIdentifier) { return item }
+            if let item = steamWorkshopToolbarController.makeItem(for: itemIdentifier) { return item }
             // 代理给图片库工具栏控制器处理
             if let item = staticImageLibraryToolbarController.makeItem(for: itemIdentifier) { return item }
             return nil
@@ -750,6 +774,10 @@ extension VideoLibraryToolbarController {
             onlineLibraryToolbarController.focusSearch()
             return
         }
+        if steamWorkshopToolbarController.isSteamWorkshopMode {
+            steamWorkshopToolbarController.focusSearch()
+            return
+        }
         if staticImageLibraryToolbarController.isSILMode {
             staticImageLibraryToolbarController.focusSearch()
             return
@@ -762,6 +790,10 @@ extension VideoLibraryToolbarController {
         // 在线图库模式：代理给在线图库工具栏控制器处理，不触碰 WallpaperManager
         if onlineLibraryToolbarController.isOnlineLibraryMode {
             onlineLibraryToolbarController.performZoom(delta: delta)
+            return
+        }
+        if steamWorkshopToolbarController.isSteamWorkshopMode {
+            steamWorkshopToolbarController.performZoom(delta: delta)
             return
         }
         // 图片壁纸库模式：代理给 SIL 工具栏控制器处理

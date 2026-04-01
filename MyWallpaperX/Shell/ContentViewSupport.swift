@@ -15,6 +15,8 @@ enum SelectedItem: Hashable {
     case staticImageLibrary
     case onlineLibrary
     case onlineDownloads         // 在线库已下载项管理
+    case steamWorkshop
+    case steamDownloads
 }
 
 extension Notification.Name {
@@ -27,8 +29,12 @@ extension Notification.Name {
     static let onlineVideoReadyToPlay = Notification.Name("OnlineVideoReadyToPlay")
     /// 当前播放视频路径变化（在线已下载项播放态同步）
     static let onlineDownloadsPlaybackPathDidChange = Notification.Name("OnlineDownloadsPlaybackPathDidChange")
+    /// Steam 创意工坊视频下载完成后，由 Coordinator 中转给视频库静默导入并播放
+    static let steamWorkshopVideoReadyToPlay = Notification.Name("SteamWorkshopVideoReadyToPlay")
     /// 图片壁纸库模式切换通知，由 DetailView 发出，StaticImageLibrary 模块接收
     static let staticImageLibraryModeDidChange = Notification.Name("StaticImageLibraryModeDidChange")
+    /// Steam 创意工坊模式切换通知，由 DetailView 发出，Steam 模块接收
+    static let steamWorkshopModeDidChange = Notification.Name("SteamWorkshopModeDidChange")
 }
 
 struct DetailView: View {
@@ -42,6 +48,10 @@ struct DetailView: View {
                 OnlineLibraryEntryView()
             } else if case .onlineDownloads = selectedItem {
                 OnlineLibraryDownloadsView()
+            } else if case .steamWorkshop = selectedItem {
+                SteamWorkshopEntryView()
+            } else if case .steamDownloads = selectedItem {
+                SteamWorkshopDownloadsView()
             } else if case .staticImageLibrary = selectedItem {
                 StaticImageLibraryEntryView()
             } else if case .silTag(let tag) = selectedItem {

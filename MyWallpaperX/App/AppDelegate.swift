@@ -20,7 +20,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
  if module == .staticImageLibrary {
  menuItem.title = "导入图片"
  return true
- } else if module == .onlineLibrary {
+ } else if module == .onlineLibrary || module == .steamWorkshop {
  menuItem.title = "导入"
  return false
  } else {

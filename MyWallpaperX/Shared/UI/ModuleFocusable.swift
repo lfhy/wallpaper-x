@@ -36,4 +36,5 @@ enum ModuleIdentifier: String {
     case videoLibrary       = "videoLibrary"
     case staticImageLibrary = "staticImageLibrary"
     case onlineLibrary      = "onlineLibrary"
+    case steamWorkshop      = "steamWorkshop"
 }

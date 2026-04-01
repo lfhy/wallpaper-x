@@ -49,6 +49,7 @@ enum ImportContext: Equatable {
     case favorites
     case tag(String)
     case onlinePlayback  // 在线库静默导入并立即播放，不弹任何提示
+    case steamPlayback   // Steam 创意工坊静默导入并立即播放，不弹任何提示
 }
 
 enum WallpaperRemovalScope {

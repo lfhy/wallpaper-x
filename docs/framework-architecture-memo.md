@@ -20,7 +20,8 @@ MyWallpaperX/
 │   ├── Modules/
 │   │   ├── VideoLibrary/       ← 已完成，其他模块的实现标准
 │   │   ├── StaticImageLibrary/ ← 已完成
-│   │   └── OnlineLibrary/      ← 已完成
+│   │   ├── OnlineLibrary/      ← 已完成
+│   │   └── SteamWorkshop/      ← 已接入（创意工坊浏览/下载模块，内嵌 Workshop + steamcmd）
 │   ├── Resources/Videos/
 │   ├── Shared/
 │   │   ├── UI/                 ← 见下表
@@ -57,6 +58,7 @@ Shared → Models
 Modules/VideoLibrary       → Core、Models、Shared
 Modules/StaticImageLibrary → Models、Shared
 Modules/OnlineLibrary      → Models、Shared
+Modules/SteamWorkshop      → Shared
 Shell  → VideoLibrary(WallpaperManager)、Shared、Models
 App    → Shell、Core/System、Shared（不直接引用模块内部类型）
 ```
@@ -67,7 +69,7 @@ App    → Shell、Core/System、Shared（不直接引用模块内部类型）
 
 ## 三、新模块接入规范
 
-三个模块均已完成接入，以下为规范说明，供后续新模块参考。
+四个模块均已完成接入，以下为规范说明，供后续新模块参考。
 
 ### 3.1 路由（Shell/ContentViewSupport.swift）
 
@@ -81,6 +83,12 @@ let isOnline = item == .onlineLibrary || item == .onlineDownloads
 case .onlineDownloads: newModule = .onlineLibrary  // 子页面归并到父模块
 ```
 
+Steam 创意工坊同理：
+```swift
+let isSteam = item == .steamWorkshop || item == .steamDownloads
+case .steamDownloads: newModule = .steamWorkshop
+```
+
 ### 3.2 侧边栏（Shell/SidebarViews.swift）
 
 在 `SidebarSectionID` 追加新分区 case，在 `rebuildNodes` 中追加分区节点构建。
@@ -92,11 +100,14 @@ case .onlineDownloads: newModule = .onlineLibrary  // 子页面归并到父模�
 4. **在线**（`.online`）：在线壁纸、已下载项
    - `onlineLibrary`：在线图库浏览页
    - `onlineDownloads`：已下载项管理页（在线库子页面，`activeModule` 归并为 `.onlineLibrary`）
-5. **其他**（`.others`）：设置（始终最底部）
+5. **Steam**（`.steam`）：Steam 创意工坊、Steam 下载页
+   - `steamWorkshop`：Steam 创意工坊浏览页
+   - `steamDownloads`：Steam 下载页（Steam 子页面，`activeModule` 归并为 `.steamWorkshop`）
+6. **其他**（`.others`）：设置（始终最底部）
 
 **侧边栏节点计数规范：**
 - 有内容计数的入口节点必须在 `SidebarSnapshotSignature` 里包含对应计数字段，否则内容变化时侧边栏不会刷新
-- 当前已追踪字段：`wallpaperCount`、`favoriteCount`、`recentCount`、`silTagCounts`、`silWallpapersCount`、`onlineDownloadsCount`
+- 当前已追踪字段：`wallpaperCount`、`favoriteCount`、`recentCount`、`silTagCounts`、`silWallpapersCount`、`onlineDownloadsCount`、`steamDownloadsCount`
 - 新增有计数的节点时，必须同步在 `SidebarSnapshotSignature` 结构体和 `makeSidebarSnapshotSignature` 方法中追加字段，并在所有构造 `SidebarSnapshotSignature` 的地方补全
 
 **侧边栏标签拖拽排序：**
@@ -143,23 +154,25 @@ func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
 
 **各模块菜单命令支持对照（新模块接入时参考）：**
 
-| 命令方法 | 视频库 | 图片库 | 在线库（浏览页） | 在线库（已下载项） | 说明 |
-|----------|--------|--------|-----------------|-------------------|------|
-| `menuImport` | ✅ 导入视频 | ✅ 导入图片 | ✗ break | ✗ break | 在线库无本地导入 |
-| `menuCreateTag` | ✅ | ✅ | ✗ break | ✗ break | 在线库无标签系统 |
-| `menuAddTag` | ✅ | ✅ | ✗ break | ✗ break | 同上 |
-| `menuShowInfo` | ✅ | ✅ | ✗ break | ✅（单选时可用） | 在线库浏览页无本地元数据，已下载项支持信息弹窗 |
-| `menuRevealInFinder` | ✅ | ✅ | ✅ 刷新在线列表 | ✅ 查看文件 | 通过 `OnlineDownloadsBridge.isActive` 区分浏览页/已下载项 |
-| `menuToggleMultiSelect` | ✅ | ✅ | ✗ break | ✅（已接入 Bridge） | |
-| `menuSelectAll` | ✅ | ✅ | ✗ break | ✅（已接入 Bridge） | |
-| `menuDeleteSelected` | ✅ | ✅ | ✗ break | ✅（已接入 Bridge） | |
-| `menuFocusSearch` | ✅ | ✅ | ✅ | ✅ | |
+| 命令方法 | 视频库 | 图片库 | 在线库（浏览页） | 在线库（已下载项） | Steam（浏览页） | Steam（下载页） | 说明 |
+|----------|--------|--------|-----------------|-------------------|-----------------|-----------------|------|
+| `menuImport` | ✅ 导入视频 | ✅ 导入图片 | ✗ break | ✗ break | ✗ break | ✗ break | 在线源与 Steam 模块无本地导入 |
+| `menuCreateTag` | ✅ | ✅ | ✗ break | ✗ break | ✗ break | ✗ break | 在线源与 Steam 模块无标签系统 |
+| `menuAddTag` | ✅ | ✅ | ✗ break | ✗ break | ✗ break | ✗ break | 同上 |
+| `menuShowInfo` | ✅ | ✅ | ✗ break | ✅（单选时可用） | ✗ break | ✗ break | Steam 当前为浏览/下载骨架，不暴露信息弹窗 |
+| `menuRevealInFinder` | ✅ | ✅ | ✅ 刷新在线列表 | ✅ 查看文件 | ✅ 打开 Steam 下载目录 | ✅ 打开 Steam 下载目录 | Steam 当前统一打开下载根目录 |
+| `menuToggleMultiSelect` | ✅ | ✅ | ✗ break | ✅（已接入 Bridge） | ✗ break | ✗ break | |
+| `menuSelectAll` | ✅ | ✅ | ✗ break | ✅（已接入 Bridge） | ✗ break | ✗ break | |
+| `menuDeleteSelected` | ✅ | ✅ | ✗ break | ✅（已接入 Bridge） | ✗ break | ✗ break | |
+| `menuFocusSearch` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | |
 
 **`validateMenuItem` 中导入菜单项处理规范：**
 ```swift
 if menuItem.title == "导入" || menuItem.title == "导入视频" || menuItem.title == "导入图片" {
     if module == .staticImageLibrary { menuItem.title = "导入图片"; return true }
-    if module == .onlineLibrary      { menuItem.title = "导入";      return false }  // 禁用
+    if module == .onlineLibrary || module == .steamWorkshop {
+        menuItem.title = "导入"; return false
+    }
     menuItem.title = "导入视频"; return true
 }
 ```
@@ -187,6 +200,8 @@ final class XxxCollectionView: NSCollectionView, GridCollectionViewProtocol {
 
 ⚠️ **特例**（已更新）：OnlineLibrary 已于 2026-03-31 从纯 SwiftUI `LazyVGrid` 迁移到 AppKit `NSCollectionView`（`AppKitOLBrowserGridView` / `AppKitOLBrowserContainerView`），并已接入 `ModuleFocusable`。当前在线库浏览页与已下载项页面均通过容器视图监听 `moduleDidBecomeActive` 自动接管焦点。`BoxSelectionState` 和框选功能在线库暂不需要，不视为违规。
 
+⚠️ **Steam 模块当前状态**（2026-04-01）：`SteamWorkshop` 已完成路由、侧边栏、工具栏、菜单与焦点协议接入。浏览页通过 `WKWebView` 加载真实 Steam Workshop 页面，并使用 `requiredtags[]=Video` 仅筛选视频；下载动作通过本机 `steamcmd` 匿名执行，目标目录固定为 Wallpaper Engine workshop 内容目录；下载页扫描本地 `project.json` 和视频文件生成卡片。现阶段不接入多选、QuickLook 与 Return 设为壁纸。
+
 ### 3.6 模块焦点管理（AppKit 模块必须实现）
 
 ```swift
@@ -207,6 +222,7 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 - 视频库：`QuickLookPreviewController.shared`，Space/ESC 由 `MainWindowController.handleQuickLookKeyDown` 处理
 - 图片库：`SILQuickLookController.shared` + `SILKeyboardHandler.shared`，`activeModule == .staticImageLibrary` 时接管
 - 在线库：**不接入 QuickLook**（远程 URL，QLPreviewPanel 无法预览）
+- Steam：**当前不接入 QuickLook**（下载骨架阶段无稳定本地视频索引）
 
 `beginPreviewPanelControl` / `endPreviewPanelControl` 根据 `activeModule` 挂载对应控制器。
 
@@ -250,6 +266,7 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 | `.favorites` | 导入并自动收藏 | ✅ 显示导入结果 | ✗ |
 | `.tag(String)` | 导入并自动打标签 | ✅ 显示导入结果 | ✗ |
 | `.onlinePlayback` | 在线库静默下载后导入 | ✗ 跳过弹窗 | ✅ 立即播放 |
+| `.steamPlayback` | Steam 下载页本地视频静默导入 | ✗ 跳过弹窗 | ✅ 立即播放 |
 
 新增 context case 时，必须同步在 `applyContextMetadataIfNeeded` 和 `applyPreparedImportResult` 两处处理。
 
@@ -257,6 +274,7 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 
 **通知名定义位置**
 - `staticImageLibraryModeDidChange`、`onlineLibraryModeDidChange`：`Shell/ContentViewSupport.swift`
+- `steamWorkshopModeDidChange`：`Shell/ContentViewSupport.swift`
 - `moduleDidBecomeActive`：`Shared/UI/ModuleFocusable.swift`
 - 模块内部通知：定义在各自模块目录内，不外漏到 Shell/Shared
 
@@ -273,6 +291,7 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 | 通知名 | 发出方 | 接收方 | userInfo | 用途 |
 |--------|--------|--------|----------|------|
 | `onlineVideoReadyToPlay` | OnlineLibraryService | MainWindowCoordinator | `["localURL": URL]` | 在线库视频下载完成后，由视频库静默导入并播放 |
+| `steamWorkshopVideoReadyToPlay` | SteamWorkshopService | MainWindowCoordinator | `["localURL": URL]` | Steam 下载页选中本地视频后，由视频库静默导入并播放 |
 
 **模块内部通知（OnlineLibrary，不外漏到 Shell/Shared）：**
 
@@ -297,20 +316,20 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 
 **各模块快捷键支持情况：**
 
-| 快捷键 | 视频库 | 图片库 | 在线库（浏览页） | 在线库（已下载项） |
-|--------|--------|--------|-----------------|-------------------|
-| Cmd+E 多选 | ✅ | ✅ | ✗ | ✅（已接入 Bridge） |
-| Cmd+A 全选 | ✅ | ✅ | ✗ | ✅（已接入 Bridge） |
-| Cmd+Delete 删除 | ✅ | ✅ | ✗ | ✅（已接入 Bridge） |
-| Cmd+F 搜索 | ✅ | ✅ | ✅ | ✗（无搜索框） |
-| Cmd+I 信息 | ✅ | ✅ | ✗ | ✅（单选时可用） |
-| Cmd+R 查看文件/刷新 | ✅ 查看文件 | ✅ 查看文件 | ✅ 刷新在线列表 | ✅ 查看文件 |
-| Cmd+D 收藏 | ✅ | ✗ | ✗ | ✗ |
-| Cmd+T 标签 | ✅ | ✅ | ✗ | ✗ |
-| Return 设为壁纸 | ✅ | ✗ | ✗ | ✅（CollectionView 内已实现） |
-| Space QuickLook | ✅ | ✅ | ✗ | ✅（OLDownloadsQuickLookController） |
-| 方向键导航 | ✅ | ✅ | ✗ | ✅（CollectionView 内已实现） |
-| Cmd+←→ 切换壁纸 | ✅ | ✗ | ✗ | ✗ |
+| 快捷键 | 视频库 | 图片库 | 在线库（浏览页） | 在线库（已下载项） | Steam（浏览页） | Steam（下载页） |
+|--------|--------|--------|-----------------|-------------------|-----------------|-----------------|
+| Cmd+E 多选 | ✅ | ✅ | ✗ | ✅（已接入 Bridge） | ✗ | ✗ |
+| Cmd+A 全选 | ✅ | ✅ | ✗ | ✅（已接入 Bridge） | ✗ | ✗ |
+| Cmd+Delete 删除 | ✅ | ✅ | ✗ | ✅（已接入 Bridge） | ✗ | ✗ |
+| Cmd+F 搜索 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Cmd+I 信息 | ✅ | ✅ | ✗ | ✅（单选时可用） | ✗ | ✗ |
+| Cmd+R 查看文件/刷新 | ✅ 查看文件 | ✅ 查看文件 | ✅ 刷新在线列表 | ✅ 查看文件 | ✅ 打开下载目录 | ✅ 打开下载目录 |
+| Cmd+D 收藏 | ✅ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Cmd+T 标签 | ✅ | ✅ | ✗ | ✗ | ✗ | ✗ |
+| Return 设为壁纸 | ✅ | ✗ | ✗ | ✅（CollectionView 内已实现） | ✗ | ✗ |
+| Space QuickLook | ✅ | ✅ | ✗ | ✅（OLDownloadsQuickLookController） | ✗ | ✗ |
+| 方向键导航 | ✅ | ✅ | ✗ | ✅（CollectionView 内已实现） | ✗ | ✗ |
+| Cmd+←→ 切换壁纸 | ✅ | ✗ | ✗ | ✗ | ✗ | ✗ |
 
 ---
 
@@ -320,8 +339,10 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 VideoLibraryToolbarController（主控，NSToolbarDelegate）
     ├── toolbar(_:itemForItemIdentifier:) default 分支依次代理给：
     │       OnlineLibraryToolbarController.makeItem(for:)
+    │       SteamWorkshopToolbarController.makeItem(for:)
     │       SILToolbarController.makeItem(for:)
     ├── lazy var onlineLibraryToolbarController
+    ├── lazy var steamWorkshopToolbarController
     └── lazy var staticImageLibraryToolbarController
 ```
 
@@ -353,7 +374,7 @@ VideoLibraryToolbarController（主控，NSToolbarDelegate）
 
 1. **路由一致性巡检**
    - `SelectedItem` case 与 `DetailView` 路由分支一一对应
-   - `ContentView.syncManagerSelection` 的 `newModule` 归并与子页面归属一致（如 `onlineDownloads -> .onlineLibrary`）
+   - `ContentView.syncManagerSelection` 的 `newModule` 归并与子页面归属一致（如 `onlineDownloads -> .onlineLibrary`、`steamDownloads -> .steamWorkshop`）
    - `SidebarNode.selectedItem` 与侧边栏节点 kind 映射一致
 
 2. **菜单一致性巡检**

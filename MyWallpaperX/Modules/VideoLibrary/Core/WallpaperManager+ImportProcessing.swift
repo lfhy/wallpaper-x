@@ -309,8 +309,8 @@ extension WallpaperManager {
             indexByPath[entry.normalizedPath] = wallpapers.count + newWallpapers.count - 1
         }
 
-        // onlinePlayback 静默导入，不弹任何提示
-        if context != .onlinePlayback {
+        // onlinePlayback / steamPlayback 静默导入，不弹任何提示
+        if context != .onlinePlayback && context != .steamPlayback {
             presentImportSummary(
                 makeImportSummary(
                     requestedCount: prepared.requestedCount,
@@ -327,7 +327,7 @@ extension WallpaperManager {
         appendWallpapersInBatches(newWallpapers)
 
         // 在线库静默导入后立即播放：优先播放新导入的，已存在则从库中找
-        if context == .onlinePlayback {
+        if context == .onlinePlayback || context == .steamPlayback {
             if let first = newWallpapers.first {
                 setAsWallpaper(first, userInitiated: true)
             } else if let path = prepared.existingPathsToLink.first,
@@ -396,6 +396,8 @@ extension WallpaperManager {
         case .library:
             return false
         case .onlinePlayback:
+            return false  // 静默入库，不附加任何标签
+        case .steamPlayback:
             return false  // 静默入库，不附加任何标签
         case .favorites:
             guard !wallpaper.isFavorite else { return false }

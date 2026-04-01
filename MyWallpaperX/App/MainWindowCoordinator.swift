@@ -42,6 +42,8 @@ enum MainWindowCoordinator {
  return true
  case .onlineLibrary:
  return OnlineDownloadsBridge.shared.isActive
+ case .steamWorkshop:
+ return false
  }
  }
 
@@ -52,6 +54,8 @@ enum MainWindowCoordinator {
  return true
  case .onlineLibrary:
  return OnlineDownloadsBridge.shared.isActive && OnlineDownloadsBridge.shared.isMultiSelectMode
+ case .steamWorkshop:
+ return false
  }
  }
 
@@ -95,6 +99,8 @@ enum MainWindowCoordinator {
             SILService.shared.importFromPanel(presentingIn: appModalHostWindow())
         case .onlineLibrary:
             break  // 在线库无本地导入
+        case .steamWorkshop:
+            break
         }
     }
 
@@ -120,6 +126,8 @@ enum MainWindowCoordinator {
             }
         case .onlineLibrary:
             break  // 在线库无标签系统
+        case .steamWorkshop:
+            break
         }
     }
 
@@ -160,6 +168,8 @@ enum MainWindowCoordinator {
             }
         case .onlineLibrary:
             break
+        case .steamWorkshop:
+            break
         }
     }
 
@@ -172,6 +182,8 @@ enum MainWindowCoordinator {
             // 图片库标签系统已实现：有选中且有标签时可用
             return SILService.shared.hasAnySelection && !SILService.shared.silTags.isEmpty
         case .onlineLibrary:
+            return false
+        case .steamWorkshop:
             return false
         }
     }
@@ -196,6 +208,8 @@ enum MainWindowCoordinator {
             if OnlineDownloadsBridge.shared.isActive {
                 OnlineDownloadsBridge.shared.showInfo()
             }
+        case .steamWorkshop:
+            break
         }
     }
 
@@ -208,6 +222,8 @@ enum MainWindowCoordinator {
             return SILService.shared.selectedID != nil
         case .onlineLibrary:
             return OnlineDownloadsBridge.shared.isActive && OnlineDownloadsBridge.shared.hasSingleSelection
+        case .steamWorkshop:
+            return false
         }
     }
 
@@ -223,6 +239,8 @@ enum MainWindowCoordinator {
             if OnlineDownloadsBridge.shared.isActive {
                 OnlineDownloadsBridge.shared.toggleMultiSelect()
             }
+        case .steamWorkshop:
+            break
         }
     }
 
@@ -244,6 +262,8 @@ enum MainWindowCoordinator {
             if OnlineDownloadsBridge.shared.isActive {
                 OnlineDownloadsBridge.shared.selectAll()
             }
+        case .steamWorkshop:
+            break
         }
     }
 
@@ -271,6 +291,8 @@ enum MainWindowCoordinator {
             if OnlineDownloadsBridge.shared.isActive {
                 OnlineDownloadsBridge.shared.deleteSelected()
             }
+        case .steamWorkshop:
+            break
         }
     }
 
@@ -282,6 +304,8 @@ enum MainWindowCoordinator {
             return SILService.shared.hasAnySelection
         case .onlineLibrary:
             return OnlineDownloadsBridge.shared.isActive && OnlineDownloadsBridge.shared.hasAnySelection
+        case .steamWorkshop:
+            return false
         }
     }
 
@@ -312,6 +336,8 @@ enum MainWindowCoordinator {
             } else {
                 OnlineLibraryService.shared.refresh()
             }
+        case .steamWorkshop:
+            SteamWorkshopService.shared.revealDownloadsDirectory()
         }
     }
 
@@ -327,6 +353,8 @@ enum MainWindowCoordinator {
                 return OnlineDownloadsBridge.shared.hasAnySelection
             }
             return true
+        case .steamWorkshop:
+            return SteamWorkshopService.shared.downloadsCount > 0
         }
     }
 
@@ -339,6 +367,8 @@ enum MainWindowCoordinator {
             return SILService.shared.selectedID != nil
         case .onlineLibrary:
             return OnlineDownloadsBridge.shared.isActive && OnlineDownloadsBridge.shared.hasAnySelection
+        case .steamWorkshop:
+            return false
         }
     }
 
@@ -365,6 +395,7 @@ enum MainWindowCoordinator {
     static func configure(with wallpaperManager: WallpaperManager) {
         self.wallpaperManager = wallpaperManager
         observeOnlineVideoReadyToPlay()
+        observeSteamWorkshopVideoReadyToPlay()
     }
 
     /// 监听在线库下载完成通知，中转给视频库执行静默导入并播放。
@@ -380,6 +411,22 @@ enum MainWindowCoordinator {
                 from: [localURL],
                 presentingIn: nil,
                 context: .onlinePlayback
+            )
+        }
+    }
+
+    /// 监听 Steam 下载页发出的本地视频播放请求，中转给视频库静默导入并播放。
+    private static func observeSteamWorkshopVideoReadyToPlay() {
+        NotificationCenter.default.addObserver(
+            forName: .steamWorkshopVideoReadyToPlay,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard let localURL = notification.userInfo?["localURL"] as? URL else { return }
+            wallpaperManager.processImportedVideos(
+                from: [localURL],
+                presentingIn: nil,
+                context: .steamPlayback
             )
         }
     }

@@ -102,12 +102,15 @@ struct ContentView: View {
         // 只在真正改变时发通知，避免视频库内部分类切换时反复触发工具栏重建。
         let isSIL = item == .staticImageLibrary || { if case .silTag = item { return true }; return false }()
         let isOnline = item == .onlineLibrary || item == .onlineDownloads
+        let isSteam = item == .steamWorkshop || item == .steamDownloads
         let newModule: ModuleIdentifier
         switch item {
         case .staticImageLibrary: newModule = .staticImageLibrary
         case .silTag:             newModule = .staticImageLibrary
         case .onlineLibrary:      newModule = .onlineLibrary
         case .onlineDownloads:    newModule = .onlineLibrary  // 已下载项属于在线库子页面
+        case .steamWorkshop:      newModule = .steamWorkshop
+        case .steamDownloads:     newModule = .steamWorkshop
         default:                  newModule = .videoLibrary
         }
         // 只在模块真正切换时才发工具栏模式通知，减少无效工具栏重建
@@ -129,6 +132,14 @@ struct ContentView: View {
                     "isDownloads": item == .onlineDownloads
                 ]
             )
+            NotificationCenter.default.post(
+                name: .steamWorkshopModeDidChange,
+                object: nil,
+                userInfo: [
+                    "enabled": isSteam,
+                    "isDownloads": item == .steamDownloads
+                ]
+            )
         } else if isSIL {
             // 模块未切换但在 SIL 内部从全库切到 silTag（或反向），需单独更新标题
             var silUserInfo: [String: Any] = ["enabled": true]
@@ -146,6 +157,15 @@ struct ContentView: View {
                 userInfo: [
                     "enabled": true,
                     "isDownloads": item == .onlineDownloads
+                ]
+            )
+        } else if isSteam {
+            NotificationCenter.default.post(
+                name: .steamWorkshopModeDidChange,
+                object: nil,
+                userInfo: [
+                    "enabled": true,
+                    "isDownloads": item == .steamDownloads
                 ]
             )
         }

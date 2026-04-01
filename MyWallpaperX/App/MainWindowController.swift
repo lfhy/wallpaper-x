@@ -19,6 +19,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         case videoLibrary
         case staticImageLibrary
         case onlineLibrary
+        case steamWorkshop
     }
 
     init(wallpaperManager: WallpaperManager) {
@@ -85,6 +86,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             toolbarController.staticImageLibraryToolbarController.performZoom(delta: delta)
         case .onlineLibrary:
             toolbarController.onlineLibraryToolbarController.performZoom(delta: delta)
+        case .steamWorkshop:
+            toolbarController.steamWorkshopToolbarController.performZoom(delta: delta)
         }
     }
 
@@ -111,6 +114,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                 MainWindowCoordinator.setActiveModule(.onlineLibrary)
             }
         }
+        NotificationCenter.default.addObserver(
+            forName: .steamWorkshopModeDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let enabled = notification.userInfo?["enabled"] as? Bool else { return }
+            if enabled {
+                self?.activeModule = .steamWorkshop
+                MainWindowCoordinator.setActiveModule(.steamWorkshop)
+            }
+        }
         // 两个模块都不激活时恢复视频库
         // 同时通知 MainWindowCoordinator 回退，保证菜单路由状态一致。
         NotificationCenter.default.addObserver(
@@ -119,8 +133,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             queue: .main
         ) { [weak self] notification in
             guard let enabled = notification.userInfo?["enabled"] as? Bool, !enabled else { return }
-            if self?.activeModule == .staticImageLibrary {
-                self?.activeModule = .videoLibrary
+            Task { @MainActor [weak self] in
+                guard let self, self.activeModule == .staticImageLibrary else { return }
+                self.activeModule = .videoLibrary
                 MainWindowCoordinator.clearActiveModuleIfMatches(.staticImageLibrary)
             }
         }
@@ -130,9 +145,22 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             queue: .main
         ) { [weak self] notification in
             guard let enabled = notification.userInfo?["enabled"] as? Bool, !enabled else { return }
-            if self?.activeModule == .onlineLibrary {
-                self?.activeModule = .videoLibrary
+            Task { @MainActor [weak self] in
+                guard let self, self.activeModule == .onlineLibrary else { return }
+                self.activeModule = .videoLibrary
                 MainWindowCoordinator.clearActiveModuleIfMatches(.onlineLibrary)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .steamWorkshopModeDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let enabled = notification.userInfo?["enabled"] as? Bool, !enabled else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.activeModule == .steamWorkshop else { return }
+                self.activeModule = .videoLibrary
+                MainWindowCoordinator.clearActiveModuleIfMatches(.steamWorkshop)
             }
         }
     }
