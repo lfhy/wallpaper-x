@@ -251,6 +251,10 @@ final class VideoLibraryToolbarController: NSObject, NSToolbarDelegate, NSSearch
         let standardIdentifiers = toolbarDefaultItemIdentifiers(toolbar)
         onlineLibraryToolbarController.localModeIdentifiers = standardIdentifiers
         _ = onlineLibraryToolbarController
+        onlineLibraryToolbarController.titleUpdateHandler = { [weak self] title in
+            self?.titleLabel.stringValue = title
+            self?.titleItem.toolTip = title
+        }
         // 关联 bridge，使工具栏控制器能响应选择态变化
         OnlineDownloadsBridge.shared.toolbarController = onlineLibraryToolbarController
         staticImageLibraryToolbarController.localModeIdentifiers = standardIdentifiers

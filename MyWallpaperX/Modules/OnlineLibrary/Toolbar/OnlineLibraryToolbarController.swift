@@ -48,11 +48,18 @@ extension NSToolbarItem.Identifier {
 
 final class OnlineLibraryToolbarController: NSObject, NSSearchFieldDelegate {
 
+    private enum Title {
+        static let browser = "在线壁纸"
+        static let downloads = "已下载项"
+    }
+
     weak var toolbar: NSToolbar?
     weak var window:  NSWindow?
 
     /// 切换到在线模式前保存的本地工具栏布局，退出时恢复
     var localModeIdentifiers: [NSToolbarItem.Identifier] = []
+    /// 由主工具栏控制器注入，在线浏览页模式下用于同步左侧标题。
+    var titleUpdateHandler: ((String) -> Void)?
 
     private(set) var isOnlineLibraryMode = false
     private var isOnlineDownloadsMode = false
@@ -150,6 +157,7 @@ final class OnlineLibraryToolbarController: NSObject, NSSearchFieldDelegate {
             configureDownloadsRevealItem()
             configureDownloadsSortItem()
         } else {
+            titleUpdateHandler?(Title.browser)
             syncCategoryControl()
             syncSearchField()
             syncOrderControl()
@@ -724,8 +732,8 @@ extension OnlineLibraryToolbarController {
     }
 
     private func configureDownloadsTitleItem() {
-        downloadsTitleLabel.stringValue = "已下载项"
-        downloadsTitleItem.toolTip = "已下载项"
+        downloadsTitleLabel.stringValue = Title.downloads
+        downloadsTitleItem.toolTip = Title.downloads
     }
 
     private func configureDownloadsSelectionItem() {
