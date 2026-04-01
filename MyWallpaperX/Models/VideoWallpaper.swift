@@ -19,6 +19,10 @@ public struct VideoWallpaper: Identifiable, Equatable, Codable {
     public var tags: [String] = []
     /// 文件大小缓存，导入后后台填充。nil 表示尚未读取，排序时视为 Int64.max。
     public var fileSize: Int64?
+    /// 视频时长（秒）
+    public var duration: Int?
+    /// 视频分辨率字符串，如 "1920x1080"
+    public var resolution: String?
 
     /// 文件名（不含路径），用于日志输出。
     public var lastComponent: String { URL(fileURLWithPath: path).lastPathComponent }
@@ -32,7 +36,9 @@ public struct VideoWallpaper: Identifiable, Equatable, Codable {
         isFavorite: Bool = false,
         lastUsed: Date = Date(),
         tags: [String] = [],
-        fileSize: Int64? = nil
+        fileSize: Int64? = nil,
+        duration: Int? = nil,
+        resolution: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -43,6 +49,8 @@ public struct VideoWallpaper: Identifiable, Equatable, Codable {
         self.lastUsed = lastUsed
         self.tags = tags
         self.fileSize = fileSize
+        self.duration = duration
+        self.resolution = resolution
     }
 
     public var displayTitle: String {
@@ -88,10 +96,10 @@ public enum WallpaperSortMode: String, Codable, CaseIterable, Identifiable {
 
     public var displayName: String {
         switch self {
-        case .none: return "无"
-        case .name: return "名称"
-        case .size: return "大小"
-        case .dateAdded: return "添加日期"
+        case .none: return "默认顺序"
+        case .name: return "文件名称"
+        case .size: return "文件大小"
+        case .dateAdded: return "添加时间"
         }
     }
 
@@ -270,6 +278,6 @@ public struct WallpaperSettings: Codable {
 extension VideoWallpaper {
     enum CodingKeys: String, CodingKey {
         case id, title, path, thumbnailPath, staticFramePath
-        case isFavorite, lastUsed, tags, fileSize
+        case isFavorite, lastUsed, tags, fileSize, duration, resolution
     }
 }

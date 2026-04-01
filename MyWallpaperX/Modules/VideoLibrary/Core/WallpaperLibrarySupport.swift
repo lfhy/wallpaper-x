@@ -1,0 +1,203 @@
+//
+//  WallpaperLibrarySupport.swift
+//  MyWallpaperX
+//
+
+import Foundation
+import AVFoundation
+import CoreMedia
+
+struct ImportSummary {
+    let requestedCount: Int
+    let importedCount: Int
+    let linkedCount: Int
+    let skippedCount: Int
+    let thumbnailFailureCount: Int
+    let failureBreakdown: [String]
+
+    var informativeText: String {
+        var lines: [String] = [
+            "总选择：\(requestedCount) 个",
+            "新增导入：\(importedCount) 个"
+        ]
+
+        if linkedCount > 0 {
+            lines.append("已加入当前列表：\(linkedCount) 个")
+        }
+
+        lines.append("未处理：\(skippedCount) 个")
+
+        if importedCount > 0 {
+            if thumbnailFailureCount > 0 {
+                lines.append("缩略图未生成：\(thumbnailFailureCount) 个")
+            } else {
+                lines.append("缩略图与静帧已开始后台生成")
+            }
+        }
+
+        if !failureBreakdown.isEmpty {
+            lines.append("")
+            lines.append(contentsOf: failureBreakdown)
+        }
+
+        return lines.joined(separator: "\n")
+    }
+}
+
+enum ImportContext: Equatable {
+    case library
+    case favorites
+    case tag(String)
+    case onlinePlayback  // 在线库静默导入并立即播放，不弹任何提示
+}
+
+enum WallpaperRemovalScope {
+    case library
+    case recentlyUsed
+    case favorites
+    case tag(String)
+}
+
+enum ManualNavigationDirection {
+    case previous
+    case next
+}
+
+struct WallpaperDeletionFailure: Identifiable {
+    let id = UUID()
+    let title: String
+    let path: String
+    let reason: String
+
+    var displayText: String {
+        let fileName = title.isEmpty ? URL(fileURLWithPath: path).lastPathComponent : title
+        return "\(fileName)：\(reason)"
+    }
+}
+
+struct WallpaperDeletionSummary {
+    let requestedCount: Int
+    let removedCount: Int
+    let failures: [WallpaperDeletionFailure]
+
+    var hasFailures: Bool { !failures.isEmpty }
+
+    var informativeText: String {
+        var lines: [String] = [
+            "已处理：\(removedCount) 个"
+        ]
+
+        if hasFailures {
+            lines.append("失败：\(failures.count) 个")
+            lines.append("")
+            let previewFailures = failures.prefix(6).map(\.displayText)
+            lines.append(contentsOf: previewFailures)
+            if failures.count > previewFailures.count {
+                lines.append("还有 \(failures.count - previewFailures.count) 个失败未显示")
+            }
+        }
+
+        return lines.joined(separator: "\n")
+    }
+}
+
+func wallpaperDetailInfoText(for wallpaper: VideoWallpaper, completion: @escaping (String) -> Void) {
+    // 使用 Task 做异步 AVAsset 读取，返回 Task 供调用方在视图销毁时取消，防止 completion 持有悬挂引用。
+    // 注意：调用方应在 onDisappear / deinit 时调用 task.cancel()。
+    let url = URL(fileURLWithPath: wallpaper.path)
+    let path = wallpaper.path
+    let formatText = url.pathExtension.isEmpty ? "未知" : url.pathExtension.uppercased()
+    let attributes = (try? FileManager.default.attributesOfItem(atPath: path)) ?? [:]
+    let fileSize = attributes[.size] as? Int64 ?? 0
+    let fileSizeMB = Double(fileSize) / (1024 * 1024)
+    let creationDate = attributes[.creationDate] as? Date ?? Date()
+    let dateFormatter = DateFormatter()
+    dateFormatter.dateStyle = .medium
+    dateFormatter.timeStyle = .medium
+    let addedDateText = dateFormatter.string(from: creationDate)
+
+    @discardableResult
+    func make() -> Task<Void, Never> {
+        Task {
+            let asset = AVURLAsset(url: url)
+            var durationText = "未知"
+            if let duration = try? await asset.load(.duration) {
+                let durationSeconds = CMTimeGetSeconds(duration)
+                if durationSeconds.isFinite && durationSeconds > 0 {
+                    durationText = formattedDuration(durationSeconds)
+                }
+            }
+            guard !Task.isCancelled else { return }
+            let resolutionText = await videoResolutionText(for: asset)
+            let codecText = await videoCodecText(for: asset)
+            guard !Task.isCancelled else { return }
+
+            let text = """
+            文件名: \(url.lastPathComponent)
+            大小: \(String(format: "%.2f MB", fileSizeMB))
+            格式: \(formatText)
+            持续时间: \(durationText)
+            编解码器: \(codecText)
+            分辨率: \(resolutionText)
+            添加时间: \(addedDateText)
+            路径: \(path)
+            """
+            await MainActor.run {
+                completion(text)
+            }
+        }
+    }
+    make()
+}
+
+private func formattedDuration(_ seconds: Double) -> String {
+    let totalSeconds = max(0, Int(seconds.rounded()))
+    let hours = totalSeconds / 3600
+    let minutes = (totalSeconds % 3600) / 60
+    let remainingSeconds = totalSeconds % 60
+
+    if hours > 0 {
+        return String(format: "%d:%02d:%02d", hours, minutes, remainingSeconds)
+    }
+    return String(format: "%d:%02d", minutes, remainingSeconds)
+}
+
+private func videoResolutionText(for asset: AVAsset) async -> String {
+    guard let tracks = try? await asset.loadTracks(withMediaType: .video),
+          let track = tracks.first else {
+        return "未知"
+    }
+    guard let naturalSize = try? await track.load(.naturalSize),
+          let preferredTransform = try? await track.load(.preferredTransform) else {
+        return "未知"
+    }
+    let transformedSize = naturalSize.applying(preferredTransform)
+    let width = Int(abs(transformedSize.width).rounded())
+    let height = Int(abs(transformedSize.height).rounded())
+    guard width > 0, height > 0 else { return "未知" }
+    return "\(width) × \(height)"
+}
+
+private func videoCodecText(for asset: AVAsset) async -> String {
+    guard let tracks = try? await asset.loadTracks(withMediaType: .video),
+          let track = tracks.first,
+          let formatDescriptions = try? await track.load(.formatDescriptions),
+          let formatDescription = formatDescriptions.first else {
+        return "未知"
+    }
+    let codec = CMFormatDescriptionGetMediaSubType(formatDescription)
+    switch codec {
+    case kCMVideoCodecType_H264:
+        return "H.264"
+    case kCMVideoCodecType_HEVC:
+        return "HEVC"
+    case kCMVideoCodecType_HEVCWithAlpha:
+        return "HEVC with Alpha"
+    case kCMVideoCodecType_MPEG4Video:
+        return "MPEG-4 Part 2"
+    case kCMVideoCodecType_H263:
+        return "H.263"
+    default:
+        return String(format: "0x%08X", codec)
+    }
+}

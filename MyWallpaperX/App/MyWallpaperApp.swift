@@ -25,19 +25,15 @@ struct MyWallpaperApp: App {
             // MARK: - 文件菜单
             Group {
                 CommandGroup(replacing: .newItem) {
-                    Button("打开主界面") {
-                        MainWindowCoordinator.activateMainWindow()
+                    Button("新建标签") {
+                        MainWindowCoordinator.menuCreateTag()
                     }
                     .keyboardShortcut("n", modifiers: .command)
 
                     Divider()
 
-                    Button("导入视频") {
-                        let manager = WallpaperManager.shared
-                        manager.importVideos(
-                            presentingIn: appModalHostWindow(),
-                            context: manager.currentImportContext
-                        )
+                    Button("导入") {
+                        MainWindowCoordinator.menuImport()
                     }
                     .keyboardShortcut("o", modifiers: .command)
                 }
@@ -53,30 +49,27 @@ struct MyWallpaperApp: App {
 
                 CommandGroup(after: .undoRedo) {
                     Button("全选") {
-                        let manager = WallpaperManager.shared
-                        guard manager.isMultiSelectMode else { return }
-                        let selection = manager.currentSelectionContext
-                        let targetIDs = Set(selection.sourceWallpapers(from: manager).map(\.id))
-                        manager.replaceMultiSelection(with: targetIDs)
+                        MainWindowCoordinator.menuSelectAll()
                     }
 
                     Button("进入 / 退出多选") {
-                        WallpaperManager.shared.toggleMultiSelectMode()
+                        MainWindowCoordinator.menuToggleMultiSelect()
                     }
                     .keyboardShortcut("e", modifiers: .command)
 
                     Divider()
 
                     Button("删除选中") {
-                        let manager = WallpaperManager.shared
-                        let selection = manager.currentSelectionContext
-                        UIActionHelper.performDeleteWithoutConfirmation(
-                            manager: manager,
-                            selection: selection,
-                            window: appModalHostWindow()
-                        )
+                        MainWindowCoordinator.menuDeleteSelected()
                     }
                     .keyboardShortcut(.delete, modifiers: .command)
+
+                    Divider()
+
+                    Button("搜索") {
+                        MainWindowCoordinator.menuFocusSearch()
+                    }
+                    .keyboardShortcut("f", modifiers: .command)
                 }
             }
 
@@ -84,14 +77,12 @@ struct MyWallpaperApp: App {
             Group {
                 CommandGroup(replacing: .toolbar) {
                     Button("放大缩略图") {
-                        let m = WallpaperManager.shared
-                        m.gridZoomOffset = max(-2, min(2, m.gridZoomOffset + 1))
+                        MainWindowCoordinator.performZoom(delta: 1)
                     }
                     .keyboardShortcut("-", modifiers: .command)
 
                     Button("缩小缩略图") {
-                        let m = WallpaperManager.shared
-                        m.gridZoomOffset = max(-2, min(2, m.gridZoomOffset - 1))
+                        MainWindowCoordinator.performZoom(delta: -1)
                     }
                     .keyboardShortcut("+", modifiers: .command)
                 }
@@ -101,61 +92,46 @@ struct MyWallpaperApp: App {
             // MARK: - 壁纸菜单
             CommandMenu("壁纸") {
                 Button("设为当前壁纸") {
-                    let manager = WallpaperManager.shared
-                    if let id = manager.selectedWallpaperId,
-                       let wallpaper = manager.wallpapers.first(where: { $0.id == id }) {
-                        manager.markCardInteraction()
-                        manager.requestSetAsWallpaper(wallpaper)
-                    }
+                    MainWindowCoordinator.menuSetAsWallpaper()
                 }
                 .keyboardShortcut(.return, modifiers: [])
 
                 Divider()
 
                 Button("切换下一张") {
-                    WallpaperManager.shared.navigateWallpaperManually(.next, userInitiated: true)
+                    MainWindowCoordinator.menuNavigate(.next)
                 }
                 .keyboardShortcut(.rightArrow, modifiers: .command)
 
                 Button("切换上一张") {
-                    WallpaperManager.shared.navigateWallpaperManually(.previous, userInitiated: true)
+                    MainWindowCoordinator.menuNavigate(.previous)
                 }
                 .keyboardShortcut(.leftArrow, modifiers: .command)
 
                 Divider()
 
                 Button("收藏 / 取消收藏") {
-                    let manager = WallpaperManager.shared
-                    UIActionHelper.toggleFavoriteSelection(
-                        manager: manager,
-                        selection: manager.currentSelectionContext
-                    )
+                    MainWindowCoordinator.menuToggleFavorite()
                 }
                 .keyboardShortcut("d", modifiers: .command)
 
                 Button("添加标签") {
-                    let manager = WallpaperManager.shared
-                    UIActionHelper.presentTagPicker(
-                        manager: manager,
-                        window: appModalHostWindow()
-                    ) {}
+                    MainWindowCoordinator.menuAddTag()
                 }
                 .keyboardShortcut("t", modifiers: .command)
 
                 Button("查看信息") {
-                    UIActionHelper.presentInfo(
-                        manager: WallpaperManager.shared,
-                        window: appModalHostWindow()
-                    )
+                    MainWindowCoordinator.menuShowInfo()
                 }
                 .keyboardShortcut("i", modifiers: .command)
 
+                Button("预览") {
+                    MainWindowCoordinator.menuPreview()
+                }
+                .keyboardShortcut(" ", modifiers: [])
+
                 Button("查看文件") {
-                    let manager = WallpaperManager.shared
-                    if let id = manager.selectedWallpaperId,
-                       let wallpaper = manager.wallpapers.first(where: { $0.id == id }) {
-                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: wallpaper.path)])
-                    }
+                    MainWindowCoordinator.menuRevealInFinder()
                 }
                 .keyboardShortcut("r", modifiers: .command)
             }

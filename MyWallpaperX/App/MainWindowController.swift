@@ -9,9 +9,17 @@ import QuickLookUI
 
 final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let wallpaperManager: WallpaperManager
-    private let toolbarController: MainWindowToolbarController
+    let toolbarController: VideoLibraryToolbarController
     private var hasShownWindow = false
     private let quickLookPreviewController = QuickLookPreviewController.shared
+    /// 当前激活的模块，由 ContentView 通过通知更新，供 performZoom 路由使用
+    private var activeModule: ActiveModule = .videoLibrary
+
+    enum ActiveModule: Equatable, Sendable {
+        case videoLibrary
+        case staticImageLibrary
+        case onlineLibrary
+    }
 
     init(wallpaperManager: WallpaperManager) {
         self.wallpaperManager = wallpaperManager
@@ -40,11 +48,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.backgroundColor = .windowBackgroundColor
         // 关闭窗口自动恢复链路，避免 restoreWindowWithIdentifier 相关噪音警告和误恢复。
 
-        self.toolbarController = MainWindowToolbarController(window: window, wallpaperManager: wallpaperManager)
+        self.toolbarController = VideoLibraryToolbarController(window: window, wallpaperManager: wallpaperManager)
         super.init(window: window)
         shouldCascadeWindows = false
         self.window?.delegate = self
         configureQuickLookKeyHandling()
+        observeModuleModeChanges()
     }
 
     @available(*, unavailable)
@@ -68,6 +77,66 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         MainWindowCoordinator.handleWindowWillClose(self)
     }
 
+    func performZoom(delta: Int) {
+        switch activeModule {
+        case .videoLibrary:
+            toolbarController.performZoom(delta: delta)
+        case .staticImageLibrary:
+            toolbarController.staticImageLibraryToolbarController.performZoom(delta: delta)
+        case .onlineLibrary:
+            toolbarController.onlineLibraryToolbarController.performZoom(delta: delta)
+        }
+    }
+
+    private func observeModuleModeChanges() {
+        NotificationCenter.default.addObserver(
+            forName: .staticImageLibraryModeDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let enabled = notification.userInfo?["enabled"] as? Bool else { return }
+            if enabled {
+                self?.activeModule = .staticImageLibrary
+                MainWindowCoordinator.setActiveModule(.staticImageLibrary)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .onlineLibraryModeDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let enabled = notification.userInfo?["enabled"] as? Bool else { return }
+            if enabled {
+                self?.activeModule = .onlineLibrary
+                MainWindowCoordinator.setActiveModule(.onlineLibrary)
+            }
+        }
+        // 两个模块都不激活时恢复视频库
+        // 同时通知 MainWindowCoordinator 回退，保证菜单路由状态一致。
+        NotificationCenter.default.addObserver(
+            forName: .staticImageLibraryModeDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let enabled = notification.userInfo?["enabled"] as? Bool, !enabled else { return }
+            if self?.activeModule == .staticImageLibrary {
+                self?.activeModule = .videoLibrary
+                MainWindowCoordinator.clearActiveModuleIfMatches(.staticImageLibrary)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .onlineLibraryModeDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let enabled = notification.userInfo?["enabled"] as? Bool, !enabled else { return }
+            if self?.activeModule == .onlineLibrary {
+                self?.activeModule = .videoLibrary
+                MainWindowCoordinator.clearActiveModuleIfMatches(.onlineLibrary)
+            }
+        }
+    }
+
     private func configureQuickLookKeyHandling() {
         guard let window = window as? MainAppWindow else { return }
         // Quick Look 的键盘入口只放在窗口级别拦截，避免影响文本输入与集合视图默认键行为。
@@ -84,6 +153,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
         if isEditingTextInput() {
             return false
+        }
+
+        // SIL 模式下将 Space / ESC 代理给图片库键盘处理器
+        if activeModule == .staticImageLibrary {
+            switch event.keyCode {
+            case 49: return SILKeyboardHandler.shared.handleSpace()
+            case 53: return SILKeyboardHandler.shared.handleEsc()
+            default: return false
+            }
+        }
+
+        // 在线库：已下载项页面支持 Space 预览
+        if activeModule == .onlineLibrary && OnlineDownloadsBridge.shared.isActive {
+            switch event.keyCode {
+            case 49: OnlineDownloadsBridge.shared.previewSelected(); return true
+            case 53: OLDownloadsQuickLookController.shared.close(); return true
+            default: return false
+            }
         }
 
         switch event.keyCode {
@@ -120,14 +207,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
         guard let panel else { return }
-        // Quick Look 面板生命周期由共享控制器接管，窗口本身只负责挂接入口。
-        QuickLookPreviewController.shared.attach(to: panel)
+        if activeModule == .staticImageLibrary {
+            SILQuickLookController.shared.attach(to: panel)
+        } else if activeModule == .onlineLibrary && OnlineDownloadsBridge.shared.isActive {
+            OLDownloadsQuickLookController.shared.attach(to: panel)
+        } else {
+            QuickLookPreviewController.shared.attach(to: panel)
+        }
     }
 
     override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
         guard let panel else { return }
-        // 面板关闭时解除引用，防止旧 panel 被意外复用或提前释放后仍持有回调。
-        QuickLookPreviewController.shared.detach(from: panel)
+        if activeModule == .staticImageLibrary {
+            SILQuickLookController.shared.detach(from: panel)
+        } else if activeModule == .onlineLibrary && OnlineDownloadsBridge.shared.isActive {
+            OLDownloadsQuickLookController.shared.detach(from: panel)
+        } else {
+            QuickLookPreviewController.shared.detach(from: panel)
+        }
     }
 }
 
