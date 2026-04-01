@@ -7,7 +7,9 @@ import AppKit
 import Combine
 
 extension NSToolbarItem.Identifier {
-    static let steamSource = NSToolbarItem.Identifier("ToolbarSteamSource")
+    static let steamSort = NSToolbarItem.Identifier("ToolbarSteamSort")
+    static let steamTrendingWindow = NSToolbarItem.Identifier("ToolbarSteamTrendingWindow")
+    static let steamFilter = NSToolbarItem.Identifier("ToolbarSteamFilter")
     static let steamAccount = NSToolbarItem.Identifier("ToolbarSteamAccount")
     static let steamRefresh = NSToolbarItem.Identifier("ToolbarSteamRefresh")
     static let steamZoom = NSToolbarItem.Identifier("ToolbarSteamZoom")
@@ -41,7 +43,11 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
         .space,
         .steamRefresh,
         .space,
-        .steamSource,
+        .steamSort,
+        .space,
+        .steamTrendingWindow,
+        .space,
+        .steamFilter,
         .space,
         .steamZoom,
         .space,
@@ -101,13 +107,37 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
         }
         .store(in: &cancellables)
 
-        Publishers.CombineLatest(
-            SteamWorkshopService.shared.$isPreparingRuntime,
-            SteamWorkshopService.shared.$isValidatingLoginState
+        SteamWorkshopService.shared.$isPreparingRuntime
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _ in
+            self?.configureAuthItems()
+        }
+        .store(in: &cancellables)
+
+        SteamWorkshopService.shared.$source
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.syncSortPopup()
+                self?.syncTrendingWindowPopup()
+            }
+            .store(in: &cancellables)
+
+        SteamWorkshopService.shared.$trendingWindow
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.syncTrendingWindowPopup()
+            }
+            .store(in: &cancellables)
+
+        Publishers.CombineLatest4(
+            SteamWorkshopService.shared.$themeFilter,
+            SteamWorkshopService.shared.$ageRatingFilter,
+            SteamWorkshopService.shared.$resolutionFilter,
+            SteamWorkshopService.shared.$categoryFilter
         )
         .receive(on: RunLoop.main)
-        .sink { [weak self] _, _ in
-            self?.configureAuthItems()
+        .sink { [weak self] _, _, _, _ in
+            self?.configureFilterItem()
         }
         .store(in: &cancellables)
     }
@@ -126,16 +156,20 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
             syncDownloadsSearchField()
         } else {
             titleUpdateHandler?(Title.browser)
-            syncSourceControl()
+            syncSortPopup()
+            syncTrendingWindowPopup()
             syncSearchField()
             configureAuthItems()
+            configureFilterItem()
         }
         configureZoomItem()
     }
 
     func makeItem(for identifier: NSToolbarItem.Identifier) -> NSToolbarItem? {
         switch identifier {
-        case .steamSource: return sourceToolbarItem
+        case .steamSort: return sortToolbarItem
+        case .steamTrendingWindow: return trendingWindowToolbarItem
+        case .steamFilter: return filterToolbarItem
         case .steamAccount: return accountToolbarItem
         case .steamRefresh: return refreshToolbarItem
         case .steamZoom: return zoomToolbarItem
@@ -228,23 +262,61 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
         return item
     }()
 
-    lazy var sourceControl: NSSegmentedControl = {
-        let labels = SteamWorkshopSource.allCases.map(\.displayName)
-        let control = NSSegmentedControl(labels: labels, trackingMode: .selectOne, target: self, action: #selector(handleSourceAction(_:)))
-        control.segmentStyle = .capsule
-        for index in 0..<labels.count {
-            control.setWidth(50, forSegment: index)
+    lazy var sortPopupButton: NSPopUpButton = {
+        let button = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 118, height: 30), pullsDown: false)
+        button.target = self
+        button.action = #selector(handleSortAction(_:))
+        SteamWorkshopSource.allCases.forEach { source in
+            button.menu?.addItem(withTitle: source.displayName, action: nil, keyEquivalent: "")
         }
-        return control
+        return button
     }()
 
-    lazy var sourceToolbarItem: NSToolbarItem = {
-        let item = NSToolbarItem(itemIdentifier: .steamSource)
-        item.label = "来源"
-        item.paletteLabel = "来源"
-        item.toolTip = "筛选 Steam 创意工坊来源"
+    lazy var sortToolbarItem: NSToolbarItem = {
+        let item = NSToolbarItem(itemIdentifier: .steamSort)
+        item.label = "排序"
+        item.paletteLabel = "排序"
+        item.toolTip = "切换 Steam 创意工坊排序方式"
         item.autovalidates = false
-        item.view = sourceControl
+        item.view = sortPopupButton
+        return item
+    }()
+
+    lazy var trendingWindowPopupButton: NSPopUpButton = {
+        let button = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 102, height: 30), pullsDown: false)
+        button.target = self
+        button.action = #selector(handleTrendingWindowAction(_:))
+        SteamWorkshopTrendingWindow.allCases.forEach { window in
+            button.menu?.addItem(withTitle: window.displayName, action: nil, keyEquivalent: "")
+        }
+        return button
+    }()
+
+    lazy var trendingWindowToolbarItem: NSToolbarItem = {
+        let item = NSToolbarItem(itemIdentifier: .steamTrendingWindow)
+        item.label = "时间段"
+        item.paletteLabel = "时间段"
+        item.toolTip = "切换最热门榜单的时间范围"
+        item.autovalidates = false
+        item.view = trendingWindowPopupButton
+        return item
+    }()
+
+    lazy var filterButton: NSButton = {
+        let button = NSButton(title: "筛选", target: self, action: #selector(handleFilterMenu))
+        button.bezelStyle = .rounded
+        button.image = NSImage(systemSymbolName: "line.3.horizontal.decrease.circle", accessibilityDescription: "筛选")
+        button.imagePosition = .imageLeading
+        return button
+    }()
+
+    lazy var filterToolbarItem: NSToolbarItem = {
+        let item = NSToolbarItem(itemIdentifier: .steamFilter)
+        item.label = "筛选"
+        item.paletteLabel = "筛选"
+        item.toolTip = "选择主题、年龄分级和分辨率筛选规则"
+        item.autovalidates = false
+        item.view = filterButton
         return item
     }()
 
@@ -339,13 +411,11 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
     private func configureAuthItems() {
         let service = SteamWorkshopService.shared
         let isAuthenticated = !service.requiresLogin && !service.isAnonymousBrowsing
-        let isBusy = service.isPreparingRuntime || service.isValidatingLoginState || service.isAuthenticating
+        let isBusy = service.isPreparingRuntime || service.isAuthenticating
 
         let symbolName: String
         if service.isPreparingRuntime {
             symbolName = "hourglass.circle"
-        } else if service.isValidatingLoginState {
-            symbolName = "arrow.triangle.2.circlepath.circle"
         } else if isAuthenticated {
             symbolName = "person.crop.circle.badge.checkmark"
         } else {
@@ -358,9 +428,23 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
         accountToolbarItem.toolTip = accountButton.toolTip
     }
 
-    private func syncSourceControl() {
+    private func syncSortPopup() {
         let allSources = SteamWorkshopSource.allCases
-        sourceControl.selectedSegment = allSources.firstIndex(of: SteamWorkshopService.shared.source) ?? 0
+        sortPopupButton.selectItem(at: allSources.firstIndex(of: SteamWorkshopService.shared.source) ?? 0)
+    }
+
+    private func syncTrendingWindowPopup() {
+        let allWindows = SteamWorkshopTrendingWindow.allCases
+        trendingWindowPopupButton.selectItem(at: allWindows.firstIndex(of: SteamWorkshopService.shared.trendingWindow) ?? 0)
+        trendingWindowPopupButton.isEnabled = SteamWorkshopService.shared.source.supportsTimeRange
+    }
+
+    private func configureFilterItem() {
+        let service = SteamWorkshopService.shared
+        let selectedCount = service.activeFilterDisplayParts.count
+        filterButton.title = selectedCount == 0 ? "筛选" : "筛选 \(selectedCount)"
+        filterButton.toolTip = "当前筛选：\(service.activeFilterSummary)"
+        filterToolbarItem.toolTip = filterButton.toolTip
     }
 
     private func syncSearchField() {
@@ -376,10 +460,17 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
         downloadsTitleItem.toolTip = Title.downloads
     }
 
-    @objc private func handleSourceAction(_ sender: NSSegmentedControl) {
+    @objc private func handleSortAction(_ sender: NSPopUpButton) {
         let sources = SteamWorkshopSource.allCases
-        guard sender.selectedSegment >= 0, sender.selectedSegment < sources.count else { return }
-        SteamWorkshopService.shared.source = sources[sender.selectedSegment]
+        guard sender.indexOfSelectedItem >= 0, sender.indexOfSelectedItem < sources.count else { return }
+        SteamWorkshopService.shared.source = sources[sender.indexOfSelectedItem]
+        syncTrendingWindowPopup()
+    }
+
+    @objc private func handleTrendingWindowAction(_ sender: NSPopUpButton) {
+        let windows = SteamWorkshopTrendingWindow.allCases
+        guard sender.indexOfSelectedItem >= 0, sender.indexOfSelectedItem < windows.count else { return }
+        SteamWorkshopService.shared.trendingWindow = windows[sender.indexOfSelectedItem]
     }
 
     @objc private func handleRefresh() {
@@ -419,6 +510,69 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: buttonBounds.height + 4), in: accountButton)
     }
 
+    @objc private func handleFilterMenu() {
+        let service = SteamWorkshopService.shared
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        let themeMenuItem = NSMenuItem(title: "主题", action: nil, keyEquivalent: "")
+        let themeMenu = NSMenu()
+        SteamWorkshopThemeFilter.allCases.forEach { filter in
+            let item = NSMenuItem(title: filter.displayName, action: #selector(handleThemeFilterItem(_:)), keyEquivalent: "")
+            item.target = self
+            item.state = service.themeFilter == filter ? .on : .off
+            item.representedObject = filter.rawValue
+            themeMenu.addItem(item)
+        }
+        themeMenuItem.submenu = themeMenu
+        menu.addItem(themeMenuItem)
+
+        let ageMenuItem = NSMenuItem(title: "年龄分级", action: nil, keyEquivalent: "")
+        let ageMenu = NSMenu()
+        SteamWorkshopAgeRatingFilter.allCases.forEach { filter in
+            let item = NSMenuItem(title: filter.displayName, action: #selector(handleAgeFilterItem(_:)), keyEquivalent: "")
+            item.target = self
+            item.state = service.ageRatingFilter == filter ? .on : .off
+            item.representedObject = filter.rawValue
+            ageMenu.addItem(item)
+        }
+        ageMenuItem.submenu = ageMenu
+        menu.addItem(ageMenuItem)
+
+        let resolutionMenuItem = NSMenuItem(title: "分辨率", action: nil, keyEquivalent: "")
+        let resolutionMenu = NSMenu()
+        SteamWorkshopResolutionFilter.allCases.forEach { filter in
+            let item = NSMenuItem(title: filter.displayName, action: #selector(handleResolutionFilterItem(_:)), keyEquivalent: "")
+            item.target = self
+            item.state = service.resolutionFilter == filter ? .on : .off
+            item.representedObject = filter.rawValue
+            resolutionMenu.addItem(item)
+        }
+        resolutionMenuItem.submenu = resolutionMenu
+        menu.addItem(resolutionMenuItem)
+
+        let categoryMenuItem = NSMenuItem(title: "分类", action: nil, keyEquivalent: "")
+        let categoryMenu = NSMenu()
+        SteamWorkshopCategoryFilter.allCases.forEach { filter in
+            let item = NSMenuItem(title: filter.displayName, action: #selector(handleCategoryFilterItem(_:)), keyEquivalent: "")
+            item.target = self
+            item.state = service.categoryFilter == filter ? .on : .off
+            item.representedObject = filter.rawValue
+            categoryMenu.addItem(item)
+        }
+        categoryMenuItem.submenu = categoryMenu
+        menu.addItem(categoryMenuItem)
+
+        menu.addItem(.separator())
+        let clearItem = NSMenuItem(title: "清空筛选", action: #selector(handleClearFilters), keyEquivalent: "")
+        clearItem.target = self
+        clearItem.isEnabled = service.activeFilterSummary != "未筛选"
+        menu.addItem(clearItem)
+
+        let buttonBounds = filterButton.bounds
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: buttonBounds.height + 4), in: filterButton)
+    }
+
     @objc private func handlePresentLogin() {
         DispatchQueue.main.async {
             SteamWorkshopService.shared.presentLoginGate()
@@ -441,6 +595,39 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
         }
     }
 
+    @objc private func handleThemeFilterItem(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let filter = SteamWorkshopThemeFilter(rawValue: rawValue) else { return }
+        SteamWorkshopService.shared.themeFilter = filter
+        configureFilterItem()
+    }
+
+    @objc private func handleAgeFilterItem(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let filter = SteamWorkshopAgeRatingFilter(rawValue: rawValue) else { return }
+        SteamWorkshopService.shared.ageRatingFilter = filter
+        configureFilterItem()
+    }
+
+    @objc private func handleResolutionFilterItem(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let filter = SteamWorkshopResolutionFilter(rawValue: rawValue) else { return }
+        SteamWorkshopService.shared.resolutionFilter = filter
+        configureFilterItem()
+    }
+
+    @objc private func handleClearFilters() {
+        SteamWorkshopService.shared.clearFilters()
+        configureFilterItem()
+    }
+
+    @objc private func handleCategoryFilterItem(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let filter = SteamWorkshopCategoryFilter(rawValue: rawValue) else { return }
+        SteamWorkshopService.shared.categoryFilter = filter
+        configureFilterItem()
+    }
+
     @objc private func handleZoomAction(_ sender: NSSegmentedControl) {
         performZoom(delta: sender.selectedSegment == 0 ? 1 : -1)
     }
@@ -456,7 +643,9 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
 
     var allowedItemIdentifiers: [NSToolbarItem.Identifier] {
         [
-            .steamSource,
+            .steamSort,
+            .steamTrendingWindow,
+            .steamFilter,
             .steamAccount,
             .steamRefresh,
             .steamZoom,

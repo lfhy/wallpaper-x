@@ -5,6 +5,7 @@
 
 import SwiftUI
 import AVKit
+import AppKit
 
 public struct SteamWorkshopEntryView: View {
     public init() {}
@@ -19,23 +20,7 @@ private struct SteamWorkshopBrowserContentView: View {
     @ObservedObject private var service = SteamWorkshopService.shared
 
     var body: some View {
-        GeometryReader { proxy in
-            let width = max(480, proxy.size.width - 48)
-            let columnCount = GridLayoutHelper.columnCount(
-                for: width,
-                zoomOffset: service.zoomOffset,
-                minCols: 2,
-                maxCols: 5
-            )
-            let columns = Array(repeating: GridItem(.flexible(), spacing: 18), count: columnCount)
-
-            ScrollView {
-                content(columns: columns)
-                    .padding(24)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .windowBackgroundColor))
-        }
+        content
         .task {
             service.prepareForBrowserEntry()
         }
@@ -71,7 +56,7 @@ private struct SteamWorkshopBrowserContentView: View {
     }
 
     @ViewBuilder
-    private func content(columns: [GridItem]) -> some View {
+    private var content: some View {
         switch service.browserState {
         case .idle, .loading:
             SteamWorkshopBrowserLoadingView()
@@ -83,15 +68,28 @@ private struct SteamWorkshopBrowserContentView: View {
             if service.browserItems.isEmpty {
                 SteamWorkshopBrowserEmptyView()
             } else {
-                LazyVGrid(columns: columns, alignment: .leading, spacing: 18) {
-                    ForEach(service.browserItems) { item in
-                        SteamWorkshopBrowserCard(item: item) {
+                ZStack(alignment: .bottom) {
+                    AppKitSteamWorkshopBrowserGridView(
+                        service: service,
+                        onOpen: { item in
                             service.presentItemDetail(item)
-                        } onDownload: {
+                        },
+                        onDownload: { item in
                             service.downloadWorkshopItem(id: item.id, pageTitle: item.title)
+                        },
+                        onCancelDownload: {
+                            service.cancelActiveDownload()
                         }
+                    )
+
+                    if service.isLoadingMoreBrowserItems {
+                        SteamWorkshopBrowserLoadMoreView(text: "正在加载更多项目…")
+                            .padding(.bottom, 10)
                     }
                 }
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(nsColor: .windowBackgroundColor))
             }
         }
     }
@@ -182,95 +180,6 @@ private struct SteamWorkshopLoginSheet: View {
     }
 }
 
-private struct SteamWorkshopBrowserCard: View {
-    let item: SteamWorkshopBrowserItem
-    let onOpen: () -> Void
-    let onDownload: () -> Void
-    @ObservedObject private var service = SteamWorkshopService.shared
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button(action: onOpen) {
-                SteamWorkshopPreviewSurface(
-                    previewImageURL: item.previewImageURL,
-                    previewVideoURL: nil
-                )
-                .overlay(alignment: .bottomLeading) {
-                    if service.isDownloading(itemID: item.id) {
-                        downloadOverlay
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-
-            VStack(alignment: .leading, spacing: 7) {
-                Text(item.title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .lineLimit(2)
-                if !item.primaryMetaText.isEmpty {
-                    Text(item.primaryMetaText)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                if !item.author.isEmpty {
-                    Text(item.author)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-
-            HStack(spacing: 10) {
-                Button("查看详情", action: onOpen)
-                    .buttonStyle(.bordered)
-                if service.isDownloading(itemID: item.id) {
-                    Button("取消下载") {
-                        service.cancelActiveDownload()
-                    }
-                    .buttonStyle(.bordered)
-                } else {
-                    Button("下载", action: onDownload)
-                        .buttonStyle(.borderedProminent)
-                }
-            }
-        }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(nsColor: .windowBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-        )
-    }
-
-    private var downloadOverlay: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("下载中")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white)
-            if let progressText = service.downloadProgressLabel(for: item.id) {
-                Text(progressText)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.92))
-            }
-            if let fraction = service.activeDownloadProgressFraction {
-                ProgressView(value: fraction)
-                    .tint(.white)
-            } else {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(.white)
-            }
-        }
-        .padding(10)
-        .background(.black.opacity(0.42), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .padding(12)
-    }
-}
-
 private struct SteamWorkshopItemDetailSheet: View {
     let item: SteamWorkshopBrowserItem
     @ObservedObject private var service = SteamWorkshopService.shared
@@ -280,7 +189,8 @@ private struct SteamWorkshopItemDetailSheet: View {
             HStack(alignment: .top, spacing: 16) {
                 SteamWorkshopPreviewSurface(
                     previewImageURL: item.previewImageURL,
-                    previewVideoURL: item.previewVideoURL
+                    previewVideoURL: item.previewVideoURL,
+                    previewAssetKind: item.previewAssetKind
                 )
                 .frame(width: 360, height: 220)
 
@@ -291,6 +201,18 @@ private struct SteamWorkshopItemDetailSheet: View {
                         Label(item.author, systemImage: "person")
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
+                    }
+
+                    if service.isRefreshingSelectedBrowserItem && service.selectedBrowserItem?.id == item.id {
+                        SteamWorkshopDetailLoadingBanner()
+                    } else if let error = service.selectedBrowserItemError, service.selectedBrowserItem?.id == item.id {
+                        SteamWorkshopDetailErrorBanner(message: error) {
+                            service.retrySelectedBrowserItemDetailRefresh()
+                        }
+                    }
+
+                    if item.hasAdultContent {
+                        SteamWorkshopAdultWarningBanner()
                     }
 
                     SteamWorkshopDetailMetaGrid(item: item)
@@ -321,6 +243,17 @@ private struct SteamWorkshopItemDetailSheet: View {
                             .disabled(service.activeDownloadItemID != nil)
                         }
 
+                        Button("在 Steam 中打开") {
+                            service.openWorkshopDetailPage(for: item)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("刷新详情") {
+                            service.retrySelectedBrowserItemDetailRefresh()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(service.isRefreshingSelectedBrowserItem && service.selectedBrowserItem?.id == item.id)
+
                         Button("关闭") {
                             service.dismissItemDetail()
                         }
@@ -334,6 +267,9 @@ private struct SteamWorkshopItemDetailSheet: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if !item.detailFields.isEmpty {
+                        SteamWorkshopDetailFieldSection(fields: item.detailFields)
+                    }
                     if !item.summary.isEmpty {
                         detailSection(title: "摘要", text: item.summary)
                     }
@@ -368,14 +304,22 @@ private struct SteamWorkshopDetailMetaGrid: View {
     let item: SteamWorkshopBrowserItem
 
     var body: some View {
-        let rows = [
-            ("文件大小", item.fileSizeText ?? "未知"),
-            ("分辨率", item.resolutionText ?? "未知"),
-            ("更新时间", item.updatedText ?? "未知"),
-            ("收藏", item.favoritesText ?? "未知"),
-            ("订阅", item.subscriptionsText ?? "未知"),
-            ("评分", item.scoreText ?? "未知")
-        ]
+        let rows: [(String, String)] = [
+            ("类型", item.workshopTypeText),
+            ("年龄分级", item.ageRatingText),
+            ("题材", item.genreText),
+            ("分类", item.categoryText),
+            ("文件大小", item.fileSizeText),
+            ("分辨率", item.resolutionText),
+            ("发布时间", item.postedText),
+            ("更新时间", item.updatedText),
+            ("收藏", item.favoritesText),
+            ("订阅", item.subscriptionsText),
+            ("评分", item.scoreText)
+        ].compactMap { row in
+            guard let value = row.1, !value.isEmpty else { return nil }
+            return (row.0, value)
+        }
 
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 10) {
             ForEach(rows, id: \.0) { row in
@@ -394,6 +338,126 @@ private struct SteamWorkshopDetailMetaGrid: View {
                         .fill(Color(nsColor: .controlBackgroundColor))
                 )
             }
+        }
+    }
+}
+
+private struct SteamWorkshopAdultWarningBanner: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("此项目被 Steam 标记为成人内容")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("当前详情字段可能不完整；如果需要查看完整介绍或确认可见性，请直接在 Steam 创意工坊页面中打开。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.orange.opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.orange.opacity(0.25), lineWidth: 1)
+        )
+    }
+}
+
+private struct SteamWorkshopDetailLoadingBanner: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text("正在补全该项目的详情信息…")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+    }
+}
+
+private struct SteamWorkshopDetailErrorBanner: View {
+    let message: String
+    let retry: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("详情补全失败")
+                .font(.system(size: 12, weight: .semibold))
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+            Button("重试", action: retry)
+                .buttonStyle(.bordered)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.red.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.red.opacity(0.18), lineWidth: 1)
+        )
+    }
+}
+
+private struct SteamWorkshopDetailFieldSection: View {
+    let fields: [SteamWorkshopDetailField]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("详细信息")
+                .font(.system(size: 13, weight: .semibold))
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 10) {
+                ForEach(fields) { field in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(localizedLabel(for: field.label))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                        Text(field.value)
+                            .font(.system(size: 13, weight: .medium))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color(nsColor: .controlBackgroundColor))
+                    )
+                }
+            }
+        }
+    }
+
+    private func localizedLabel(for label: String) -> String {
+        switch label.lowercased() {
+        case "type": return "类型"
+        case "age rating": return "年龄分级"
+        case "genre": return "题材"
+        case "resolution": return "分辨率"
+        case "category": return "分类"
+        case "file size": return "文件大小"
+        case "posted": return "发布时间"
+        case "updated", "last updated": return "更新时间"
+        case "subscriptions": return "订阅"
+        case "favorites", "favorite", "favorited": return "收藏"
+        case "score": return "评分"
+        default: return label
         }
     }
 }
@@ -417,6 +481,7 @@ private struct FlexibleTagWrap: View {
 private struct SteamWorkshopPreviewSurface: View {
     let previewImageURL: URL?
     let previewVideoURL: URL?
+    let previewAssetKind: SteamWorkshopPreviewAssetKind
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
@@ -433,17 +498,22 @@ private struct SteamWorkshopPreviewSurface: View {
                 SteamWorkshopAutoPlayPreview(url: previewVideoURL)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             } else if let previewImageURL {
-                AsyncImage(url: previewImageURL) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    default:
-                        Color.clear
+                if previewAssetKind == .animatedImage {
+                    SteamWorkshopAnimatedImage(url: previewImageURL)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                } else {
+                    AsyncImage(url: previewImageURL) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        default:
+                            Color.clear
+                        }
                     }
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
 
             LinearGradient(
@@ -453,7 +523,7 @@ private struct SteamWorkshopPreviewSurface: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-            Label(previewVideoURL == nil ? "静态预览" : "动态预览", systemImage: previewVideoURL == nil ? "photo" : "play.circle.fill")
+            Label(previewLabelText, systemImage: previewLabelSymbol)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 10)
@@ -463,6 +533,63 @@ private struct SteamWorkshopPreviewSurface: View {
         }
         .frame(height: 168)
         .clipped()
+    }
+
+    private var previewLabelText: String {
+        switch previewAssetKind {
+        case .animatedImage, .video:
+            return "动态预览"
+        case .stillImage, .unknown:
+            return "静态预览"
+        }
+    }
+
+    private var previewLabelSymbol: String {
+        switch previewAssetKind {
+        case .video:
+            return "play.circle.fill"
+        case .animatedImage:
+            return "sparkles.tv"
+        case .stillImage, .unknown:
+            return "photo"
+        }
+    }
+}
+
+private struct SteamWorkshopAnimatedImage: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> NSImageView {
+        let imageView = NSImageView()
+        imageView.animates = true
+        imageView.imageScaling = .scaleAxesIndependently
+        imageView.imageAlignment = .alignCenter
+        return imageView
+    }
+
+    func updateNSView(_ nsView: NSImageView, context: Context) {
+        guard context.coordinator.currentURL != url else { return }
+        context.coordinator.currentURL = url
+        nsView.image = nil
+
+        Task {
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let image = NSImage(data: data) else {
+                return
+            }
+            await MainActor.run {
+                guard context.coordinator.currentURL == url else { return }
+                nsView.image = image
+            }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator {
+        var currentURL: URL?
     }
 }
 
@@ -529,6 +656,22 @@ private struct SteamWorkshopBrowserErrorView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 80)
+    }
+}
+
+private struct SteamWorkshopBrowserLoadMoreView: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 18)
     }
 }
 
