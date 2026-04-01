@@ -186,6 +186,7 @@ private struct SteamWorkshopBrowserCard: View {
     let item: SteamWorkshopBrowserItem
     let onOpen: () -> Void
     let onDownload: () -> Void
+    @ObservedObject private var service = SteamWorkshopService.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -194,6 +195,11 @@ private struct SteamWorkshopBrowserCard: View {
                     previewImageURL: item.previewImageURL,
                     previewVideoURL: nil
                 )
+                .overlay(alignment: .bottomLeading) {
+                    if service.isDownloading(itemID: item.id) {
+                        downloadOverlay
+                    }
+                }
             }
             .buttonStyle(.plain)
 
@@ -218,8 +224,15 @@ private struct SteamWorkshopBrowserCard: View {
             HStack(spacing: 10) {
                 Button("查看详情", action: onOpen)
                     .buttonStyle(.bordered)
-                Button("下载", action: onDownload)
-                    .buttonStyle(.borderedProminent)
+                if service.isDownloading(itemID: item.id) {
+                    Button("取消下载") {
+                        service.cancelActiveDownload()
+                    }
+                    .buttonStyle(.bordered)
+                } else {
+                    Button("下载", action: onDownload)
+                        .buttonStyle(.borderedProminent)
+                }
             }
         }
         .padding(14)
@@ -231,6 +244,30 @@ private struct SteamWorkshopBrowserCard: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Color.primary.opacity(0.06), lineWidth: 1)
         )
+    }
+
+    private var downloadOverlay: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("下载中")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white)
+            if let progressText = service.downloadProgressLabel(for: item.id) {
+                Text(progressText)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.92))
+            }
+            if let fraction = service.activeDownloadProgressFraction {
+                ProgressView(value: fraction)
+                    .tint(.white)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.white)
+            }
+        }
+        .padding(10)
+        .background(.black.opacity(0.42), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(12)
     }
 }
 
@@ -265,11 +302,24 @@ private struct SteamWorkshopItemDetailSheet: View {
                     Spacer()
 
                     HStack(spacing: 12) {
-                        Button(service.activeDownloadItemID == item.id ? "下载中…" : "下载此项目") {
-                            service.downloadWorkshopItem(id: item.id, pageTitle: item.title)
+                        if service.isDownloading(itemID: item.id) {
+                            Button("取消下载") {
+                                service.cancelActiveDownload()
+                            }
+                            .buttonStyle(.bordered)
+
+                            if let progressText = service.downloadProgressLabel(for: item.id) {
+                                Text(progressText)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Button("下载此项目") {
+                                service.downloadWorkshopItem(id: item.id, pageTitle: item.title)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(service.activeDownloadItemID != nil)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(service.activeDownloadItemID != nil)
 
                         Button("关闭") {
                             service.dismissItemDetail()

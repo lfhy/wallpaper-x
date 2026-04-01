@@ -154,6 +154,17 @@ private struct SteamWorkshopPendingDownloadRequest {
     let pageTitle: String?
 }
 
+private enum SteamWorkshopDownloadControlError: LocalizedError {
+    case cancelled
+
+    var errorDescription: String? {
+        switch self {
+        case .cancelled:
+            return "已取消下载。"
+        }
+    }
+}
+
 private struct SteamWorkshopPTYSession {
     let master: FileHandle
     let slave: FileHandle
@@ -263,6 +274,8 @@ final class SteamWorkshopService: ObservableObject {
     @Published var requestedURL: URL
     @Published var navigationVersion: Int = 0
     @Published var activeDownloadItemID: String?
+    @Published private(set) var activeDownloadProgressText: String?
+    @Published private(set) var activeDownloadProgressFraction: Double?
     @Published var downloadError: String?
     @Published var selectedBrowserItem: SteamWorkshopBrowserItem?
     @Published var requiresLogin: Bool = true
@@ -296,6 +309,11 @@ final class SteamWorkshopService: ObservableObject {
     private var loginBootstrapTimeoutTask: Task<Void, Never>?
     private var loginSessionID: String = ""
     private var pendingDownloadRequest: SteamWorkshopPendingDownloadRequest?
+    private var activeDownloadProcess: Process?
+    private var activeDownloadPipe: Pipe?
+    private var activeDownloadMonitorTask: Task<Void, Never>?
+    private var activeDownloadExpectedBytes: Int64?
+    private var activeDownloadWasCancelled = false
 
     private init() {
         requestedURL = SteamWorkshopService.makeBrowseURL(source: .featured, query: "")
@@ -401,6 +419,15 @@ final class SteamWorkshopService: ObservableObject {
     }
 
     var downloadsCount: Int { downloads.count }
+
+    func isDownloading(itemID: String) -> Bool {
+        activeDownloadItemID == itemID
+    }
+
+    func downloadProgressLabel(for itemID: String) -> String? {
+        guard activeDownloadItemID == itemID else { return nil }
+        return activeDownloadProgressText
+    }
 
     func navigateToBrowse() {
         requestedURL = Self.makeBrowseURL(source: source, query: browserQuery)
@@ -570,6 +597,7 @@ final class SteamWorkshopService: ObservableObject {
 
     private func logoutImmediately() {
         cancelActiveLoginSession()
+        cancelDownloadImmediately(showFeedback: false)
         defaults.set(false, forKey: Constants.defaultsAuthenticated)
         defaults.removeObject(forKey: Constants.defaultsLastUsername)
         SteamWorkshopCredentialStore.deletePassword()
@@ -598,9 +626,7 @@ final class SteamWorkshopService: ObservableObject {
             return
         }
 
-        activeDownloadItemID = id
-        statusMessage = "正在准备 Steam 下载环境…"
-        upsertTransientRecord(id: id, title: pageTitle ?? "Workshop #\(id)", status: .downloading)
+        statusMessage = "正在确认 Steam 下载环境…"
 
         Task { [weak self] in
             guard let self else { return }
@@ -609,13 +635,33 @@ final class SteamWorkshopService: ObservableObject {
                 try await self.performWorkshopDownload(id: id, pageTitle: pageTitle)
             } catch {
                 await MainActor.run {
-                    self.activeDownloadItemID = nil
+                    self.finishActiveDownloadState()
                     let message = error.localizedDescription
+                    if error is SteamWorkshopDownloadControlError {
+                        self.cleanupStagedDownload(id: id)
+                        self.statusMessage = message
+                        self.upsertTransientRecord(id: id, title: pageTitle ?? "Workshop #\(id)", status: .failed(message), sizeText: "已取消")
+                        return
+                    }
+                    let nsError = error as NSError
+                    if nsError.domain == "SteamWorkshop", nsError.code == 11 {
+                        self.cleanupStagedDownload(id: id)
+                        self.statusMessage = message
+                        self.upsertTransientRecord(id: id, title: pageTitle ?? "Workshop #\(id)", status: .failed("登录已过期"), sizeText: "等待重新登录")
+                        return
+                    }
+                    self.cleanupStagedDownload(id: id)
                     self.downloadError = message
                     self.statusMessage = message
                     self.upsertTransientRecord(id: id, title: pageTitle ?? "Workshop #\(id)", status: .failed(message))
                 }
             }
+        }
+    }
+
+    func cancelActiveDownload() {
+        Task { @MainActor [weak self] in
+            self?.cancelDownloadImmediately(showFeedback: true)
         }
     }
 
@@ -725,26 +771,28 @@ final class SteamWorkshopService: ObservableObject {
     }
 
     private func performWorkshopDownload(id: String, pageTitle: String?) async throws {
-        await MainActor.run {
-            self.statusMessage = "正在通过内置 SteamCMD 下载 Workshop #\(id)"
-        }
-        let output = try await runSteamProcess(arguments: [
-            "+force_install_dir", runtimeInstallRootURL.path,
-            "+login", steamUsername, steamPassword,
-            "+workshop_download_item", Constants.workshopAppID, id, "validate",
-            "+quit"
-        ])
+        let title = pageTitle ?? "Workshop #\(id)"
+        let expectedBytes = expectedDownloadBytes(for: id)
+        statusMessage = "正在通过内置 SteamCMD 下载 \(title)"
+
+        let output = try await runDownloadProcess(
+            id: id,
+            title: title,
+            expectedBytes: expectedBytes,
+            arguments: [
+                "+force_install_dir", runtimeInstallRootURL.path,
+                "+login", steamUsername, steamPassword,
+                "+workshop_download_item", Constants.workshopAppID, id, "validate",
+                "+quit"
+            ]
+        )
 
         guard output.localizedCaseInsensitiveContains("Success. Downloaded item") else {
             if outputIndicatesAuthenticationFailure(output) {
-                await MainActor.run {
-                    self.pendingDownloadRequest = SteamWorkshopPendingDownloadRequest(id: id, pageTitle: pageTitle)
-                    self.requiresLogin = true
-                    self.isAnonymousBrowsing = true
-                    self.authPhase = .credentials
-                    self.authStatusMessage = "当前 Steam 登录态已失效，请重新登录并完成 Guard 验证。"
-                    self.isLoginSheetPresented = true
-                }
+                expireAuthenticationAndPromptRelogin(
+                    reason: "登录已过期，请重新输入账号密码并完成 Steam Guard 验证。",
+                    pendingDownload: SteamWorkshopPendingDownloadRequest(id: id, pageTitle: pageTitle)
+                )
                 throw NSError(domain: "SteamWorkshop", code: 11, userInfo: [
                     NSLocalizedDescriptionKey: "当前 Steam 登录态已失效，请重新登录。登录成功后会自动继续下载。"
                 ])
@@ -756,11 +804,9 @@ final class SteamWorkshopService: ObservableObject {
 
         try syncDownloadedItemToLibrary(id: id)
 
-        await MainActor.run {
-            self.activeDownloadItemID = nil
-            self.statusMessage = "已完成 Workshop #\(id) 下载"
-            self.reloadInstalledItems()
-        }
+        finishActiveDownloadState()
+        statusMessage = "已完成 Workshop #\(id) 下载"
+        reloadInstalledItems()
     }
 
     private func ensureManagedSteamRuntime() async throws {
@@ -817,6 +863,203 @@ final class SteamWorkshopService: ObservableObject {
                 continuation.resume(throwing: error)
             }
         }
+    }
+
+    private func runDownloadProcess(
+        id: String,
+        title: String,
+        expectedBytes: Int64?,
+        arguments: [String]
+    ) async throws -> String {
+        let steamRootURL = try resolvedSteamRuntimeExecutionRootURL()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.currentDirectoryURL = steamRootURL
+        process.arguments = ["./steamcmd.sh"] + arguments
+        process.environment = steamProcessEnvironment()
+
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = outputPipe
+
+        activeDownloadWasCancelled = false
+
+        return try await withCheckedThrowingContinuation { continuation in
+            outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+                let data = handle.availableData
+                guard !data.isEmpty else { return }
+                let chunk = String(data: data, encoding: .utf8) ?? ""
+                Task { @MainActor [weak self] in
+                    self?.appendSteamAuthDebugLog("DOWNLOAD STDOUT: \(self?.sanitizeSteamOutput(chunk) ?? "")")
+                }
+            }
+
+            process.terminationHandler = { [weak self] process in
+                let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8) ?? ""
+                Task { @MainActor [weak self] in
+                    outputPipe.fileHandleForReading.readabilityHandler = nil
+                    self?.stopDownloadMonitor()
+                    self?.activeDownloadProcess = nil
+                    self?.activeDownloadPipe = nil
+                    if self?.activeDownloadWasCancelled == true {
+                        continuation.resume(throwing: SteamWorkshopDownloadControlError.cancelled)
+                    } else if process.terminationStatus == 0 {
+                        continuation.resume(returning: output)
+                    } else {
+                        continuation.resume(throwing: NSError(domain: "SteamWorkshop", code: Int(process.terminationStatus), userInfo: [
+                            NSLocalizedDescriptionKey: output.isEmpty ? "SteamCMD 执行失败，退出码 \(process.terminationStatus)。" : output
+                        ]))
+                    }
+                }
+            }
+
+            do {
+                try process.run()
+                Task { @MainActor [weak self] in
+                    self?.startActiveDownloadState(
+                        id: id,
+                        title: title,
+                        expectedBytes: expectedBytes,
+                        process: process,
+                        pipe: outputPipe
+                    )
+                }
+            } catch {
+                outputPipe.fileHandleForReading.readabilityHandler = nil
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+
+    private func startActiveDownloadState(
+        id: String,
+        title: String,
+        expectedBytes: Int64?,
+        process: Process,
+        pipe: Pipe
+    ) {
+        activeDownloadItemID = id
+        activeDownloadProcess = process
+        activeDownloadPipe = pipe
+        activeDownloadExpectedBytes = expectedBytes
+        activeDownloadProgressFraction = 0
+        activeDownloadProgressText = expectedBytes.map { "0 MB / \(Self.fileSizeText(forBytes: $0))" } ?? "0 MB"
+        upsertTransientRecord(id: id, title: title, status: .downloading, sizeText: activeDownloadProgressText ?? "0 MB")
+        startDownloadMonitor(for: id)
+    }
+
+    private func finishActiveDownloadState() {
+        stopDownloadMonitor()
+        activeDownloadProcess = nil
+        activeDownloadPipe = nil
+        activeDownloadExpectedBytes = nil
+        activeDownloadItemID = nil
+        activeDownloadProgressFraction = nil
+        activeDownloadProgressText = nil
+        activeDownloadWasCancelled = false
+    }
+
+    private func cancelDownloadImmediately(showFeedback: Bool) {
+        guard activeDownloadProcess != nil || activeDownloadItemID != nil else { return }
+        activeDownloadWasCancelled = true
+        activeDownloadProcess?.terminate()
+        stopDownloadMonitor()
+        if showFeedback {
+            statusMessage = "正在取消当前下载…"
+        }
+    }
+
+    private func startDownloadMonitor(for id: String) {
+        stopDownloadMonitor()
+        activeDownloadMonitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    self?.refreshDownloadProgress(for: id)
+                }
+            }
+        }
+    }
+
+    private func stopDownloadMonitor() {
+        activeDownloadMonitorTask?.cancel()
+        activeDownloadMonitorTask = nil
+    }
+
+    private func refreshDownloadProgress(for id: String) {
+        guard activeDownloadItemID == id else { return }
+        let downloadedBytes = directorySize(at: stagingWorkshopContentRootURL.appendingPathComponent(id, isDirectory: true))
+        let downloadedText = Self.fileSizeText(forBytes: downloadedBytes)
+        if let expectedBytes = activeDownloadExpectedBytes, expectedBytes > 0 {
+            let fraction = min(max(Double(downloadedBytes) / Double(expectedBytes), 0), 1)
+            activeDownloadProgressFraction = fraction
+            activeDownloadProgressText = "\(downloadedText) / \(Self.fileSizeText(forBytes: expectedBytes))"
+        } else {
+            activeDownloadProgressFraction = nil
+            activeDownloadProgressText = downloadedText
+        }
+
+        if let title = browserItems.first(where: { $0.id == id })?.title
+            ?? selectedBrowserItem?.title
+            ?? downloads.first(where: { $0.id == id })?.title {
+            upsertTransientRecord(id: id, title: title, status: .downloading, sizeText: activeDownloadProgressText ?? downloadedText)
+        }
+    }
+
+    private func directorySize(at url: URL) -> Int64 {
+        guard FileManager.default.fileExists(atPath: url.path) else { return 0 }
+        guard let enumerator = FileManager.default.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return 0
+        }
+
+        var total: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  values.isRegularFile == true else { continue }
+            total += Int64(values.fileSize ?? 0)
+        }
+        return total
+    }
+
+    private func cleanupStagedDownload(id: String) {
+        let stagedURL = stagingWorkshopContentRootURL.appendingPathComponent(id, isDirectory: true)
+        if FileManager.default.fileExists(atPath: stagedURL.path) {
+            try? FileManager.default.removeItem(at: stagedURL)
+        }
+    }
+
+    private func expectedDownloadBytes(for id: String) -> Int64? {
+        if let item = browserItems.first(where: { $0.id == id }) {
+            return Self.parseByteCount(from: item.fileSizeText)
+        }
+        if selectedBrowserItem?.id == id {
+            return Self.parseByteCount(from: selectedBrowserItem?.fileSizeText)
+        }
+        return nil
+    }
+
+    private func expireAuthenticationAndPromptRelogin(
+        reason: String,
+        pendingDownload: SteamWorkshopPendingDownloadRequest?
+    ) {
+        cancelActiveLoginSession()
+        defaults.set(false, forKey: Constants.defaultsAuthenticated)
+        SteamWorkshopCredentialStore.deletePassword()
+        steamPassword = ""
+        steamGuardCode = ""
+        requiresLogin = true
+        isAnonymousBrowsing = true
+        authPhase = .credentials
+        authError = nil
+        authStatusMessage = reason
+        self.pendingDownloadRequest = pendingDownload
+        isLoginSheetPresented = true
     }
 
     private func syncDownloadedItemToLibrary(id: String) throws {
@@ -1292,6 +1535,9 @@ final class SteamWorkshopService: ObservableObject {
             || lowered.contains("account logon denied")
             || lowered.contains("incorrect login")
             || lowered.contains("too many login failures")
+            || lowered.contains("steam guard")
+            || lowered.contains("access denied")
+            || lowered.contains("this account")
     }
 
     private func loadCachedBrowserItemsIfPossible() {
@@ -1376,7 +1622,12 @@ final class SteamWorkshopService: ObservableObject {
         return Self.fileSizeText(forBytes: size)
     }
 
-    private func upsertTransientRecord(id: String, title: String, status: SteamWorkshopDownloadRecord.Status) {
+    private func upsertTransientRecord(
+        id: String,
+        title: String,
+        status: SteamWorkshopDownloadRecord.Status,
+        sizeText: String? = nil
+    ) {
         if let index = downloads.firstIndex(where: { $0.id == id }) {
             let previous = downloads[index]
             downloads[index] = SteamWorkshopDownloadRecord(
@@ -1388,7 +1639,7 @@ final class SteamWorkshopService: ObservableObject {
                 previewURL: previous.previewURL,
                 videoURL: previous.videoURL,
                 updatedAt: Date(),
-                sizeText: previous.sizeText,
+                sizeText: sizeText ?? previous.sizeText,
                 status: status
             )
             return
@@ -1405,7 +1656,7 @@ final class SteamWorkshopService: ObservableObject {
                 previewURL: nil,
                 videoURL: nil,
                 updatedAt: Date(),
-                sizeText: "等待下载",
+                sizeText: sizeText ?? "等待下载",
                 status: status
             ),
             at: 0
@@ -1692,5 +1943,27 @@ final class SteamWorkshopService: ObservableObject {
             return String(format: "%.1fMB", mb)
         }
         return String(format: "%.2fMB", mb)
+    }
+
+    private static func parseByteCount(from text: String?) -> Int64? {
+        guard let text else { return nil }
+        let normalized = text.replacingOccurrences(of: " ", with: "").uppercased()
+        guard let value = Double(firstCapture(pattern: #"([0-9]+(?:\.[0-9]+)?)"#, in: normalized) ?? "") else {
+            return nil
+        }
+
+        if normalized.contains("GB") {
+            return Int64(value * 1024 * 1024 * 1024)
+        }
+        if normalized.contains("MB") {
+            return Int64(value * 1024 * 1024)
+        }
+        if normalized.contains("KB") {
+            return Int64(value * 1024)
+        }
+        if normalized.contains("B") {
+            return Int64(value)
+        }
+        return nil
     }
 }
