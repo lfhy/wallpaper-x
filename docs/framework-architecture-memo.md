@@ -388,7 +388,7 @@ VideoLibraryToolbarController（主控，NSToolbarDelegate）
 - 菜单命令分发或 `validateMenuItem` 规则变化
 - 焦点接管机制变化
 
-若发生真实框架缺陷修复（非纯文档改写），同时在 `docs/框架修复归档.md` 追加 FIX 记录。
+若发生真实框架缺陷修复（非纯文档改写），同时在 `docs/framework-fix-archive.md` 追加 FIX 记录。
 
 ---
 
