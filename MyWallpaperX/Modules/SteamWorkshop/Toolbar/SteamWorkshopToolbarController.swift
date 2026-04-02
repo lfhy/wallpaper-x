@@ -378,9 +378,7 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
         let width = gridWidth()
         let availability = GridLayoutHelper.zoomAvailability(
             currentOffset: SteamWorkshopService.shared.zoomOffset,
-            for: width,
-            minCols: 2,
-            maxCols: 5
+            for: width
         )
         let canZoom = delta > 0 ? availability.canZoomIn : availability.canZoomOut
         guard canZoom else { return }
@@ -394,15 +392,13 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
     }
 
     private func gridWidth() -> CGFloat {
-        (window?.contentView?.bounds.width ?? 900) - 220
+        (window?.contentView?.bounds.width ?? 800) - 220
     }
 
     private func configureZoomItem() {
         let availability = GridLayoutHelper.zoomAvailability(
             currentOffset: SteamWorkshopService.shared.zoomOffset,
-            for: gridWidth(),
-            minCols: 2,
-            maxCols: 5
+            for: gridWidth()
         )
         zoomControl.setEnabled(availability.canZoomIn, forSegment: 0)
         zoomControl.setEnabled(availability.canZoomOut, forSegment: 1)

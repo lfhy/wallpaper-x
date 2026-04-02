@@ -7,7 +7,7 @@ import SwiftUI
 
 struct SteamWorkshopDownloadsView: View {
     var body: some View {
-        SteamWorkshopFocusHost(module: .steamWorkshop, content: SteamWorkshopDownloadsContentView())
+        SteamWorkshopDownloadsContentView()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -25,9 +25,7 @@ private struct SteamWorkshopDownloadsContentView: View {
                 service.revealItem(record)
             }
         )
-        .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
             service.reloadInstalledItems()
         }

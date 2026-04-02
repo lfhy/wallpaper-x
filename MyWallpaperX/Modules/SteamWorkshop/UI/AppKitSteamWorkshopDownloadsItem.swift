@@ -4,12 +4,14 @@
 //
 
 import AppKit
+import QuartzCore
 
 final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
-    private let cardView = NSView()
+    static let hoverScale: CGFloat = 1.03
+    private let cardView = AppearanceAwareContainerView()
     private let previewContainer = NSView()
     private let previewImageView = NSImageView()
-    private let titleLabel = NSTextField(wrappingLabelWithString: "")
+    private let titleLabel = NSTextField(labelWithString: "")
     private let metaLabel = NSTextField(labelWithString: "")
     private let secondaryMetaLabel = NSTextField(labelWithString: "")
     private let setAsWallpaperButton = NSButton(title: "设为壁纸", target: nil, action: nil)
@@ -17,12 +19,23 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
 
     private var onSetAsWallpaper: (() -> Void)?
     private var onReveal: (() -> Void)?
+    private var trackingAreaRef: NSTrackingArea?
+    private var isHovering = false
+    private var currentCardScale: CGFloat = 1.0
 
     private enum Layout {
-        static let outerInset: CGFloat = 4
-        static let contentInset: CGFloat = 10
+        static let outerInset: CGFloat = 0
+        static let contentInset: CGFloat = 8
+        static let previewInset: CGFloat = 1
+        static let previewTopInset: CGFloat = 1
         static let buttonHeight: CGFloat = 30
         static let buttonWidth: CGFloat = 92
+        static let buttonGap: CGFloat = 8
+        static let interSectionSpacing: CGFloat = 8
+        static let textLineGap: CGFloat = 3
+        static let textToButtonsGap: CGFloat = 8
+        static let titleLineHeight: CGFloat = 20
+        static let metaLineHeight: CGFloat = 14
     }
 
     override init(nibName: NSNib.Name?, bundle: Bundle?) {
@@ -44,6 +57,10 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
         previewImageView.image = nil
         onSetAsWallpaper = nil
         onReveal = nil
+        isHovering = false
+        currentCardScale = 1.0
+        cardView.layer?.transform = CATransform3DIdentity
+        refreshThemeAwareAppearance()
     }
 
     override func viewDidLayout() {
@@ -51,25 +68,52 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
 
         let bounds = view.bounds
         cardView.frame = bounds.insetBy(dx: Layout.outerInset, dy: Layout.outerInset)
-        let contentWidth = cardView.bounds.width - Layout.contentInset * 2
-        let previewSide = contentWidth
+        ensureCardAnchorCenteredIfNeeded()
 
-        previewContainer.frame = CGRect(
+        let contentWidth = max(0, cardView.bounds.width - Layout.contentInset * 2)
+        let minButtonScale = max(0.72, min(1.0, contentWidth / 240))
+        let buttonWidth = Layout.buttonWidth * minButtonScale
+        let buttonHeight = Layout.buttonHeight * minButtonScale
+        let buttonGap = Layout.buttonGap * minButtonScale
+
+        let buttonsY = Layout.contentInset
+        let buttonsTotalWidth = buttonWidth * 2 + buttonGap
+        let buttonsStartX = max(Layout.contentInset, (cardView.bounds.width - buttonsTotalWidth) * 0.5)
+        setAsWallpaperButton.frame = CGRect(x: buttonsStartX, y: buttonsY, width: buttonWidth, height: buttonHeight)
+        revealButton.frame = CGRect(
+            x: buttonsStartX + buttonWidth + buttonGap,
+            y: buttonsY,
+            width: buttonWidth,
+            height: buttonHeight
+        )
+
+        let textBottom = buttonsY + buttonHeight + Layout.textToButtonsGap
+        secondaryMetaLabel.frame = CGRect(x: Layout.contentInset, y: textBottom, width: contentWidth, height: Layout.metaLineHeight)
+        metaLabel.frame = CGRect(
             x: Layout.contentInset,
-            y: cardView.bounds.height - Layout.contentInset - previewSide,
+            y: secondaryMetaLabel.frame.maxY + Layout.textLineGap,
             width: contentWidth,
-            height: previewSide
+            height: Layout.metaLineHeight
+        )
+        titleLabel.frame = CGRect(
+            x: Layout.contentInset,
+            y: metaLabel.frame.maxY + Layout.textLineGap,
+            width: contentWidth,
+            height: Layout.titleLineHeight
+        )
+
+        let previewY = titleLabel.frame.maxY + Layout.interSectionSpacing
+        let previewHeight = max(0, cardView.bounds.height - Layout.previewInset - Layout.previewTopInset - previewY)
+        previewContainer.frame = CGRect(
+            x: Layout.previewInset,
+            y: previewY,
+            width: cardView.bounds.width - Layout.previewInset * 2,
+            height: previewHeight
         )
         previewImageView.frame = previewContainer.bounds
 
-        let textTop = previewContainer.frame.minY - 10
-        titleLabel.frame = CGRect(x: Layout.contentInset, y: textTop - 38, width: contentWidth, height: 36)
-        metaLabel.frame = CGRect(x: Layout.contentInset, y: titleLabel.frame.minY - 18, width: contentWidth, height: 15)
-        secondaryMetaLabel.frame = CGRect(x: Layout.contentInset, y: metaLabel.frame.minY - 18, width: contentWidth, height: 15)
-
-        let buttonsY = Layout.contentInset
-        setAsWallpaperButton.frame = CGRect(x: Layout.contentInset, y: buttonsY, width: Layout.buttonWidth, height: Layout.buttonHeight)
-        revealButton.frame = CGRect(x: cardView.bounds.width - Layout.contentInset - Layout.buttonWidth, y: buttonsY, width: Layout.buttonWidth, height: Layout.buttonHeight)
+        refreshThemeAwareAppearance()
+        refreshTrackingArea()
     }
 
     func configure(
@@ -100,15 +144,23 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
         view.wantsLayer = true
 
         cardView.wantsLayer = true
-        cardView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-        cardView.layer?.cornerRadius = 16
+        cardView.layer?.backgroundColor = NSColor.secondarySystemBackground.cgColor
+        cardView.layer?.cornerRadius = 12
         cardView.layer?.borderWidth = 1
         cardView.layer?.borderColor = NSColor.white.withAlphaComponent(0.10).cgColor
+        cardView.layer?.shadowColor = NSColor.black.cgColor
+        cardView.layer?.shadowOpacity = 0
+        cardView.layer?.shadowRadius = 16
+        cardView.layer?.shadowOffset = CGSize(width: 0, height: -1)
         cardView.translatesAutoresizingMaskIntoConstraints = false
+        cardView.appearanceDidChangeHandler = { [weak self] in
+            self?.refreshThemeAwareAppearance()
+            self?.applyHoverStyle(animated: false)
+        }
         view.addSubview(cardView)
 
         previewContainer.wantsLayer = true
-        previewContainer.layer?.cornerRadius = 14
+        previewContainer.layer?.cornerRadius = 12
         previewContainer.layer?.masksToBounds = true
         previewContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         cardView.addSubview(previewContainer)
@@ -117,15 +169,19 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
         previewImageView.imageAlignment = .alignCenter
         previewContainer.addSubview(previewImageView)
 
-        configureLabel(titleLabel, font: .systemFont(ofSize: 15, weight: .semibold), color: .labelColor)
-        titleLabel.maximumNumberOfLines = 2
+        configureLabel(titleLabel, font: .systemFont(ofSize: 14, weight: .semibold), color: .labelColor)
+        titleLabel.maximumNumberOfLines = 1
+        titleLabel.lineBreakMode = .byTruncatingMiddle
         cardView.addSubview(titleLabel)
 
         configureLabel(metaLabel, font: .monospacedSystemFont(ofSize: 11, weight: .regular), color: .secondaryLabelColor)
+        metaLabel.maximumNumberOfLines = 1
+        metaLabel.lineBreakMode = .byTruncatingTail
         cardView.addSubview(metaLabel)
 
         configureLabel(secondaryMetaLabel, font: .systemFont(ofSize: 11), color: .secondaryLabelColor)
         secondaryMetaLabel.maximumNumberOfLines = 1
+        secondaryMetaLabel.lineBreakMode = .byTruncatingTail
         cardView.addSubview(secondaryMetaLabel)
 
         setAsWallpaperButton.bezelStyle = .rounded
@@ -137,6 +193,111 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
         revealButton.target = self
         revealButton.action = #selector(handleReveal)
         cardView.addSubview(revealButton)
+
+        refreshThemeAwareAppearance()
+    }
+
+    private func refreshTrackingArea() {
+        if let trackingAreaRef {
+            view.removeTrackingArea(trackingAreaRef)
+        }
+        let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect]
+        let trackingArea = NSTrackingArea(rect: view.bounds, options: options, owner: self, userInfo: nil)
+        view.addTrackingArea(trackingArea)
+        trackingAreaRef = trackingArea
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        isHovering = true
+        applyHoverStyle(animated: true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        isHovering = false
+        applyHoverStyle(animated: true)
+    }
+
+    private func applyHoverStyle(animated: Bool) {
+        let duration = isHovering
+            ? UIInteractionAnimation.cardHoverExpandDuration
+            : UIInteractionAnimation.cardHoverCollapseDuration
+        let timing = isHovering
+            ? UIInteractionAnimation.cardEnterTiming
+            : UIInteractionAnimation.cardExitTiming
+
+        let baseBorderColor: NSColor = isDarkAppearance
+            ? .white.withAlphaComponent(0.10)
+            : .separatorColor.withAlphaComponent(0.32)
+        let targetBorderColor = isHovering
+            ? NSColor.controlAccentColor.withAlphaComponent(isDarkAppearance ? 0.55 : 0.48).cgColor
+            : baseBorderColor.cgColor
+        let targetShadowOpacity: Float = isDarkAppearance
+            ? (isHovering ? 0.18 : 0)
+            : (isHovering ? 0.16 : 0.08)
+        let targetScale: CGFloat = isHovering ? Self.hoverScale : 1.0
+
+        guard animated else {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            cardView.layer?.borderColor = targetBorderColor
+            cardView.layer?.shadowOpacity = targetShadowOpacity
+            cardView.layer?.transform = CATransform3DMakeScale(targetScale, targetScale, 1)
+            CATransaction.commit()
+            currentCardScale = targetScale
+            return
+        }
+
+        cardView.layer?.borderColor = targetBorderColor
+        cardView.layer?.shadowOpacity = targetShadowOpacity
+        applyCardScale(targetScale: targetScale, duration: duration, timing: timing)
+    }
+
+    private func applyCardScale(targetScale: CGFloat, duration: CFTimeInterval, timing: CAMediaTimingFunction) {
+        guard let layer = cardView.layer else { return }
+        ensureCardAnchorCenteredIfNeeded()
+        guard abs(currentCardScale - targetScale) > 0.0001 else { return }
+
+        let fromScale = (layer.presentation()?.value(forKeyPath: "transform.scale") as? CGFloat) ?? currentCardScale
+        let animation = CABasicAnimation(keyPath: "transform.scale")
+        animation.fromValue = fromScale
+        animation.toValue = targetScale
+        animation.duration = duration
+        animation.timingFunction = timing
+        layer.add(animation, forKey: "steam.download.card.hover.scale")
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.transform = CATransform3DMakeScale(targetScale, targetScale, 1)
+        CATransaction.commit()
+        currentCardScale = targetScale
+    }
+
+    private func ensureCardAnchorCenteredIfNeeded() {
+        cardView.ensureLayerAnchorCentered()
+    }
+
+    private var isDarkAppearance: Bool { view.isDarkAppearance }
+
+    private func refreshThemeAwareAppearance() {
+        guard let layer = cardView.layer else { return }
+        layer.backgroundColor = NSColor.secondarySystemBackground.cgColor
+        let baseBorderColor: NSColor = isDarkAppearance
+            ? .white.withAlphaComponent(0.10)
+            : .separatorColor.withAlphaComponent(0.28)
+        layer.borderColor = (isHovering
+            ? NSColor.controlAccentColor.withAlphaComponent(isDarkAppearance ? 0.55 : 0.44)
+            : baseBorderColor).cgColor
+        layer.shadowColor = NSColor.black.cgColor
+        layer.shadowOpacity = isDarkAppearance
+            ? (isHovering ? 0.18 : 0)
+            : (isHovering ? 0.14 : 0.06)
+        layer.shadowRadius = isHovering ? 12 : 8
+        layer.shadowOffset = CGSize(width: 0, height: -1)
+        titleLabel.textColor = .labelColor
+        metaLabel.textColor = .secondaryLabelColor
+        secondaryMetaLabel.textColor = .secondaryLabelColor
     }
 
     private func configureLabel(_ label: NSTextField, font: NSFont, color: NSColor) {

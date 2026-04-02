@@ -63,8 +63,8 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
     private lazy var flowLayout: NSCollectionViewFlowLayout = {
         let layout = NSCollectionViewFlowLayout()
         layout.minimumInteritemSpacing = 8
-        layout.minimumLineSpacing = 16
-        layout.sectionInset = NSEdgeInsets(top: 8, left: 8, bottom: 40, right: 8)
+        layout.minimumLineSpacing = 8
+        layout.sectionInset = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
         return layout
     }()
 
@@ -226,9 +226,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
         let availableWidth = max(0, bounds.width - inset.left - inset.right)
         let columns = GridLayoutHelper.columnCount(
             for: availableWidth,
-            zoomOffset: service.zoomOffset,
-            minCols: 2,
-            maxCols: 5
+            zoomOffset: service.zoomOffset
         )
         let hoverScale: CGFloat = AppKitSteamWorkshopBrowserItem.hoverScale
         let baseSpacing: CGFloat = 8
@@ -238,10 +236,10 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
         flowLayout.minimumInteritemSpacing = spacing
         flowLayout.minimumLineSpacing = spacing
         let totalSpacing = CGFloat(max(0, columns - 1)) * spacing
-        let cardWidth = max(220, floor((availableWidth - totalSpacing) / CGFloat(columns)))
+        let cardWidth = max(100, (availableWidth - totalSpacing) / CGFloat(columns))
         let previewHeight = floor(cardWidth - 28)
         let cardHeight = previewHeight + 132
-        let newSize = NSSize(width: cardWidth, height: cardHeight)
+        let newSize = NSSize(width: floor(cardWidth), height: floor(cardHeight))
         guard flowLayout.itemSize != newSize else { return }
         flowLayout.itemSize = newSize
         collectionView.collectionViewLayout?.invalidateLayout()

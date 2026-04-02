@@ -11,8 +11,7 @@ public struct SteamWorkshopEntryView: View {
     public init() {}
 
     public var body: some View {
-        SteamWorkshopFocusHost(module: .steamWorkshop, content: SteamWorkshopBrowserContentView())
-            .ignoresSafeArea(.container, edges: .top)
+        SteamWorkshopBrowserContentView()
     }
 }
 
@@ -88,7 +87,6 @@ private struct SteamWorkshopBrowserContentView: View {
                             .padding(.bottom, 10)
                     }
                 }
-                .padding(24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
