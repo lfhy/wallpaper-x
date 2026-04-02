@@ -1156,12 +1156,13 @@ final class SteamWorkshopService: ObservableObject {
     }
 
     func presentItemDetail(_ item: SteamWorkshopBrowserItem) {
-        selectedBrowserItem = item
+        let resolvedItem = browserItems.first(where: { $0.id == item.id }) ?? item
+        selectedBrowserItem = resolvedItem
         selectedBrowserItemError = nil
-        currentWorkshopItemID = item.id
-        currentPageTitle = item.title
-        statusMessage = "已加载 \(item.title)"
-        refreshSelectedBrowserItemDetailIfNeeded(forceRefresh: needsDetailRefresh(for: item))
+        currentWorkshopItemID = resolvedItem.id
+        currentPageTitle = resolvedItem.title
+        statusMessage = "已加载 \(resolvedItem.title)"
+        refreshSelectedBrowserItemDetailIfNeeded(forceRefresh: needsDetailRefresh(for: resolvedItem))
     }
 
     func dismissItemDetail() {
@@ -3489,7 +3490,6 @@ final class SteamWorkshopService: ObservableObject {
         item.author == "未知作者"
             || item.descriptionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || item.authorWorkshopURL == nil
-            || item.previewVideoURL == nil
     }
 
     private static func mergeDetailedItem(
@@ -3595,11 +3595,6 @@ final class SteamWorkshopService: ObservableObject {
         let tags = Array(NSOrderedSet(array: rawTags.filter { !$0.isEmpty })) as? [String] ?? []
         let detailFields = buildDetailFields(stats: stats, workshopTags: workshopTags)
         let previewImageURL = metaURL(property: "og:image", in: html)
-        let previewVideoURL = firstURLMatch(
-            pattern: #"https:[^"'\\]+?\.(?:mp4|webm)(?:\?[^"'\\<]*)?"#,
-            in: html
-        )
-
         return SteamWorkshopDetailParseResult(
             title: normalizeText(title),
             author: normalizeAuthorName(author),
@@ -3614,7 +3609,7 @@ final class SteamWorkshopService: ObservableObject {
             genreText: normalizedWorkshopTagValue(forKey: "Genre", in: workshopTags),
             categoryText: normalizedWorkshopTagValue(forKey: "Category", in: workshopTags),
             previewImageURL: previewImageURL,
-            previewVideoURL: previewVideoURL,
+            previewVideoURL: nil,
             fileSizeText: normalizedStatValue(forKey: "File Size", in: stats)
                 ?? normalizedStatValue(forKey: "文件大小", in: stats),
             resolutionText: normalizedWorkshopTagValue(forKey: "Resolution", in: workshopTags)
@@ -3914,9 +3909,6 @@ final class SteamWorkshopService: ObservableObject {
     private static func enrichPreviewKind(for item: SteamWorkshopBrowserItem) async throws -> SteamWorkshopBrowserItem {
         if item.previewAssetKind != .unknown {
             return item
-        }
-        if item.previewVideoURL != nil {
-            return withPreviewKind(.video, item: item)
         }
         guard let previewImageURL = item.previewImageURL else {
             return item

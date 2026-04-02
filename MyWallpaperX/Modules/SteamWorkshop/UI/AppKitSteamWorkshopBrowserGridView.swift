@@ -307,7 +307,10 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
                 downloadRecord: service.latestDownloadRecord(for: id),
                 downloadProgressText: service.downloadProgressLabel(for: id),
                 isDownloading: service.isDownloading(itemID: id),
-                isDownloaded: service.isDownloaded(itemID: id)
+                isDownloaded: service.isDownloaded(itemID: id),
+                onOpen: { [weak self] in self?.onOpen(item) },
+                onDownload: { [weak self] in self?.onDownload(item) },
+                onCancelDownload: { [weak self] in self?.onCancelDownload() }
             )
         }
     }

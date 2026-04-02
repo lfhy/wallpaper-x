@@ -132,8 +132,14 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         downloadRecord: SteamWorkshopDownloadRecord?,
         downloadProgressText: String?,
         isDownloading: Bool,
-        isDownloaded: Bool
+        isDownloaded: Bool,
+        onOpen: @escaping () -> Void,
+        onDownload: @escaping () -> Void,
+        onCancelDownload: @escaping () -> Void
     ) {
+        self.onOpen = onOpen
+        self.onDownload = onDownload
+        self.onCancelDownload = onCancelDownload
         metaLabel.stringValue = item.primaryMetaText
         let baseSecondaryMeta = localizedSecondaryMetaText(for: item)
         secondaryMetaLabel.stringValue = secondaryStatusText(
@@ -312,18 +318,24 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     private func loadPreview(from url: URL?) {
         guard currentPreviewURL != url else { return }
         currentPreviewURL = url
-        previewImageView.image = nil
+        previewImageView.animates = true
         imageTask?.cancel()
 
         guard let url else { return }
-        imageTask = Task(priority: .userInitiated) { [weak self] in
-            guard let self,
-                  let (data, _) = try? await URLSession.shared.data(from: url),
-                  let image = NSImage(data: data) else { return }
-            await MainActor.run {
-                guard self.currentPreviewURL == url else { return }
-                self.previewImageView.image = image
-            }
+        let cacheKey = "steam-preview:\(url.absoluteString)"
+        if let cached = SteamWorkshopPreviewImageCache.shared.cachedImage(forKey: cacheKey) {
+            previewImageView.image = cached
+            return
+        }
+
+        previewImageView.image = nil
+        SteamWorkshopPreviewImageCache.shared.loadImageData(forKey: cacheKey, loader: {
+            try? Data(contentsOf: url)
+        }) { [weak self] image in
+            guard let self else { return }
+            guard self.currentPreviewURL == url else { return }
+            self.previewImageView.animates = true
+            self.previewImageView.image = image
         }
     }
 

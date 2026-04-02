@@ -7,6 +7,13 @@ import SwiftUI
 import AVKit
 import AppKit
 
+enum SteamWorkshopPreviewImageCache {
+    static let shared = ThumbnailCache(
+        label: "com.songziqiang.MyWallpaperX.steamworkshop.preview.decode",
+        countLimit: 320
+    )
+}
+
 public struct SteamWorkshopEntryView: View {
     public init() {}
 
@@ -197,6 +204,13 @@ private struct SteamWorkshopItemDetailSheet: View {
     let item: SteamWorkshopBrowserItem
     @ObservedObject private var service = SteamWorkshopService.shared
 
+    private var currentItem: SteamWorkshopBrowserItem {
+        if let selected = service.selectedBrowserItem, selected.id == item.id {
+            return selected
+        }
+        return item
+    }
+
     private var downloadRecord: SteamWorkshopDownloadRecord? {
         service.downloadRecord(for: item.id)
     }
@@ -219,8 +233,8 @@ private struct SteamWorkshopItemDetailSheet: View {
     }
 
     private var detailDescription: String? {
-        let summary = item.summary.trimmingCharacters(in: .whitespacesAndNewlines)
-        let description = item.descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary = currentItem.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let description = currentItem.descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !description.isEmpty, description != summary {
             return description
         }
@@ -237,27 +251,27 @@ private struct SteamWorkshopItemDetailSheet: View {
 
     private var topFacts: [(String, String?)] {
         [
-            ("类型", item.workshopTypeText),
-            ("年龄分级", item.ageRatingText),
-            ("题材", item.genreText)
+            ("类型", currentItem.workshopTypeText),
+            ("年龄分级", currentItem.ageRatingText),
+            ("题材", currentItem.genreText)
         ]
     }
 
     private var bottomFacts: [(String, String?)] {
         [
-            ("分辨率", item.resolutionText),
-            ("文件大小", item.fileSizeText),
-            ("分类", item.categoryText)
+            ("分辨率", currentItem.resolutionText),
+            ("文件大小", currentItem.fileSizeText),
+            ("分类", currentItem.categoryText)
         ]
     }
 
     private var secondaryFactText: String? {
         let values = [
-            item.scoreText,
-            item.subscriptionsText.map { "订阅 \($0)" },
-            item.favoritesText.map { "收藏 \($0)" },
-            item.lifetimeSubscriptionsText.map { "总订阅 \($0)" },
-            item.lifetimeFavoritesText.map { "总收藏 \($0)" }
+            currentItem.scoreText,
+            currentItem.subscriptionsText.map { "订阅 \($0)" },
+            currentItem.favoritesText.map { "收藏 \($0)" },
+            currentItem.lifetimeSubscriptionsText.map { "总订阅 \($0)" },
+            currentItem.lifetimeFavoritesText.map { "总收藏 \($0)" }
         ]
         .compactMap { $0 }
 
@@ -267,8 +281,8 @@ private struct SteamWorkshopItemDetailSheet: View {
 
     private var statusFactText: String? {
         [
-            item.visibilityText.map { "可见性 \($0)" },
-            item.moderationText.map { "状态 \($0)" }
+            currentItem.visibilityText.map { "可见性 \($0)" },
+            currentItem.moderationText.map { "状态 \($0)" }
         ]
         .compactMap { $0 }
         .joined(separator: "  ·  ")
@@ -305,19 +319,18 @@ private struct SteamWorkshopItemDetailSheet: View {
     private var leftColumn: some View {
         VStack(alignment: .leading, spacing: 8) {
             SteamWorkshopPreviewSurface(
-                previewImageURL: item.previewImageURL,
-                previewVideoURL: item.previewVideoURL,
-                previewAssetKind: item.previewAssetKind
+                previewImageURL: currentItem.previewImageURL,
+                previewAssetKind: currentItem.previewAssetKind
             )
             .frame(width: 220, height: 220)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-            if !item.author.isEmpty {
+            if !currentItem.author.isEmpty {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text("作者")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
-                    Text(item.author)
+                    Text(currentItem.author)
                         .font(.system(size: 15, weight: .semibold))
                 }
             }
@@ -343,7 +356,7 @@ private struct SteamWorkshopItemDetailSheet: View {
                     }
                 }
 
-            if let postedText = item.postedText, !postedText.isEmpty {
+            if let postedText = currentItem.postedText, !postedText.isEmpty {
                 SteamWorkshopSingleFactCard(label: "发布时间", value: postedText)
             }
 
@@ -394,7 +407,7 @@ private struct SteamWorkshopItemDetailSheet: View {
 
             footerActions
                 .overlay(alignment: .top) {
-                    if item.hasAdultContent {
+                    if currentItem.hasAdultContent {
                         SteamWorkshopInlineNotice(
                             icon: "exclamationmark.triangle.fill",
                             text: "此项目被 Steam 标记为成人内容"
@@ -408,7 +421,7 @@ private struct SteamWorkshopItemDetailSheet: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text(item.title)
+            Text(currentItem.title)
                 .font(.system(size: 19, weight: .bold))
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -425,16 +438,16 @@ private struct SteamWorkshopItemDetailSheet: View {
                 .frame(width: 92)
 
             Button("网页浏览") {
-                service.openWorkshopDetailPage(for: item)
+                service.openWorkshopDetailPage(for: currentItem)
             }
             .buttonStyle(.bordered)
             .frame(width: 88)
 
             Button("作者工坊") {
-                service.showAuthorWorkshop(for: item)
+                service.showAuthorWorkshop(for: currentItem)
             }
             .buttonStyle(.bordered)
-            .disabled(item.authorProfileURL == nil && item.authorWorkshopURL == nil)
+            .disabled(currentItem.authorProfileURL == nil && currentItem.authorWorkshopURL == nil)
             .frame(width: 88)
 
             Button("刷新详情") {
@@ -468,13 +481,13 @@ private struct SteamWorkshopItemDetailSheet: View {
             .buttonStyle(.borderedProminent)
         } else if latestDownloadFailure != nil {
             Button("重新下载") {
-                service.downloadWorkshopItem(id: item.id, pageTitle: item.title)
+                service.downloadWorkshopItem(id: item.id, pageTitle: currentItem.title)
             }
             .buttonStyle(.borderedProminent)
             .disabled(service.activeDownloadItemID != nil)
         } else {
             Button("下载视频") {
-                service.downloadWorkshopItem(id: item.id, pageTitle: item.title)
+                service.downloadWorkshopItem(id: item.id, pageTitle: currentItem.title)
             }
             .buttonStyle(.borderedProminent)
             .disabled(service.activeDownloadItemID != nil)
@@ -601,7 +614,6 @@ private struct SteamWorkshopInlineErrorNotice: View {
 
 private struct SteamWorkshopPreviewSurface: View {
     let previewImageURL: URL?
-    let previewVideoURL: URL?
     let previewAssetKind: SteamWorkshopPreviewAssetKind
 
     var body: some View {
@@ -615,26 +627,11 @@ private struct SteamWorkshopPreviewSurface: View {
                     )
                 )
 
-            if let previewVideoURL {
-                SteamWorkshopAutoPlayPreview(url: previewVideoURL)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            } else if let previewImageURL {
-                if previewAssetKind == .animatedImage {
-                    SteamWorkshopAnimatedImage(url: previewImageURL)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                } else {
-                    AsyncImage(url: previewImageURL) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-                        default:
-                            Color.clear
-                        }
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                }
+            if let previewImageURL {
+                SteamWorkshopCachedPreviewImage(
+                    url: previewImageURL
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
 
             LinearGradient(
@@ -648,7 +645,7 @@ private struct SteamWorkshopPreviewSurface: View {
     }
 }
 
-private struct SteamWorkshopAnimatedImage: NSViewRepresentable {
+private struct SteamWorkshopCachedPreviewImage: NSViewRepresentable {
     let url: URL
 
     func makeNSView(context: Context) -> NSImageView {
@@ -662,17 +659,20 @@ private struct SteamWorkshopAnimatedImage: NSViewRepresentable {
     func updateNSView(_ nsView: NSImageView, context: Context) {
         guard context.coordinator.currentURL != url else { return }
         context.coordinator.currentURL = url
-        nsView.image = nil
+        nsView.animates = true
 
-        Task {
-            guard let (data, _) = try? await URLSession.shared.data(from: url),
-                  let image = NSImage(data: data) else {
-                return
-            }
-            await MainActor.run {
-                guard context.coordinator.currentURL == url else { return }
-                nsView.image = image
-            }
+        let cacheKey = "steam-preview:\(url.absoluteString)"
+        if let cached = SteamWorkshopPreviewImageCache.shared.cachedImage(forKey: cacheKey) {
+            nsView.image = cached
+            return
+        }
+
+        nsView.image = nil
+        SteamWorkshopPreviewImageCache.shared.loadImageData(forKey: cacheKey, loader: {
+            try? Data(contentsOf: url)
+        }) { image in
+            guard context.coordinator.currentURL == url else { return }
+            nsView.image = image
         }
     }
 
@@ -682,44 +682,6 @@ private struct SteamWorkshopAnimatedImage: NSViewRepresentable {
 
     final class Coordinator {
         var currentURL: URL?
-    }
-}
-
-private struct SteamWorkshopAutoPlayPreview: View {
-    let url: URL
-    @State private var player: AVPlayer?
-    @State private var playbackLoopObserver: NSObjectProtocol?
-
-    var body: some View {
-        VideoPlayer(player: player)
-            .disabled(true)
-            .onAppear {
-                if let playbackLoopObserver {
-                    NotificationCenter.default.removeObserver(playbackLoopObserver)
-                    self.playbackLoopObserver = nil
-                }
-                let player = AVPlayer(url: url)
-                player.isMuted = true
-                player.actionAtItemEnd = .none
-                playbackLoopObserver = NotificationCenter.default.addObserver(
-                    forName: .AVPlayerItemDidPlayToEndTime,
-                    object: player.currentItem,
-                    queue: .main
-                ) { _ in
-                    player.seek(to: .zero)
-                    player.play()
-                }
-                self.player = player
-                player.play()
-            }
-            .onDisappear {
-                if let playbackLoopObserver {
-                    NotificationCenter.default.removeObserver(playbackLoopObserver)
-                    self.playbackLoopObserver = nil
-                }
-                player?.pause()
-                player = nil
-            }
     }
 }
 

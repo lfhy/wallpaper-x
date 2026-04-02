@@ -87,6 +87,50 @@ final class ThumbnailCache {
         }
     }
 
+    /// 加载原始图片数据并保留其编码格式。
+    /// 适合 GIF 等需要保留动画信息的资源。
+    func loadImageData(
+        forKey key: String,
+        loader: @escaping () -> Data?,
+        completion: @escaping (NSImage?) -> Void
+    ) {
+        let cacheKey = key as NSString
+        if let cached = imageCache.object(forKey: cacheKey) {
+            completion(cached)
+            return
+        }
+
+        lock.lock()
+        if inFlight[key] != nil {
+            inFlight[key]?.append(completion)
+            lock.unlock()
+            return
+        }
+        inFlight[key] = [completion]
+        lock.unlock()
+
+        decodeQueue.async { [weak self] in
+            guard let self else { return }
+            let diskURL = Self.diskCacheURL(for: key)
+            if let data = try? Data(contentsOf: diskURL),
+               let image = NSImage(data: data) {
+                self.imageCache.setObject(image, forKey: cacheKey)
+                self.finish(key: key, image: image)
+                return
+            }
+
+            guard let data = loader(),
+                  let image = NSImage(data: data) else {
+                self.finish(key: key, image: nil)
+                return
+            }
+
+            self.imageCache.setObject(image, forKey: cacheKey)
+            try? data.write(to: diskURL, options: .atomic)
+            self.finish(key: key, image: image)
+        }
+    }
+
     /// 预取：触发后台加载但不注册回调。
     func prefetch(forKey key: String, loader: @escaping () -> NSImage?) {
         let cacheKey = key as NSString
@@ -118,6 +162,11 @@ final class ThumbnailCache {
     /// 清空内存缓存（磁盘缓存保留）
     func removeAll() {
         imageCache.removeAllObjects()
+    }
+
+    /// 同步读取内存缓存，不触发磁盘 IO。
+    func cachedImage(forKey key: String) -> NSImage? {
+        imageCache.object(forKey: key as NSString)
     }
 
     /// 清空磁盘缓存
