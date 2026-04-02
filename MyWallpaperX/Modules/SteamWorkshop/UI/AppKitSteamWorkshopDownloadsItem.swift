@@ -144,7 +144,7 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
         view.wantsLayer = true
 
         cardView.wantsLayer = true
-        cardView.layer?.backgroundColor = NSColor.secondarySystemBackground.cgColor
+        cardView.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         cardView.layer?.cornerRadius = 12
         cardView.layer?.borderWidth = 1
         cardView.layer?.borderColor = NSColor.white.withAlphaComponent(0.10).cgColor
@@ -161,6 +161,7 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
 
         previewContainer.wantsLayer = true
         previewContainer.layer?.cornerRadius = 12
+        previewContainer.layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
         previewContainer.layer?.masksToBounds = true
         previewContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         cardView.addSubview(previewContainer)
@@ -227,30 +228,18 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
             ? UIInteractionAnimation.cardEnterTiming
             : UIInteractionAnimation.cardExitTiming
 
-        let baseBorderColor: NSColor = isDarkAppearance
-            ? .white.withAlphaComponent(0.10)
-            : .separatorColor.withAlphaComponent(0.32)
-        let targetBorderColor = isHovering
-            ? NSColor.controlAccentColor.withAlphaComponent(isDarkAppearance ? 0.55 : 0.48).cgColor
-            : baseBorderColor.cgColor
-        let targetShadowOpacity: Float = isDarkAppearance
-            ? (isHovering ? 0.18 : 0)
-            : (isHovering ? 0.16 : 0.08)
+        refreshThemeAwareAppearance()
         let targetScale: CGFloat = isHovering ? Self.hoverScale : 1.0
 
         guard animated else {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            cardView.layer?.borderColor = targetBorderColor
-            cardView.layer?.shadowOpacity = targetShadowOpacity
             cardView.layer?.transform = CATransform3DMakeScale(targetScale, targetScale, 1)
             CATransaction.commit()
             currentCardScale = targetScale
             return
         }
 
-        cardView.layer?.borderColor = targetBorderColor
-        cardView.layer?.shadowOpacity = targetShadowOpacity
         applyCardScale(targetScale: targetScale, duration: duration, timing: timing)
     }
 
@@ -278,23 +267,17 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
         cardView.ensureLayerAnchorCentered()
     }
 
-    private var isDarkAppearance: Bool { view.isDarkAppearance }
-
     private func refreshThemeAwareAppearance() {
         guard let layer = cardView.layer else { return }
-        layer.backgroundColor = NSColor.secondarySystemBackground.cgColor
-        let baseBorderColor: NSColor = isDarkAppearance
-            ? .white.withAlphaComponent(0.10)
-            : .separatorColor.withAlphaComponent(0.28)
+        layer.backgroundColor = NSColor.controlBackgroundColor.cgColor
         layer.borderColor = (isHovering
-            ? NSColor.controlAccentColor.withAlphaComponent(isDarkAppearance ? 0.55 : 0.44)
-            : baseBorderColor).cgColor
+            ? NSColor.controlAccentColor.withAlphaComponent(0.30)
+            : NSColor.separatorColor.withAlphaComponent(0.22)).cgColor
         layer.shadowColor = NSColor.black.cgColor
-        layer.shadowOpacity = isDarkAppearance
-            ? (isHovering ? 0.18 : 0)
-            : (isHovering ? 0.14 : 0.06)
-        layer.shadowRadius = isHovering ? 12 : 8
+        layer.shadowOpacity = isHovering ? 0.14 : 0.04
+        layer.shadowRadius = isHovering ? 10 : 6
         layer.shadowOffset = CGSize(width: 0, height: -1)
+        previewContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         titleLabel.textColor = .labelColor
         metaLabel.textColor = .secondaryLabelColor
         secondaryMetaLabel.textColor = .secondaryLabelColor

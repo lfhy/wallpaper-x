@@ -38,6 +38,7 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
     private var cancellables = Set<AnyCancellable>()
     private var orderedIDs: [String] = []
     private var recordsByID: [String: SteamWorkshopDownloadRecord] = [:]
+    private var moduleActivationObserver: NSObjectProtocol?
 
     private let scrollView: NSScrollView = {
         let s = NSScrollView()
@@ -105,6 +106,12 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
         nil
     }
 
+    deinit {
+        if let moduleActivationObserver {
+            NotificationCenter.default.removeObserver(moduleActivationObserver)
+        }
+    }
+
     func requestFocus() {
         window?.makeFirstResponder(collectionView)
     }
@@ -150,7 +157,7 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
             }
             .store(in: &cancellables)
 
-        NotificationCenter.default.addObserver(
+        moduleActivationObserver = NotificationCenter.default.addObserver(
             forName: .moduleDidBecomeActive,
             object: nil,
             queue: .main

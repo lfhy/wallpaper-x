@@ -42,6 +42,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
     private var cancellables = Set<AnyCancellable>()
     private var itemsByID: [String: SteamWorkshopBrowserItem] = [:]
     private var orderedIDs: [String] = []
+    private var moduleActivationObserver: NSObjectProtocol?
 
     private let scrollView: NSScrollView = {
         let scrollView = NSScrollView()
@@ -77,7 +78,6 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
                 item: item,
                 isDownloading: self.service.isDownloading(itemID: id),
                 isDownloaded: self.service.isDownloaded(itemID: id),
-                downloadProgressText: self.service.downloadProgressLabel(for: id),
                 onOpen: { [weak self] in self?.onOpen(item) },
                 onDownload: { [weak self] in self?.onDownload(item) },
                 onCancelDownload: { [weak self] in self?.onCancelDownload() }
@@ -103,6 +103,12 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
+    }
+
+    deinit {
+        if let moduleActivationObserver {
+            NotificationCenter.default.removeObserver(moduleActivationObserver)
+        }
     }
 
     func requestFocus() {
@@ -141,13 +147,9 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
             .sink { [weak self] _ in self?.updateLayoutItemSize() }
             .store(in: &cancellables)
 
-        Publishers.CombineLatest3(
-            service.$activeDownloadItemID,
-            service.$activeDownloadProgressText,
-            service.$activeDownloadProgressFraction
-        )
+        service.$activeDownloadItemID
         .receive(on: DispatchQueue.main)
-        .sink { [weak self] _, _, _ in
+        .sink { [weak self] _ in
             self?.reloadVisibleItems()
         }
         .store(in: &cancellables)
@@ -169,7 +171,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
         }
         .store(in: &cancellables)
 
-        NotificationCenter.default.addObserver(
+        moduleActivationObserver = NotificationCenter.default.addObserver(
             forName: .moduleDidBecomeActive,
             object: nil,
             queue: .main
@@ -202,7 +204,6 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
                 item: item,
                 isDownloading: service.isDownloading(itemID: id),
                 isDownloaded: service.isDownloaded(itemID: id),
-                downloadProgressText: service.downloadProgressLabel(for: id),
                 onOpen: { [weak self] in self?.onOpen(item) },
                 onDownload: { [weak self] in self?.onDownload(item) },
                 onCancelDownload: { [weak self] in self?.onCancelDownload() }
