@@ -507,6 +507,7 @@ final class SteamWorkshopService: ObservableObject {
         static let steamCommunityBase = "https://steamcommunity.com/workshop/browse/"
         static let detailBase = "https://steamcommunity.com/sharedfiles/filedetails/"
         static let authorWorkshopPageSize = 30
+        static let detailFetchConcurrencyLimit = 4
         static let bundledSteamBundleName = "SteamCMDRuntime.bundle"
         static let bundledSteamRootName = "Steam"
         static let bundledSteamMetadataName = "runtime-metadata.json"
@@ -597,8 +598,12 @@ final class SteamWorkshopService: ObservableObject {
     @Published var steamGuardCode: String = ""
 
     private var browserFetchTask: Task<Void, Never>?
+    private var browserDetailHydrationTask: Task<Void, Never>?
     private var browserNextPage = 1
     private var prefetchedBrowserPageKeys = Set<String>()
+    private var pendingBrowserDetailStubs: [SteamWorkshopBrowseStub] = []
+    private var pendingBrowserDetailStubIDs = Set<String>()
+    private var browserDetailRetryCounts: [String: Int] = [:]
     private let defaults = UserDefaults.standard
     private var loginProcess: Process?
     private var loginInputHandle: FileHandle?
@@ -796,7 +801,11 @@ final class SteamWorkshopService: ObservableObject {
         return activeDownloadProgressText
     }
 
-    func updateBrowserScrollOffset(_ offsetY: CGFloat) {
+    func updateBrowserScrollMetrics(
+        offsetY: CGFloat,
+        contentHeight _: CGFloat,
+        viewportHeight _: CGFloat
+    ) {
         currentBrowserScrollOffsetY = offsetY
     }
 
@@ -805,6 +814,7 @@ final class SteamWorkshopService: ObservableObject {
     }
 
     func navigateToBrowse() {
+        cancelBrowserDetailHydration()
         requestedURL = requestedURLForCurrentContext(page: 1)
         navigationVersion += 1
         currentWorkshopItemID = nil
@@ -813,6 +823,7 @@ final class SteamWorkshopService: ObservableObject {
     }
 
     func refresh() {
+        cancelBrowserDetailHydration()
         navigationVersion += 1
         reloadInstalledItems()
         fetchBrowserItems(forceRefresh: true)
@@ -832,6 +843,9 @@ final class SteamWorkshopService: ObservableObject {
         let page = browserNextPage
         let expectedNavigationVersion = navigationVersion
 
+        logBrowserDebug(
+            "loadMore start context=\(browseContext.title) page=\(page) query=\(query) currentCount=\(browserItems.count) hasMore=\(hasMoreBrowserItems)"
+        )
         isLoadingMoreBrowserItems = true
 
         Task(priority: .userInitiated) { [weak self] in
@@ -857,32 +871,23 @@ final class SteamWorkshopService: ObservableObject {
                         .map(Self.fallbackBrowserItem)
                         .filter { !existingIDs.contains($0.id) }
                     self.browserItems.append(contentsOf: fallbackItems)
-                    self.statusMessage = self.prefetchStatusMessage(for: browseContext, page: page)
-                }
-                let items = try await Self.fetchWorkshopItems(stubs: stubs)
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    guard let self else { return }
-                    guard self.navigationVersion == expectedNavigationVersion, self.browseContext == browseContext else { return }
-                    self.mergeBrowserItems(items)
                     self.browserNextPage = page + 1
                     self.hasMoreBrowserItems = pageResult.hasMore
                     self.isLoadingMoreBrowserItems = false
-                    self.statusMessage = self.completedStatusMessage(
-                        for: browseContext,
-                        totalCount: self.browserItems.count,
-                        hasMore: self.hasMoreBrowserItems
-                    )
-                    self.saveBrowserCache(
+                    self.statusMessage = self.prefetchStatusMessage(for: browseContext, page: page)
+                    self.enqueueBrowserDetailHydration(
+                        stubs: stubs,
                         context: browseContext,
-                        source: source,
-                        query: query,
-                        trendingWindow: trendingWindow,
-                        themeFilter: themeFilter,
-                        ageRatingFilter: ageRatingFilter,
-                        resolutionFilter: resolutionFilter,
-                        categoryFilter: categoryFilter,
-                        items: self.browserItems
+                        navigationVersion: expectedNavigationVersion,
+                        resetQueue: false
+                    )
+                }
+                await MainActor.run {
+                    guard let self else { return }
+                    guard self.navigationVersion == expectedNavigationVersion, self.browseContext == browseContext else { return }
+                    self.statusMessage = self.baseCardsStatusMessage(for: browseContext, count: self.browserItems.count)
+                    self.logBrowserDebug(
+                        "loadMore enqueued context=\(browseContext.title) page=\(page) stubCount=\(stubs.count) total=\(self.browserItems.count) nextPage=\(self.browserNextPage) hasMore=\(self.hasMoreBrowserItems)"
                     )
                     self.prefetchUpcomingBrowserPageIfNeeded(
                         context: browseContext,
@@ -902,6 +907,9 @@ final class SteamWorkshopService: ObservableObject {
                     guard self.navigationVersion == expectedNavigationVersion, self.browseContext == browseContext else { return }
                     self.isLoadingMoreBrowserItems = false
                     self.hasMoreBrowserItems = false
+                    self.logBrowserDebug(
+                        "loadMore failed context=\(browseContext.title) page=\(page) error=\(error.localizedDescription)"
+                    )
                 }
             }
         }
@@ -967,6 +975,7 @@ final class SteamWorkshopService: ObservableObject {
         guard browseContext.isAuthorWorkshop else { return }
         browserFetchTask?.cancel()
         browserFetchTask = nil
+        cancelBrowserDetailHydration()
         selectedItemDetailTask?.cancel()
         selectedItemDetailTask = nil
         navigationVersion += 1
@@ -1810,6 +1819,7 @@ final class SteamWorkshopService: ObservableObject {
 
     private func fetchBrowserItems(forceRefresh: Bool = false) {
         browserFetchTask?.cancel()
+        cancelBrowserDetailHydration()
         browserNextPage = 2
         hasMoreBrowserItems = true
         isLoadingMoreBrowserItems = false
@@ -1823,6 +1833,9 @@ final class SteamWorkshopService: ObservableObject {
         let resolutionFilter = self.resolutionFilter
         let categoryFilter = self.categoryFilter
         let pageSize = browsePageSize(for: browseContext)
+        logBrowserDebug(
+            "fetchBrowserItems start context=\(browseContext.title) forceRefresh=\(forceRefresh) query=\(query) pageSize=\(pageSize)"
+        )
 
         if let cached = loadBrowserCache(
             context: browseContext,
@@ -1839,7 +1852,11 @@ final class SteamWorkshopService: ObservableObject {
             hasMoreBrowserItems = cached.items.count >= pageSize
             browserNextPage = max(2, (cached.items.count / pageSize) + 1)
             statusMessage = cachedStatusMessage(for: browseContext)
+            logBrowserDebug(
+                "fetchBrowserItems cacheHit context=\(browseContext.title) cachedCount=\(cached.items.count) nextPage=\(browserNextPage) hasMore=\(hasMoreBrowserItems)"
+            )
             if !forceRefresh && Date().timeIntervalSince(cached.fetchedAt) < Constants.cacheTTL {
+                logBrowserDebug("fetchBrowserItems skipRemote context=\(browseContext.title) reason=freshCache")
                 return
             }
         } else {
@@ -1870,37 +1887,28 @@ final class SteamWorkshopService: ObservableObject {
                     self.browserState = .loaded
                     self.hasMoreBrowserItems = pageResult.hasMore
                     self.browserNextPage = 2
+                    self.enqueueBrowserDetailHydration(
+                        stubs: stubs,
+                        context: browseContext,
+                        navigationVersion: self.navigationVersion,
+                        resetQueue: true
+                    )
+                    self.logBrowserDebug(
+                        "fetchBrowserItems page1Fallback context=\(browseContext.title) stubCount=\(stubs.count) hasMore=\(pageResult.hasMore)"
+                    )
                     self.statusMessage = self.browserItems.isEmpty
                         ? self.emptyResultsStatusMessage(for: browseContext)
                         : self.baseCardsStatusMessage(for: browseContext, count: self.browserItems.count)
                 }
-                let items = try await Self.fetchWorkshopItems(stubs: stubs)
-                guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard let self else { return }
                     guard self.browseContext == browseContext else { return }
-                    self.mergeBrowserItems(items)
                     self.browserState = .loaded
                     self.hasMoreBrowserItems = pageResult.hasMore
                     self.browserNextPage = 2
                     self.isLoadingMoreBrowserItems = false
-                    self.statusMessage = items.isEmpty
-                        ? self.emptyResultsStatusMessage(for: browseContext)
-                        : self.completedStatusMessage(
-                            for: browseContext,
-                            totalCount: items.count,
-                            hasMore: self.hasMoreBrowserItems
-                        )
-                    self.saveBrowserCache(
-                        context: browseContext,
-                        source: source,
-                        query: query,
-                        trendingWindow: trendingWindow,
-                        themeFilter: themeFilter,
-                        ageRatingFilter: ageRatingFilter,
-                        resolutionFilter: resolutionFilter,
-                        categoryFilter: categoryFilter,
-                        items: items
+                    self.logBrowserDebug(
+                        "fetchBrowserItems enqueued context=\(browseContext.title) stubCount=\(stubs.count) hasMore=\(pageResult.hasMore)"
                     )
                     self.prefetchUpcomingBrowserPageIfNeeded(
                         context: browseContext,
@@ -1922,10 +1930,17 @@ final class SteamWorkshopService: ObservableObject {
                     if self.browserItems.isEmpty {
                         self.browserState = .failed(error.localizedDescription)
                     }
+                    self.logBrowserDebug(
+                        "fetchBrowserItems failed context=\(browseContext.title) currentCount=\(self.browserItems.count) error=\(error.localizedDescription)"
+                    )
                     self.statusMessage = self.failureStatusMessage(for: browseContext)
                 }
             }
         }
+    }
+
+    private func logBrowserDebug(_ message: String) {
+        NSLog("[SteamWorkshopService] %@", message)
     }
 
     private func beginInteractiveSteamLogin(username: String, password: String) {
@@ -2343,6 +2358,142 @@ final class SteamWorkshopService: ObservableObject {
         }
     }
 
+    private func cancelBrowserDetailHydration() {
+        browserDetailHydrationTask?.cancel()
+        browserDetailHydrationTask = nil
+        pendingBrowserDetailStubs.removeAll()
+        pendingBrowserDetailStubIDs.removeAll()
+        browserDetailRetryCounts.removeAll()
+    }
+
+    private func enqueueBrowserDetailHydration(
+        stubs: [SteamWorkshopBrowseStub],
+        context: SteamWorkshopBrowseContext,
+        navigationVersion: Int,
+        resetQueue: Bool
+    ) {
+        if resetQueue {
+            browserDetailHydrationTask?.cancel()
+            browserDetailHydrationTask = nil
+            pendingBrowserDetailStubs.removeAll()
+            pendingBrowserDetailStubIDs.removeAll()
+            browserDetailRetryCounts.removeAll()
+        }
+
+        for stub in stubs {
+            guard pendingBrowserDetailStubIDs.insert(stub.id).inserted else { continue }
+            pendingBrowserDetailStubs.append(stub)
+        }
+
+        guard browserDetailHydrationTask == nil else { return }
+        browserDetailHydrationTask = Task(priority: .utility) { [weak self] in
+            await self?.runBrowserDetailHydrationQueue(
+                context: context,
+                navigationVersion: navigationVersion
+            )
+        }
+    }
+
+    private func runBrowserDetailHydrationQueue(
+        context: SteamWorkshopBrowseContext,
+        navigationVersion: Int
+    ) async {
+        defer {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if self.navigationVersion == navigationVersion, self.browseContext == context {
+                    self.statusMessage = self.completedStatusMessage(
+                        for: context,
+                        totalCount: self.browserItems.count,
+                        hasMore: self.hasMoreBrowserItems
+                    )
+                    self.saveBrowserCache(
+                        context: context,
+                        source: self.source,
+                        query: self.browserQuery.trimmingCharacters(in: .whitespacesAndNewlines),
+                        trendingWindow: self.trendingWindow,
+                        themeFilter: self.themeFilter,
+                        ageRatingFilter: self.ageRatingFilter,
+                        resolutionFilter: self.resolutionFilter,
+                        categoryFilter: self.categoryFilter,
+                        items: self.browserItems
+                    )
+                }
+                self.browserDetailHydrationTask = nil
+            }
+        }
+
+        while !Task.isCancelled {
+            let stub: SteamWorkshopBrowseStub? = await MainActor.run {
+                guard self.navigationVersion == navigationVersion, self.browseContext == context else {
+                    self.pendingBrowserDetailStubs.removeAll()
+                    self.pendingBrowserDetailStubIDs.removeAll()
+                    self.browserDetailRetryCounts.removeAll()
+                    return nil
+                }
+                guard !self.pendingBrowserDetailStubs.isEmpty else { return nil }
+                let next = self.pendingBrowserDetailStubs.removeFirst()
+                self.pendingBrowserDetailStubIDs.remove(next.id)
+                return next
+            }
+
+            guard let stub else { break }
+
+            do {
+                let item = try await Self.fetchWorkshopItem(stub: stub)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard self.navigationVersion == navigationVersion, self.browseContext == context else { return }
+                    self.browserDetailRetryCounts[stub.id] = nil
+                    self.mergeBrowserItem(item)
+                    if self.selectedBrowserItem?.id == item.id {
+                        self.selectedBrowserItem = item
+                        self.selectedBrowserItemError = nil
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 800_000_000)
+            } catch {
+                guard !Task.isCancelled else { return }
+                let nsError = error as NSError
+                if nsError.domain == "SteamWorkshop", nsError.code == 13 {
+                    await MainActor.run {
+                        self.browserDetailRetryCounts[stub.id] = nil
+                    }
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    continue
+                }
+
+                let shouldRetry = nsError.domain == NSURLErrorDomain && nsError.code == 429
+                let attempt = await MainActor.run { () -> Int in
+                    let next = (self.browserDetailRetryCounts[stub.id] ?? 0) + 1
+                    self.browserDetailRetryCounts[stub.id] = next
+                    return next
+                }
+
+                if shouldRetry, attempt <= 4 {
+                    await MainActor.run {
+                        if self.pendingBrowserDetailStubIDs.insert(stub.id).inserted {
+                            self.pendingBrowserDetailStubs.insert(stub, at: 0)
+                        }
+                        self.logBrowserDebug(
+                            "detail hydration rate-limited id=\(stub.id) attempt=\(attempt) queueCount=\(self.pendingBrowserDetailStubs.count)"
+                        )
+                    }
+                    let backoffSeconds = UInt64(min(20, attempt * 4))
+                    try? await Task.sleep(nanoseconds: backoffSeconds * 1_000_000_000)
+                    continue
+                }
+
+                await MainActor.run {
+                    self.logBrowserDebug(
+                        "detail hydration failed id=\(stub.id) code=\(nsError.code) domain=\(nsError.domain) error=\(nsError.localizedDescription)"
+                    )
+                }
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+            }
+        }
+    }
+
     private func needsDetailRefresh(for item: SteamWorkshopBrowserItem) -> Bool {
         item.detailFields.isEmpty
         || item.fileSizeText == nil
@@ -2424,7 +2575,6 @@ final class SteamWorkshopService: ObservableObject {
             ), !pageResult.stubs.isEmpty else {
                 return
             }
-            _ = try? await Self.fetchWorkshopItems(stubs: pageResult.stubs)
         }
     }
 
@@ -2676,7 +2826,10 @@ final class SteamWorkshopService: ObservableObject {
 
     private static func makeDetailURL(id: String) -> URL {
         var components = URLComponents(string: Constants.detailBase)!
-        components.queryItems = [URLQueryItem(name: "id", value: id)]
+        components.queryItems = [
+            URLQueryItem(name: "id", value: id),
+            URLQueryItem(name: "searchtext", value: "")
+        ]
         return components.url!
     }
 
@@ -2750,28 +2903,38 @@ final class SteamWorkshopService: ObservableObject {
     }
 
     private static func fetchWorkshopItems(stubs: [SteamWorkshopBrowseStub]) async throws -> [SteamWorkshopBrowserItem] {
-        return try await withThrowingTaskGroup(of: (Int, SteamWorkshopBrowserItem?).self) { group in
-            for (index, stub) in stubs.enumerated() {
-                group.addTask {
-                    do {
-                        return (index, try await fetchWorkshopItem(stub: stub))
-                    } catch {
-                        let nsError = error as NSError
-                        if nsError.domain == "SteamWorkshop", nsError.code == 13 {
-                            return (index, nil)
+        guard !stubs.isEmpty else { return [] }
+        let chunkSize = max(1, Constants.detailFetchConcurrencyLimit)
+        var resolvedItems: [SteamWorkshopBrowserItem] = []
+        resolvedItems.reserveCapacity(stubs.count)
+
+        for chunkStart in stride(from: 0, to: stubs.count, by: chunkSize) {
+            let chunk = Array(stubs[chunkStart..<min(chunkStart + chunkSize, stubs.count)])
+            let chunkItems = try await withThrowingTaskGroup(of: (Int, SteamWorkshopBrowserItem?).self) { group in
+                for (offset, stub) in chunk.enumerated() {
+                    group.addTask {
+                        do {
+                            return (offset, try await fetchWorkshopItem(stub: stub))
+                        } catch {
+                            let nsError = error as NSError
+                            if nsError.domain == "SteamWorkshop", nsError.code == 13 {
+                                return (offset, nil)
+                            }
+                            let fallback = await fallbackBrowserItem(from: stub)
+                            return (offset, try? await enrichPreviewKind(for: fallback))
                         }
-                        let fallback = await fallbackBrowserItem(from: stub)
-                        return (index, try? await enrichPreviewKind(for: fallback))
                     }
                 }
-            }
 
-            var results = Array<SteamWorkshopBrowserItem?>(repeating: nil, count: stubs.count)
-            for try await (index, item) in group {
-                results[index] = item
+                var results = Array<SteamWorkshopBrowserItem?>(repeating: nil, count: chunk.count)
+                for try await (offset, item) in group {
+                    results[offset] = item
+                }
+                return results.compactMap { $0 }
             }
-            return results.compactMap { $0 }
+            resolvedItems.append(contentsOf: chunkItems)
         }
+        return resolvedItems
     }
 
     private static func fetchWorkshopItem(stub: SteamWorkshopBrowseStub) async throws -> SteamWorkshopBrowserItem {
@@ -2831,9 +2994,20 @@ final class SteamWorkshopService: ObservableObject {
         request.timeoutInterval = 20
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) MyWallpaperX/1.0", forHTTPHeaderField: "User-Agent")
         request.setValue("zh-CN,zh;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+        guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw NSError(
+                domain: NSURLErrorDomain,
+                code: http.statusCode,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Steam 页面请求失败，HTTP \(http.statusCode)：\(url.absoluteString)"
+                ]
+            )
         }
         guard let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .unicode) else {
             throw URLError(.cannotDecodeRawData)

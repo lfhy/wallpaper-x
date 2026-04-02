@@ -36,11 +36,9 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
     private var observers: [NSObjectProtocol] = []
     private var cancellables = Set<AnyCancellable>()
 
-    let browserIdentifiers: [NSToolbarItem.Identifier] = [
+    private let discoveryBrowserIdentifiers: [NSToolbarItem.Identifier] = [
         .sidebarTrackingSeparator,
         NSToolbarItem.Identifier("ToolbarTitle"),
-        .space,
-        .steamAuthorBack,
         .flexibleSpace,
         .steamAccount,
         .space,
@@ -56,6 +54,27 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
         .space,
         .steamSearch
     ]
+
+    private let authorWorkshopBrowserIdentifiers: [NSToolbarItem.Identifier] = [
+        .sidebarTrackingSeparator,
+        NSToolbarItem.Identifier("ToolbarTitle"),
+        .flexibleSpace,
+        .steamAuthorBack,
+        .space,
+        .steamAccount,
+        .space,
+        .steamRefresh,
+        .space,
+        .steamZoom,
+        .space,
+        .steamSearch
+    ]
+
+    var browserIdentifiers: [NSToolbarItem.Identifier] {
+        SteamWorkshopService.shared.isBrowsingAuthorWorkshop
+            ? authorWorkshopBrowserIdentifiers
+            : discoveryBrowserIdentifiers
+    }
 
     let downloadsIdentifiers: [NSToolbarItem.Identifier] = [
         .sidebarTrackingSeparator,

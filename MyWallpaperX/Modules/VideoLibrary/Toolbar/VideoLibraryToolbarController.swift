@@ -296,6 +296,12 @@ final class VideoLibraryToolbarController: NSObject, NSToolbarDelegate, NSSearch
             let isDownloads = n.userInfo?["isDownloads"] as? Bool ?? false
             self?.handleModuleLayoutSwitch(to: enabled ? (isDownloads ? .steamDownloads : .steamWorkshop) : .videoLibrary)
         }
+        NotificationCenter.default.addObserver(forName: .steamWorkshopBrowseContextDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.currentLayoutModule == .steamWorkshop else { return }
+                self.applyIdentifiers(self.steamWorkshopToolbarController.browserIdentifiers)
+            }
+        }
     }
 
     private enum LayoutModule {

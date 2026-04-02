@@ -29,10 +29,27 @@ struct AppKitSteamWorkshopBrowserGridView: NSViewRepresentable {
     }
 }
 
-final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
+final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NSCollectionViewDelegateFlowLayout {
     private enum Section {
         case main
+        case status
     }
+
+    private enum FooterState: Equatable {
+        case hidden
+        case loading
+        case exhausted
+
+        var logLabel: String {
+            switch self {
+            case .hidden: return "hidden"
+            case .loading: return "loading"
+            case .exhausted: return "exhausted"
+            }
+        }
+    }
+
+    private static let footerItemID = "__steam_workshop_grid_footer__"
 
     private let service: SteamWorkshopService
     var onOpen: (SteamWorkshopBrowserItem) -> Void
@@ -42,6 +59,10 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
     private var cancellables = Set<AnyCancellable>()
     private var itemsByID: [String: SteamWorkshopBrowserItem] = [:]
     private var orderedIDs: [String] = []
+    private var displayIDs: [String] = []
+    private var footerState: FooterState = .hidden
+    private var isApplyingSnapshot = false
+    private var pendingFooterSnapshotRefresh = false
     private var moduleActivationObserver: NSObjectProtocol?
 
     private let scrollView: NSScrollView = {
@@ -70,9 +91,17 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
     }()
 
     private lazy var dataSource: NSCollectionViewDiffableDataSource<Section, String> = {
-        NSCollectionViewDiffableDataSource<Section, String>(collectionView: collectionView) { [weak self] _, indexPath, id in
-            guard let self,
-                  let item = self.itemsByID[id] else { return nil }
+        let dataSource = NSCollectionViewDiffableDataSource<Section, String>(collectionView: collectionView) { [weak self] _, indexPath, id in
+            guard let self else { return nil }
+            if id == Self.footerItemID {
+                let item = AppKitSteamWorkshopBrowserFooterItem()
+                item.configure(
+                    text: self.footerState == .loading ? "正在加载更多项目…" : "没有更多内容了",
+                    showsProgress: self.footerState == .loading
+                )
+                return item
+            }
+            guard let item = self.itemsByID[id] else { return nil }
             let cell = AppKitSteamWorkshopBrowserItem(nibName: nil, bundle: nil)
             cell.configure(
                 item: item,
@@ -86,6 +115,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
             )
             return cell
         }
+        return dataSource
     }()
 
     init(
@@ -126,8 +156,10 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
 
+        log("setup footerItemID=\(Self.footerItemID)")
         collectionView.collectionViewLayout = flowLayout
         collectionView.dataSource = dataSource
+        collectionView.delegate = self
         scrollView.documentView = collectionView
         scrollView.contentView.postsBoundsChangedNotifications = true
 
@@ -170,6 +202,16 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
             }
             .store(in: &cancellables)
 
+        Publishers.CombineLatest(
+            service.$isLoadingMoreBrowserItems,
+            service.$hasMoreBrowserItems
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] _, _ in
+            self?.refreshFooterState()
+        }
+        .store(in: &cancellables)
+
         NotificationCenter.default.publisher(
             for: NSView.boundsDidChangeNotification,
             object: scrollView.contentView
@@ -177,7 +219,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
         .receive(on: DispatchQueue.main)
         .sink { [weak self] _ in
             guard let self else { return }
-            self.service.updateBrowserScrollOffset(self.scrollView.contentView.bounds.origin.y)
+            self.updateBrowserScrollMetrics()
             self.checkLoadMore()
         }
         .store(in: &cancellables)
@@ -206,21 +248,40 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
     private func applyItems(_ items: [SteamWorkshopBrowserItem]) {
         itemsByID = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
         orderedIDs = items.map(\.id)
+        footerState = resolvedFooterState()
+        displayIDs = orderedIDs + (footerState == .hidden ? [] : [Self.footerItemID])
+        log("applyItems count=\(items.count)")
 
         var snapshot = NSDiffableDataSourceSnapshot<Section, String>()
         snapshot.appendSections([.main])
         snapshot.appendItems(orderedIDs, toSection: .main)
-        dataSource.apply(snapshot, animatingDifferences: true)
-        DispatchQueue.main.async { [weak self] in
-            self?.checkLoadMore()
+        if footerState != .hidden {
+            snapshot.appendSections([.status])
+            snapshot.appendItems([Self.footerItemID], toSection: .status)
+        }
+        isApplyingSnapshot = true
+        dataSource.apply(snapshot, animatingDifferences: true) { [weak self] in
+            guard let self else { return }
+            self.isApplyingSnapshot = false
+            self.log("snapshot applied count=\(self.displayIDs.count)")
+            self.refreshFooterState(forceReload: true)
+            self.updateBrowserScrollMetrics()
+            self.checkLoadMore()
         }
     }
 
     private func reloadVisibleItems() {
         for indexPath in collectionView.indexPathsForVisibleItems() {
-            guard indexPath.item < orderedIDs.count,
-                  let cell = collectionView.item(at: indexPath) as? AppKitSteamWorkshopBrowserItem else { continue }
-            let id = orderedIDs[indexPath.item]
+            guard let id = dataSource.itemIdentifier(for: indexPath) else { continue }
+            if id == Self.footerItemID {
+                guard let footerItem = collectionView.item(at: indexPath) as? AppKitSteamWorkshopBrowserFooterItem else { continue }
+                footerItem.configure(
+                    text: footerState == .loading ? "正在加载更多项目…" : "没有更多内容了",
+                    showsProgress: footerState == .loading
+                )
+                continue
+            }
+            guard let cell = collectionView.item(at: indexPath) as? AppKitSteamWorkshopBrowserItem else { continue }
             guard let item = itemsByID[id] else { continue }
             cell.configure(
                 item: item,
@@ -241,7 +302,12 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
         let contentHeight = documentView.frame.height
         let viewportHeight = scrollView.contentView.bounds.height
         let offsetY = scrollView.contentView.bounds.origin.y
+        guard contentHeight > 0, viewportHeight > 0 else {
+            log("checkLoadMore skip reason=zeroMetrics offsetY=\(offsetY) contentHeight=\(contentHeight) viewportHeight=\(viewportHeight)")
+            return
+        }
         if contentHeight - offsetY - viewportHeight < 180 {
+            log("checkLoadMore trigger offsetY=\(offsetY) contentHeight=\(contentHeight) viewportHeight=\(viewportHeight) itemCount=\(orderedIDs.count)")
             service.loadMoreBrowserItemsIfNeeded()
         }
     }
@@ -265,6 +331,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
         let previewHeight = floor(cardWidth - 28)
         let cardHeight = previewHeight + 132
         let newSize = NSSize(width: floor(cardWidth), height: floor(cardHeight))
+
         guard flowLayout.itemSize != newSize else { return }
         flowLayout.itemSize = newSize
         collectionView.collectionViewLayout?.invalidateLayout()
@@ -275,12 +342,165 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
             service.consumePendingBrowserScrollRestoreOffset()
             return
         }
-        scrollView.layoutSubtreeIfNeeded()
         let maxOffsetY = max(0, documentView.bounds.height - scrollView.contentView.bounds.height)
         let clampedOffsetY = min(max(0, offsetY), maxOffsetY)
         scrollView.contentView.setBoundsOrigin(NSPoint(x: 0, y: clampedOffsetY))
         scrollView.reflectScrolledClipView(scrollView.contentView)
-        service.updateBrowserScrollOffset(clampedOffsetY)
+        updateBrowserScrollMetrics()
         service.consumePendingBrowserScrollRestoreOffset()
+    }
+
+    private func updateBrowserScrollMetrics() {
+        guard let documentView = scrollView.documentView else { return }
+        service.updateBrowserScrollMetrics(
+            offsetY: scrollView.contentView.bounds.origin.y,
+            contentHeight: documentView.frame.height,
+            viewportHeight: scrollView.contentView.bounds.height
+        )
+    }
+
+    private func refreshFooterState(forceReload: Bool = false) {
+        let previousState = footerState
+        let newState = resolvedFooterState()
+        let stateChanged = newState != footerState
+        footerState = newState
+        updateLayoutItemSize()
+        log(
+            "refreshFooterState prev=\(previousState.logLabel) new=\(newState.logLabel) forceReload=\(forceReload) " +
+            "isApplyingSnapshot=\(isApplyingSnapshot) isLoadingMore=\(service.isLoadingMoreBrowserItems) hasMore=\(service.hasMoreBrowserItems) itemCount=\(orderedIDs.count)"
+        )
+        
+        guard stateChanged || forceReload else { return }
+        let visibilityChanged = previousState == .hidden || newState == .hidden
+        if stateChanged && visibilityChanged {
+            scheduleFooterSnapshotRefresh(reason: "visibilityChanged prev=\(previousState.logLabel) new=\(newState.logLabel)")
+            return
+        }
+        configureVisibleFooterIfNeeded()
+    }
+
+    private func resolvedFooterState() -> FooterState {
+        if service.isLoadingMoreBrowserItems {
+            return .loading
+        }
+        if !service.hasMoreBrowserItems, !orderedIDs.isEmpty {
+            return .exhausted
+        }
+        return .hidden
+    }
+
+    private func configureVisibleFooterIfNeeded() {
+        let footerItems = collectionView.visibleItems().compactMap { $0 as? AppKitSteamWorkshopBrowserFooterItem }
+        log("configureVisibleFooterIfNeeded visibleCount=\(footerItems.count) state=\(footerState.logLabel)")
+        footerItems.forEach {
+            $0.configure(
+                text: footerState == .loading ? "正在加载更多项目…" : "没有更多内容了",
+                showsProgress: footerState == .loading
+            )
+        }
+    }
+
+    private func scheduleFooterSnapshotRefresh(reason: String) {
+        pendingFooterSnapshotRefresh = true
+        log("scheduleFooterSnapshotRefresh reason=\(reason)")
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard self.pendingFooterSnapshotRefresh else { return }
+            guard !self.isApplyingSnapshot else {
+                self.log("defer footer snapshot refresh because snapshot is still applying")
+                return
+            }
+            self.pendingFooterSnapshotRefresh = false
+            self.applyItems(self.service.displayedBrowserItems)
+        }
+    }
+
+    func collectionView(_ collectionView: NSCollectionView, layout collectionViewLayout: NSCollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> NSSize {
+        guard let id = dataSource.itemIdentifier(for: indexPath) else {
+            return flowLayout.itemSize
+        }
+        if id == Self.footerItemID {
+            let inset = flowLayout.sectionInset
+            let width = max(120, bounds.width - inset.left - inset.right)
+            return NSSize(width: floor(width), height: 40)
+        }
+        return flowLayout.itemSize
+    }
+
+    private func log(_ message: String) {
+        NSLog("[SteamWorkshopGrid] %@", message)
+    }
+}
+
+private final class AppKitSteamWorkshopBrowserFooterItem: NSCollectionViewItem {
+    override func loadView() {
+        view = AppKitSteamWorkshopBrowserFooterView(frame: .zero)
+    }
+
+    func configure(text: String, showsProgress: Bool) {
+        (view as? AppKitSteamWorkshopBrowserFooterView)?.configure(text: text, showsProgress: showsProgress)
+    }
+}
+
+private final class AppKitSteamWorkshopBrowserFooterView: NSView {
+    private let stackView = NSStackView()
+    private let progressIndicator = NSProgressIndicator()
+    private let statusIconView = NSImageView()
+    private let textField = NSTextField(labelWithString: "")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    func configure(text: String, showsProgress: Bool) {
+        NSLog("[SteamWorkshopGridFooter] configure text=%@ showsProgress=%@", text, showsProgress ? "true" : "false")
+        textField.stringValue = text
+        progressIndicator.isHidden = !showsProgress
+        statusIconView.isHidden = showsProgress
+        if showsProgress {
+            progressIndicator.startAnimation(nil)
+        } else {
+            progressIndicator.stopAnimation(nil)
+        }
+    }
+
+    private func setup() {
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        identifier = NSUserInterfaceItemIdentifier("SteamWorkshopBrowserFooterView")
+
+        progressIndicator.style = .spinning
+        progressIndicator.controlSize = .small
+        progressIndicator.isDisplayedWhenStopped = false
+
+        statusIconView.image = NSImage(systemSymbolName: "checkmark.circle", accessibilityDescription: "没有更多内容")
+        statusIconView.contentTintColor = .secondaryLabelColor
+
+        textField.font = .systemFont(ofSize: 12)
+        textField.textColor = .secondaryLabelColor
+        textField.alignment = .center
+        textField.lineBreakMode = .byTruncatingTail
+
+        stackView.orientation = .horizontal
+        stackView.alignment = .centerY
+        stackView.distribution = .gravityAreas
+        stackView.spacing = 8
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        stackView.addArrangedSubview(progressIndicator)
+        stackView.addArrangedSubview(statusIconView)
+        stackView.addArrangedSubview(textField)
+
+        addSubview(stackView)
+        NSLayoutConstraint.activate([
+            stackView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            stackView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            textField.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -24)
+        ])
     }
 }

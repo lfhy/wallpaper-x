@@ -89,11 +89,6 @@ private struct SteamWorkshopBrowserContentView: View {
                             service.cancelActiveDownload()
                         }
                     )
-
-                    if service.isLoadingMoreBrowserItems {
-                        SteamWorkshopBrowserLoadMoreView(text: "正在加载更多项目…")
-                            .padding(.bottom, 10)
-                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -741,22 +736,6 @@ private struct SteamWorkshopBrowserErrorView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 80)
-    }
-}
-
-private struct SteamWorkshopBrowserLoadMoreView: View {
-    let text: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            ProgressView()
-                .controlSize(.small)
-            Text(text)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 18)
     }
 }
 
