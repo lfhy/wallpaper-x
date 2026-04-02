@@ -35,6 +35,8 @@ extension Notification.Name {
     static let staticImageLibraryModeDidChange = Notification.Name("StaticImageLibraryModeDidChange")
     /// Steam 创意工坊模式切换通知，由 DetailView 发出，Steam 模块接收
     static let steamWorkshopModeDidChange = Notification.Name("SteamWorkshopModeDidChange")
+    /// Steam 创意工坊浏览上下文变化通知，用于同步作者工坊返回态与筛选控件状态
+    static let steamWorkshopBrowseContextDidChange = Notification.Name("SteamWorkshopBrowseContextDidChange")
 }
 
 struct DetailView: View {

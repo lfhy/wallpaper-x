@@ -20,7 +20,7 @@ enum SteamWorkshopSource: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .featured: return "最热门"
-        case .recent: return "最新"
+        case .recent: return "最新发布"
         case .subscribed: return "最多订阅"
         case .updated: return "最后更新"
         }
@@ -103,7 +103,7 @@ enum SteamWorkshopThemeFilter: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .all: return "全部主题"
+        case .all: return "全部"
         case .abstract: return "抽象"
         case .anime: return "动漫"
         case .animal: return "动物"
@@ -113,7 +113,7 @@ enum SteamWorkshopThemeFilter: String, CaseIterable, Identifiable {
         case .space: return "太空"
         case .scifi: return "科幻"
         case .cgi: return "CGI"
-        case .cyberpunk: return "赛博朋克"
+        case .cyberpunk: return "赛博"
         case .fantasy: return "奇幻"
         case .game: return "游戏"
         case .movie: return "影视"
@@ -143,9 +143,9 @@ enum SteamWorkshopAgeRatingFilter: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .all: return "全部年龄"
-        case .everyone: return "全年龄"
-        case .mature: return "成人"
-        case .unspecified: return "未标注"
+        case .everyone: return "大众级"
+        case .mature: return "成人级"
+        case .unspecified: return "未指定"
         }
     }
 
@@ -213,6 +213,41 @@ enum SteamWorkshopAuthenticationPhase: Equatable {
     case authenticated
 }
 
+private enum SteamWorkshopBrowseContext: Equatable {
+    case discovery
+    case authorWorkshop(authorName: String, workshopURL: URL)
+
+    var isAuthorWorkshop: Bool {
+        if case .authorWorkshop = self {
+            return true
+        }
+        return false
+    }
+
+    var title: String {
+        switch self {
+        case .discovery:
+            return "Steam 创意工坊"
+        case .authorWorkshop(let authorName, _):
+            return "\(authorName) 的工坊"
+        }
+    }
+
+    var cacheKeyComponent: String {
+        switch self {
+        case .discovery:
+            return "discovery"
+        case .authorWorkshop(_, let workshopURL):
+            let normalized = workshopURL.absoluteString
+                .lowercased()
+                .replacingOccurrences(of: #"[^a-z0-9]+"#, with: "-", options: .regularExpression)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+            let slug = normalized.isEmpty ? "author-workshop" : normalized
+            return "author-v2-\(String(slug.prefix(120)))"
+        }
+    }
+}
+
 enum SteamWorkshopPreviewAssetKind: String, Equatable, Codable {
     case unknown
     case stillImage
@@ -236,6 +271,7 @@ struct SteamWorkshopBrowserItem: Identifiable, Equatable, Codable {
     let title: String
     let author: String
     let authorProfileURL: URL?
+    let authorWorkshopURL: URL?
     let hasAdultContent: Bool
     let summary: String
     let descriptionText: String
@@ -298,6 +334,11 @@ struct SteamWorkshopDownloadRecord: Identifiable, Equatable {
             return "下载失败"
         }
     }
+
+    var failureMessage: String? {
+        guard case let .failed(message) = status else { return nil }
+        return message
+    }
 }
 
 private struct SteamWorkshopProject: Decodable {
@@ -314,6 +355,7 @@ private struct SteamWorkshopDetailParseResult {
     let title: String
     let author: String
     let authorProfileURL: URL?
+    let authorWorkshopURL: URL?
     let summary: String
     let descriptionText: String
     let tags: [String]
@@ -338,11 +380,32 @@ private struct SteamWorkshopBrowserCacheSnapshot: Codable {
     let items: [SteamWorkshopBrowserItem]
 }
 
+private struct SteamWorkshopBrowseStubPage {
+    let stubs: [SteamWorkshopBrowseStub]
+    let hasMore: Bool
+}
+
+private struct SteamWorkshopDiscoveryBrowseSnapshot {
+    let browserItems: [SteamWorkshopBrowserItem]
+    let browserState: SteamWorkshopBrowserLoadState
+    let hasMoreBrowserItems: Bool
+    let browserNextPage: Int
+    let statusMessage: String
+    let currentPageTitle: String
+    let requestedURL: URL
+    let browserQuery: String
+    let currentWorkshopItemID: String?
+    let selectedBrowserItem: SteamWorkshopBrowserItem?
+    let prefetchedBrowserPageKeys: Set<String>
+    let scrollOffsetY: CGFloat
+}
+
 private struct SteamWorkshopBrowseStub: Equatable {
     let id: String
     let title: String?
     let author: String?
     let authorProfileURL: URL?
+    let authorWorkshopURL: URL?
     let hasAdultContent: Bool
     let summary: String?
     let previewImageURL: URL?
@@ -443,6 +506,7 @@ final class SteamWorkshopService: ObservableObject {
         static let workshopAppID = "431960"
         static let steamCommunityBase = "https://steamcommunity.com/workshop/browse/"
         static let detailBase = "https://steamcommunity.com/sharedfiles/filedetails/"
+        static let authorWorkshopPageSize = 30
         static let bundledSteamBundleName = "SteamCMDRuntime.bundle"
         static let bundledSteamRootName = "Steam"
         static let bundledSteamMetadataName = "runtime-metadata.json"
@@ -468,7 +532,11 @@ final class SteamWorkshopService: ObservableObject {
         ]
     }
 
-    @Published private(set) var browserItems: [SteamWorkshopBrowserItem] = []
+    @Published private(set) var browserItems: [SteamWorkshopBrowserItem] = [] {
+        didSet { updateDisplayedBrowserItems() }
+    }
+    @Published private(set) var displayedBrowserItems: [SteamWorkshopBrowserItem] = []
+    @Published private(set) var pendingBrowserScrollRestoreOffset: CGFloat?
     @Published private(set) var browserState: SteamWorkshopBrowserLoadState = .idle
     @Published private(set) var isLoadingMoreBrowserItems = false
     @Published private(set) var hasMoreBrowserItems = true
@@ -477,7 +545,10 @@ final class SteamWorkshopService: ObservableObject {
         didSet { navigateToBrowse() }
     }
     @Published var browserQuery: String = "" {
-        didSet { navigateToBrowse() }
+        didSet {
+            guard !isUpdatingBrowserQueryProgrammatically else { return }
+            handleBrowserQueryChanged()
+        }
     }
     @Published var trendingWindow: SteamWorkshopTrendingWindow = .week {
         didSet { navigateToBrowse() }
@@ -499,6 +570,9 @@ final class SteamWorkshopService: ObservableObject {
     @Published var statusMessage: String = "浏览页使用原生网格展示，后台抓取 Wallpaper Engine 创意工坊视频信息。"
     @Published var currentWorkshopItemID: String?
     @Published var currentPageTitle: String = "Steam 创意工坊"
+    @Published private(set) var browserSectionTitle: String = "Steam 创意工坊"
+    @Published private(set) var isBrowsingAuthorWorkshop = false
+    @Published private(set) var activeAuthorWorkshopName: String?
     @Published var requestedURL: URL
     @Published var navigationVersion: Int = 0
     @Published var activeDownloadItemID: String?
@@ -545,6 +619,30 @@ final class SteamWorkshopService: ObservableObject {
     private var activeDownloadExpectedBytes: Int64?
     private var activeDownloadWasCancelled = false
     private var selectedItemDetailTask: Task<Void, Never>?
+    private var discoveryBrowseSnapshot: SteamWorkshopDiscoveryBrowseSnapshot?
+    private var currentBrowserScrollOffsetY: CGFloat = 0
+    private var savedDiscoveryQueryBeforeAuthorBrowse: String?
+    private var isUpdatingBrowserQueryProgrammatically = false
+    private var browseContext: SteamWorkshopBrowseContext = .discovery {
+        didSet {
+            browserSectionTitle = browseContext.title
+            isBrowsingAuthorWorkshop = browseContext.isAuthorWorkshop
+            if case let .authorWorkshop(authorName, _) = browseContext {
+                activeAuthorWorkshopName = authorName
+            } else {
+                activeAuthorWorkshopName = nil
+            }
+            updateDisplayedBrowserItems()
+            NotificationCenter.default.post(
+                name: .steamWorkshopBrowseContextDidChange,
+                object: nil,
+                userInfo: [
+                    "isAuthorWorkshop": browseContext.isAuthorWorkshop,
+                    "title": browseContext.title
+                ]
+            )
+        }
+    }
 
     private init() {
         requestedURL = SteamWorkshopService.makeBrowseURL(
@@ -660,16 +758,37 @@ final class SteamWorkshopService: ObservableObject {
         return parts.isEmpty ? "未筛选" : parts.joined(separator: " · ")
     }
 
+    var activeBrowserContextSummary: String? {
+        guard let activeAuthorWorkshopName else { return nil }
+        return "当前正在浏览 \(activeAuthorWorkshopName) 的创意工坊作品"
+    }
+
+    var hasVisibleBrowserItems: Bool {
+        !displayedBrowserItems.isEmpty
+    }
+
     func isDownloading(itemID: String) -> Bool {
         activeDownloadItemID == itemID
     }
 
+    func latestDownloadRecord(for itemID: String) -> SteamWorkshopDownloadRecord? {
+        downloads.first(where: { $0.id == itemID })
+    }
+
     func downloadRecord(for itemID: String) -> SteamWorkshopDownloadRecord? {
-        downloads.first(where: { $0.id == itemID && $0.status == .ready })
+        guard let record = latestDownloadRecord(for: itemID),
+              record.status == .ready else {
+            return nil
+        }
+        return record
     }
 
     func isDownloaded(itemID: String) -> Bool {
         downloadRecord(for: itemID) != nil
+    }
+
+    func latestDownloadFailure(for itemID: String) -> String? {
+        latestDownloadRecord(for: itemID)?.failureMessage
     }
 
     func downloadProgressLabel(for itemID: String) -> String? {
@@ -677,20 +796,19 @@ final class SteamWorkshopService: ObservableObject {
         return activeDownloadProgressText
     }
 
+    func updateBrowserScrollOffset(_ offsetY: CGFloat) {
+        currentBrowserScrollOffsetY = offsetY
+    }
+
+    func consumePendingBrowserScrollRestoreOffset() {
+        pendingBrowserScrollRestoreOffset = nil
+    }
+
     func navigateToBrowse() {
-        requestedURL = Self.makeBrowseURL(
-            source: source,
-            query: browserQuery,
-            trendingWindow: trendingWindow,
-            themeFilter: themeFilter,
-            ageRatingFilter: ageRatingFilter,
-            resolutionFilter: resolutionFilter,
-            categoryFilter: categoryFilter,
-            page: 1
-        )
+        requestedURL = requestedURLForCurrentContext(page: 1)
         navigationVersion += 1
         currentWorkshopItemID = nil
-        currentPageTitle = "Steam 创意工坊"
+        currentPageTitle = browseContext.title
         fetchBrowserItems()
     }
 
@@ -703,6 +821,7 @@ final class SteamWorkshopService: ObservableObject {
     func loadMoreBrowserItemsIfNeeded() {
         guard !isLoadingMoreBrowserItems, hasMoreBrowserItems, browserState == .loaded else { return }
 
+        let browseContext = self.browseContext
         let source = self.source
         let query = browserQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         let trendingWindow = self.trendingWindow
@@ -711,12 +830,14 @@ final class SteamWorkshopService: ObservableObject {
         let resolutionFilter = self.resolutionFilter
         let categoryFilter = self.categoryFilter
         let page = browserNextPage
+        let expectedNavigationVersion = navigationVersion
 
         isLoadingMoreBrowserItems = true
 
         Task(priority: .userInitiated) { [weak self] in
             do {
-                let stubs = try await Self.fetchWorkshopStubs(
+                let pageResult = try await Self.fetchWorkshopStubPage(
+                    context: browseContext,
                     source: source,
                     query: query,
                     trendingWindow: trendingWindow,
@@ -726,28 +847,34 @@ final class SteamWorkshopService: ObservableObject {
                     categoryFilter: categoryFilter,
                     page: page
                 )
+                let stubs = pageResult.stubs
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard let self else { return }
+                    guard self.navigationVersion == expectedNavigationVersion, self.browseContext == browseContext else { return }
                     let existingIDs = Set(self.browserItems.map(\.id))
                     let fallbackItems = stubs
                         .map(Self.fallbackBrowserItem)
                         .filter { !existingIDs.contains($0.id) }
                     self.browserItems.append(contentsOf: fallbackItems)
-                    self.statusMessage = "已预加载第 \(page) 页基础卡片，正在补全详细信息…"
+                    self.statusMessage = self.prefetchStatusMessage(for: browseContext, page: page)
                 }
                 let items = try await Self.fetchWorkshopItems(stubs: stubs)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard let self else { return }
+                    guard self.navigationVersion == expectedNavigationVersion, self.browseContext == browseContext else { return }
                     self.mergeBrowserItems(items)
                     self.browserNextPage = page + 1
-                    self.hasMoreBrowserItems = stubs.count >= Constants.browserPageSize
+                    self.hasMoreBrowserItems = pageResult.hasMore
                     self.isLoadingMoreBrowserItems = false
-                    self.statusMessage = self.hasMoreBrowserItems
-                        ? "已加载 \(self.browserItems.count) 个创意工坊视频项目"
-                        : "已加载全部 \(self.browserItems.count) 个已抓取项目"
+                    self.statusMessage = self.completedStatusMessage(
+                        for: browseContext,
+                        totalCount: self.browserItems.count,
+                        hasMore: self.hasMoreBrowserItems
+                    )
                     self.saveBrowserCache(
+                        context: browseContext,
                         source: source,
                         query: query,
                         trendingWindow: trendingWindow,
@@ -758,6 +885,7 @@ final class SteamWorkshopService: ObservableObject {
                         items: self.browserItems
                     )
                     self.prefetchUpcomingBrowserPageIfNeeded(
+                        context: browseContext,
                         source: source,
                         query: query,
                         trendingWindow: trendingWindow,
@@ -771,6 +899,7 @@ final class SteamWorkshopService: ObservableObject {
             } catch {
                 await MainActor.run {
                     guard let self else { return }
+                    guard self.navigationVersion == expectedNavigationVersion, self.browseContext == browseContext else { return }
                     self.isLoadingMoreBrowserItems = false
                     self.hasMoreBrowserItems = false
                 }
@@ -812,6 +941,225 @@ final class SteamWorkshopService: ObservableObject {
 
     func retrySelectedBrowserItemDetailRefresh() {
         refreshSelectedBrowserItemDetailIfNeeded(forceRefresh: true)
+    }
+
+    func showAuthorWorkshop(for item: SteamWorkshopBrowserItem) {
+        guard let workshopURL = Self.resolvedAuthorWorkshopURL(for: item) else { return }
+        dismissItemDetail()
+        if !browseContext.isAuthorWorkshop {
+            discoveryBrowseSnapshot = makeDiscoveryBrowseSnapshot()
+        }
+        savedDiscoveryQueryBeforeAuthorBrowse = browseContext.isAuthorWorkshop ? savedDiscoveryQueryBeforeAuthorBrowse : browserQuery
+        browseContext = .authorWorkshop(
+            authorName: item.author.isEmpty ? "未知作者" : item.author,
+            workshopURL: workshopURL
+        )
+        setBrowserQuery("")
+        requestedURL = requestedURLForCurrentContext(page: 1)
+        navigationVersion += 1
+        currentWorkshopItemID = nil
+        currentPageTitle = browseContext.title
+        statusMessage = loadingStatusMessage(for: browseContext)
+        fetchBrowserItems()
+    }
+
+    func returnToDiscoveryBrowse() {
+        guard browseContext.isAuthorWorkshop else { return }
+        browserFetchTask?.cancel()
+        browserFetchTask = nil
+        selectedItemDetailTask?.cancel()
+        selectedItemDetailTask = nil
+        navigationVersion += 1
+        let restoredQuery = savedDiscoveryQueryBeforeAuthorBrowse ?? ""
+        savedDiscoveryQueryBeforeAuthorBrowse = nil
+        browseContext = .discovery
+        if let snapshot = discoveryBrowseSnapshot {
+            restoreDiscoveryBrowseSnapshot(snapshot, restoredQuery: restoredQuery)
+        } else {
+            setBrowserQuery(restoredQuery)
+            navigateToBrowse()
+        }
+        discoveryBrowseSnapshot = nil
+    }
+
+    private func requestedURLForCurrentContext(page: Int) -> URL {
+        switch browseContext {
+        case .discovery:
+            return Self.makeBrowseURL(
+                source: source,
+                query: browserQuery,
+                trendingWindow: trendingWindow,
+                themeFilter: themeFilter,
+                ageRatingFilter: ageRatingFilter,
+                resolutionFilter: resolutionFilter,
+                categoryFilter: categoryFilter,
+                page: page
+            )
+        case .authorWorkshop(_, let workshopURL):
+            return Self.makeAuthorWorkshopURL(baseURL: workshopURL, page: page)
+        }
+    }
+
+    private func handleBrowserQueryChanged() {
+        if browseContext.isAuthorWorkshop {
+            updateDisplayedBrowserItems()
+        } else {
+            navigateToBrowse()
+        }
+    }
+
+    private func setBrowserQuery(_ query: String) {
+        isUpdatingBrowserQueryProgrammatically = true
+        browserQuery = query
+        isUpdatingBrowserQueryProgrammatically = false
+        updateDisplayedBrowserItems()
+    }
+
+    private func updateDisplayedBrowserItems() {
+        guard browseContext.isAuthorWorkshop else {
+            displayedBrowserItems = browserItems
+            return
+        }
+
+        let query = browserQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            displayedBrowserItems = browserItems
+            return
+        }
+
+        let normalizedQuery = query.localizedLowercase
+        displayedBrowserItems = browserItems.filter {
+            $0.title.localizedLowercase.contains(normalizedQuery)
+            || $0.author.localizedLowercase.contains(normalizedQuery)
+            || $0.summary.localizedLowercase.contains(normalizedQuery)
+            || $0.descriptionText.localizedLowercase.contains(normalizedQuery)
+            || $0.tags.contains(where: { $0.localizedLowercase.contains(normalizedQuery) })
+            || $0.id.localizedLowercase.contains(normalizedQuery)
+        }
+
+        if displayedBrowserItems.isEmpty, hasMoreBrowserItems, !isLoadingMoreBrowserItems {
+            Task { @MainActor [weak self] in
+                self?.loadMoreBrowserItemsIfNeeded()
+            }
+        }
+    }
+
+    private func makeDiscoveryBrowseSnapshot() -> SteamWorkshopDiscoveryBrowseSnapshot {
+        SteamWorkshopDiscoveryBrowseSnapshot(
+            browserItems: browserItems,
+            browserState: browserState,
+            hasMoreBrowserItems: hasMoreBrowserItems,
+            browserNextPage: browserNextPage,
+            statusMessage: statusMessage,
+            currentPageTitle: currentPageTitle,
+            requestedURL: requestedURL,
+            browserQuery: browserQuery,
+            currentWorkshopItemID: currentWorkshopItemID,
+            selectedBrowserItem: selectedBrowserItem,
+            prefetchedBrowserPageKeys: prefetchedBrowserPageKeys,
+            scrollOffsetY: currentBrowserScrollOffsetY
+        )
+    }
+
+    private func restoreDiscoveryBrowseSnapshot(
+        _ snapshot: SteamWorkshopDiscoveryBrowseSnapshot,
+        restoredQuery: String
+    ) {
+        setBrowserQuery(restoredQuery)
+        selectedBrowserItemError = nil
+        isRefreshingSelectedBrowserItem = false
+        browserItems = snapshot.browserItems
+        browserState = snapshot.browserState
+        hasMoreBrowserItems = snapshot.hasMoreBrowserItems
+        browserNextPage = snapshot.browserNextPage
+        isLoadingMoreBrowserItems = false
+        statusMessage = snapshot.statusMessage
+        currentPageTitle = snapshot.currentPageTitle
+        requestedURL = snapshot.requestedURL
+        currentWorkshopItemID = snapshot.currentWorkshopItemID
+        if let selectedID = snapshot.selectedBrowserItem?.id {
+            selectedBrowserItem = snapshot.browserItems.first(where: { $0.id == selectedID }) ?? snapshot.selectedBrowserItem
+        } else {
+            selectedBrowserItem = nil
+        }
+        prefetchedBrowserPageKeys = snapshot.prefetchedBrowserPageKeys
+        pendingBrowserScrollRestoreOffset = snapshot.scrollOffsetY
+    }
+
+    private func loadingStatusMessage(for context: SteamWorkshopBrowseContext) -> String {
+        switch context {
+        case .discovery:
+            return "正在抓取 Wallpaper Engine 创意工坊视频列表…"
+        case .authorWorkshop(let authorName, _):
+            return "正在抓取 \(authorName) 的创意工坊作品…"
+        }
+    }
+
+    private func cachedStatusMessage(for context: SteamWorkshopBrowseContext) -> String {
+        switch context {
+        case .discovery:
+            return "已载入缓存的创意工坊列表"
+        case .authorWorkshop(let authorName, _):
+            return "已载入 \(authorName) 的工坊缓存列表"
+        }
+    }
+
+    private func emptyResultsStatusMessage(for context: SteamWorkshopBrowseContext) -> String {
+        switch context {
+        case .discovery:
+            return "没有抓取到符合条件的视频项目。"
+        case .authorWorkshop(let authorName, _):
+            return "\(authorName) 当前没有抓取到可展示的视频项目。"
+        }
+    }
+
+    private func baseCardsStatusMessage(for context: SteamWorkshopBrowseContext, count: Int) -> String {
+        switch context {
+        case .discovery:
+            return "已载入 \(count) 张基础卡片，正在补全详情…"
+        case .authorWorkshop(let authorName, _):
+            return "已载入 \(authorName) 的 \(count) 张基础卡片，正在补全详情…"
+        }
+    }
+
+    private func completedStatusMessage(
+        for context: SteamWorkshopBrowseContext,
+        totalCount: Int,
+        hasMore: Bool
+    ) -> String {
+        switch context {
+        case .discovery:
+            return hasMore ? "已加载 \(totalCount) 个创意工坊视频项目" : "已加载全部 \(totalCount) 个已抓取项目"
+        case .authorWorkshop(let authorName, _):
+            return hasMore ? "已加载 \(authorName) 的 \(totalCount) 个创意工坊项目" : "已加载 \(authorName) 的全部 \(totalCount) 个已抓取项目"
+        }
+    }
+
+    private func failureStatusMessage(for context: SteamWorkshopBrowseContext) -> String {
+        switch context {
+        case .discovery:
+            return "创意工坊列表抓取失败"
+        case .authorWorkshop(let authorName, _):
+            return "\(authorName) 的工坊列表抓取失败"
+        }
+    }
+
+    private func prefetchStatusMessage(for context: SteamWorkshopBrowseContext, page: Int) -> String {
+        switch context {
+        case .discovery:
+            return "已预加载第 \(page) 页基础卡片，正在补全详细信息…"
+        case .authorWorkshop(let authorName, _):
+            return "已预加载 \(authorName) 的第 \(page) 页基础卡片，正在补全详细信息…"
+        }
+    }
+
+    private func browsePageSize(for context: SteamWorkshopBrowseContext) -> Int {
+        switch context {
+        case .discovery:
+            return Constants.browserPageSize
+        case .authorWorkshop:
+            return Constants.authorWorkshopPageSize
+        }
     }
 
     func authenticateUser() {
@@ -1060,13 +1408,7 @@ final class SteamWorkshopService: ObservableObject {
     }
 
     func openAuthorWorksPage(for item: SteamWorkshopBrowserItem) {
-        guard let authorProfileURL = item.authorProfileURL else { return }
-        guard var components = URLComponents(url: authorProfileURL.appendingPathComponent("myworkshopfiles"), resolvingAgainstBaseURL: false) else {
-            NSWorkspace.shared.open(authorProfileURL)
-            return
-        }
-        components.queryItems = [URLQueryItem(name: "appid", value: Constants.workshopAppID)]
-        NSWorkspace.shared.open(components.url ?? authorProfileURL)
+        showAuthorWorkshop(for: item)
     }
 
     func revealItem(_ record: SteamWorkshopDownloadRecord) {
@@ -1472,6 +1814,7 @@ final class SteamWorkshopService: ObservableObject {
         hasMoreBrowserItems = true
         isLoadingMoreBrowserItems = false
         prefetchedBrowserPageKeys.removeAll()
+        let browseContext = self.browseContext
         let source = self.source
         let query = browserQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         let trendingWindow = self.trendingWindow
@@ -1479,8 +1822,10 @@ final class SteamWorkshopService: ObservableObject {
         let ageRatingFilter = self.ageRatingFilter
         let resolutionFilter = self.resolutionFilter
         let categoryFilter = self.categoryFilter
+        let pageSize = browsePageSize(for: browseContext)
 
         if let cached = loadBrowserCache(
+            context: browseContext,
             source: source,
             query: query,
             trendingWindow: trendingWindow,
@@ -1491,21 +1836,22 @@ final class SteamWorkshopService: ObservableObject {
         ) {
             browserItems = cached.items
             browserState = .loaded
-            hasMoreBrowserItems = cached.items.count >= Constants.browserPageSize
-            browserNextPage = max(2, (cached.items.count / Constants.browserPageSize) + 1)
-            statusMessage = "已载入缓存的创意工坊列表"
+            hasMoreBrowserItems = cached.items.count >= pageSize
+            browserNextPage = max(2, (cached.items.count / pageSize) + 1)
+            statusMessage = cachedStatusMessage(for: browseContext)
             if !forceRefresh && Date().timeIntervalSince(cached.fetchedAt) < Constants.cacheTTL {
                 return
             }
         } else {
             browserState = .loading
             browserItems = []
-            statusMessage = "正在抓取 Wallpaper Engine 创意工坊视频列表…"
+            statusMessage = loadingStatusMessage(for: browseContext)
         }
 
         browserFetchTask = Task(priority: .userInitiated) { [weak self] in
             do {
-                let stubs = try await Self.fetchWorkshopStubs(
+                let pageResult = try await Self.fetchWorkshopStubPage(
+                    context: browseContext,
                     source: source,
                     query: query,
                     trendingWindow: trendingWindow,
@@ -1515,30 +1861,38 @@ final class SteamWorkshopService: ObservableObject {
                     categoryFilter: categoryFilter,
                     page: 1
                 )
+                let stubs = pageResult.stubs
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard let self else { return }
+                    guard self.browseContext == browseContext else { return }
                     self.browserItems = stubs.map(Self.fallbackBrowserItem)
                     self.browserState = .loaded
-                    self.hasMoreBrowserItems = stubs.count >= Constants.browserPageSize
+                    self.hasMoreBrowserItems = pageResult.hasMore
                     self.browserNextPage = 2
                     self.statusMessage = self.browserItems.isEmpty
-                        ? "没有抓取到符合条件的视频项目。"
-                        : "已载入 \(self.browserItems.count) 张基础卡片，正在补全详情…"
+                        ? self.emptyResultsStatusMessage(for: browseContext)
+                        : self.baseCardsStatusMessage(for: browseContext, count: self.browserItems.count)
                 }
                 let items = try await Self.fetchWorkshopItems(stubs: stubs)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard let self else { return }
+                    guard self.browseContext == browseContext else { return }
                     self.mergeBrowserItems(items)
                     self.browserState = .loaded
-                    self.hasMoreBrowserItems = stubs.count >= Constants.browserPageSize
+                    self.hasMoreBrowserItems = pageResult.hasMore
                     self.browserNextPage = 2
                     self.isLoadingMoreBrowserItems = false
                     self.statusMessage = items.isEmpty
-                        ? "没有抓取到符合条件的视频项目。"
-                        : "已加载 \(items.count) 个创意工坊视频项目"
+                        ? self.emptyResultsStatusMessage(for: browseContext)
+                        : self.completedStatusMessage(
+                            for: browseContext,
+                            totalCount: items.count,
+                            hasMore: self.hasMoreBrowserItems
+                        )
                     self.saveBrowserCache(
+                        context: browseContext,
                         source: source,
                         query: query,
                         trendingWindow: trendingWindow,
@@ -1549,6 +1903,7 @@ final class SteamWorkshopService: ObservableObject {
                         items: items
                     )
                     self.prefetchUpcomingBrowserPageIfNeeded(
+                        context: browseContext,
                         source: source,
                         query: query,
                         trendingWindow: trendingWindow,
@@ -1563,10 +1918,11 @@ final class SteamWorkshopService: ObservableObject {
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard let self else { return }
+                    guard self.browseContext == browseContext else { return }
                     if self.browserItems.isEmpty {
                         self.browserState = .failed(error.localizedDescription)
                     }
-                    self.statusMessage = "创意工坊列表抓取失败"
+                    self.statusMessage = self.failureStatusMessage(for: browseContext)
                 }
             }
         }
@@ -1950,6 +2306,7 @@ final class SteamWorkshopService: ObservableObject {
     private func loadCachedBrowserItemsIfPossible() {
         let query = browserQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         if let cached = loadBrowserCache(
+            context: browseContext,
             source: source,
             query: query,
             trendingWindow: trendingWindow,
@@ -1992,7 +2349,7 @@ final class SteamWorkshopService: ObservableObject {
         || item.resolutionText == nil
         || item.workshopTypeText == nil
         || item.author == "未知作者"
-        || item.authorProfileURL == nil
+        || (item.authorProfileURL == nil && item.authorWorkshopURL == nil)
     }
 
     private func refreshSelectedBrowserItemDetailIfNeeded(forceRefresh: Bool) {
@@ -2010,6 +2367,7 @@ final class SteamWorkshopService: ObservableObject {
             title: item.title,
             author: item.author,
             authorProfileURL: item.authorProfileURL,
+            authorWorkshopURL: item.authorWorkshopURL,
             hasAdultContent: item.hasAdultContent,
             summary: item.summary,
             previewImageURL: item.previewImageURL
@@ -2018,12 +2376,11 @@ final class SteamWorkshopService: ObservableObject {
         selectedItemDetailTask = Task(priority: .userInitiated) { [weak self] in
             do {
                 let refreshed = try await Self.fetchWorkshopItem(stub: stub)
-                let enriched = (try? await Self.enrichPreviewKind(for: refreshed)) ?? refreshed
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard let self, self.selectedBrowserItem?.id == item.id else { return }
-                    self.selectedBrowserItem = enriched
-                    self.mergeBrowserItem(enriched)
+                    self.selectedBrowserItem = refreshed
+                    self.mergeBrowserItem(refreshed)
                     self.isRefreshingSelectedBrowserItem = false
                     self.selectedBrowserItemError = nil
                 }
@@ -2039,6 +2396,7 @@ final class SteamWorkshopService: ObservableObject {
     }
 
     private func prefetchUpcomingBrowserPageIfNeeded(
+        context: SteamWorkshopBrowseContext,
         source: SteamWorkshopSource,
         query: String,
         trendingWindow: SteamWorkshopTrendingWindow,
@@ -2049,11 +2407,12 @@ final class SteamWorkshopService: ObservableObject {
         page: Int
     ) {
         guard page > 1 else { return }
-        let key = "\(source.rawValue)|\(trendingWindow.rawValue)|\(themeFilter.rawValue)|\(ageRatingFilter.rawValue)|\(resolutionFilter.rawValue)|\(categoryFilter.rawValue)|\(query)|\(page)"
+        let key = "\(context.cacheKeyComponent)|\(source.rawValue)|\(trendingWindow.rawValue)|\(themeFilter.rawValue)|\(ageRatingFilter.rawValue)|\(resolutionFilter.rawValue)|\(categoryFilter.rawValue)|\(query)|\(page)"
         guard prefetchedBrowserPageKeys.insert(key).inserted else { return }
 
         Task(priority: .utility) {
-            guard let stubs = try? await Self.fetchWorkshopStubs(
+            guard let pageResult = try? await Self.fetchWorkshopStubPage(
+                context: context,
                 source: source,
                 query: query,
                 trendingWindow: trendingWindow,
@@ -2062,14 +2421,15 @@ final class SteamWorkshopService: ObservableObject {
                 resolutionFilter: resolutionFilter,
                 categoryFilter: categoryFilter,
                 page: page
-            ), !stubs.isEmpty else {
+            ), !pageResult.stubs.isEmpty else {
                 return
             }
-            _ = try? await Self.fetchWorkshopItems(stubs: stubs)
+            _ = try? await Self.fetchWorkshopItems(stubs: pageResult.stubs)
         }
     }
 
     private func loadBrowserCache(
+        context: SteamWorkshopBrowseContext,
         source: SteamWorkshopSource,
         query: String,
         trendingWindow: SteamWorkshopTrendingWindow,
@@ -2079,6 +2439,7 @@ final class SteamWorkshopService: ObservableObject {
         categoryFilter: SteamWorkshopCategoryFilter
     ) -> SteamWorkshopBrowserCacheSnapshot? {
         let url = cacheFileURL(
+            context: context,
             source: source,
             query: query,
             trendingWindow: trendingWindow,
@@ -2092,6 +2453,7 @@ final class SteamWorkshopService: ObservableObject {
     }
 
     private func saveBrowserCache(
+        context: SteamWorkshopBrowseContext,
         source: SteamWorkshopSource,
         query: String,
         trendingWindow: SteamWorkshopTrendingWindow,
@@ -2106,6 +2468,7 @@ final class SteamWorkshopService: ObservableObject {
         try? FileManager.default.createDirectory(at: cacheDirectoryURL, withIntermediateDirectories: true)
         try? data.write(
             to: cacheFileURL(
+                context: context,
                 source: source,
                 query: query,
                 trendingWindow: trendingWindow,
@@ -2119,6 +2482,7 @@ final class SteamWorkshopService: ObservableObject {
     }
 
     private func cacheFileURL(
+        context: SteamWorkshopBrowseContext,
         source: SteamWorkshopSource,
         query: String,
         trendingWindow: SteamWorkshopTrendingWindow,
@@ -2127,6 +2491,12 @@ final class SteamWorkshopService: ObservableObject {
         resolutionFilter: SteamWorkshopResolutionFilter,
         categoryFilter: SteamWorkshopCategoryFilter
     ) -> URL {
+        switch context {
+        case .discovery:
+            break
+        case .authorWorkshop:
+            return cacheDirectoryURL.appendingPathComponent("\(context.cacheKeyComponent).json")
+        }
         let normalized = query.isEmpty
             ? "all"
             : query.lowercased().replacingOccurrences(of: #"[^a-z0-9]+"#, with: "-", options: .regularExpression)
@@ -2310,30 +2680,21 @@ final class SteamWorkshopService: ObservableObject {
         return components.url!
     }
 
-    private static func fetchWorkshopIDs(
-        source: SteamWorkshopSource,
-        query: String,
-        trendingWindow: SteamWorkshopTrendingWindow,
-        themeFilter: SteamWorkshopThemeFilter,
-        ageRatingFilter: SteamWorkshopAgeRatingFilter,
-        resolutionFilter: SteamWorkshopResolutionFilter,
-        categoryFilter: SteamWorkshopCategoryFilter,
-        page: Int
-    ) async throws -> [String] {
-        let stubs = try await fetchWorkshopStubs(
-            source: source,
-            query: query,
-            trendingWindow: trendingWindow,
-            themeFilter: themeFilter,
-            ageRatingFilter: ageRatingFilter,
-            resolutionFilter: resolutionFilter,
-            categoryFilter: categoryFilter,
-            page: page
-        )
-        return stubs.map(\.id)
+    private static func makeAuthorWorkshopURL(baseURL: URL, page: Int) -> URL {
+        let normalizedURL = normalizedAuthorWorkshopURL(baseURL) ?? baseURL
+        guard var components = URLComponents(url: normalizedURL, resolvingAgainstBaseURL: false) else {
+            return normalizedURL
+        }
+        var queryItems = (components.queryItems ?? []).filter { $0.name != "p" && $0.name != "appid" && $0.name != "numperpage" }
+        queryItems.insert(URLQueryItem(name: "appid", value: Constants.workshopAppID), at: 0)
+        queryItems.append(URLQueryItem(name: "p", value: "\(max(1, page))"))
+        queryItems.append(URLQueryItem(name: "numperpage", value: "\(Constants.authorWorkshopPageSize)"))
+        components.queryItems = queryItems
+        return components.url ?? normalizedURL
     }
 
-    private static func fetchWorkshopStubs(
+    private static func fetchWorkshopStubPage(
+        context: SteamWorkshopBrowseContext,
         source: SteamWorkshopSource,
         query: String,
         trendingWindow: SteamWorkshopTrendingWindow,
@@ -2342,21 +2703,29 @@ final class SteamWorkshopService: ObservableObject {
         resolutionFilter: SteamWorkshopResolutionFilter,
         categoryFilter: SteamWorkshopCategoryFilter,
         page: Int
-    ) async throws -> [SteamWorkshopBrowseStub] {
-        let url = makeBrowseURL(
-            source: source,
-            query: query,
-            trendingWindow: trendingWindow,
-            themeFilter: themeFilter,
-            ageRatingFilter: ageRatingFilter,
-            resolutionFilter: resolutionFilter,
-            categoryFilter: categoryFilter,
-            page: page
-        )
+    ) async throws -> SteamWorkshopBrowseStubPage {
+        let url: URL
+        switch context {
+        case .discovery:
+            url = makeBrowseURL(
+                source: source,
+                query: query,
+                trendingWindow: trendingWindow,
+                themeFilter: themeFilter,
+                ageRatingFilter: ageRatingFilter,
+                resolutionFilter: resolutionFilter,
+                categoryFilter: categoryFilter,
+                page: page
+            )
+        case .authorWorkshop(_, let workshopURL):
+            url = makeAuthorWorkshopURL(baseURL: workshopURL, page: page)
+        }
         let html = try await fetchHTML(url: url)
         let stubs = parseBrowsePage(html: html)
+        let pageSize = context.isAuthorWorkshop ? Constants.authorWorkshopPageSize : Constants.browserPageSize
+        let hasMore = browsePageHasMore(html: html, currentPage: page) || stubs.count >= pageSize
         if !stubs.isEmpty {
-            return Array(stubs.prefix(Constants.browserPageSize))
+            return SteamWorkshopBrowseStubPage(stubs: stubs, hasMore: hasMore)
         }
 
         let pattern = #"sharedfiles/filedetails/\?id=(\d+)"#
@@ -2364,9 +2733,20 @@ final class SteamWorkshopService: ObservableObject {
         var ordered: [SteamWorkshopBrowseStub] = []
         var seen = Set<String>()
         for id in matches where seen.insert(id).inserted {
-            ordered.append(SteamWorkshopBrowseStub(id: id, title: nil, author: nil, authorProfileURL: nil, hasAdultContent: false, summary: nil, previewImageURL: nil))
+            ordered.append(
+                SteamWorkshopBrowseStub(
+                    id: id,
+                    title: nil,
+                    author: nil,
+                    authorProfileURL: nil,
+                    authorWorkshopURL: nil,
+                    hasAdultContent: false,
+                    summary: nil,
+                    previewImageURL: nil
+                )
+            )
         }
-        return Array(ordered.prefix(Constants.browserPageSize))
+        return SteamWorkshopBrowseStubPage(stubs: ordered, hasMore: hasMore)
     }
 
     private static func fetchWorkshopItems(stubs: [SteamWorkshopBrowseStub]) async throws -> [SteamWorkshopBrowserItem] {
@@ -2374,8 +2754,7 @@ final class SteamWorkshopService: ObservableObject {
             for (index, stub) in stubs.enumerated() {
                 group.addTask {
                     do {
-                        let item = try await fetchWorkshopItem(stub: stub)
-                        return (index, try await enrichPreviewKind(for: item))
+                        return (index, try await fetchWorkshopItem(stub: stub))
                     } catch {
                         let nsError = error as NSError
                         if nsError.domain == "SteamWorkshop", nsError.code == 13 {
@@ -2397,7 +2776,12 @@ final class SteamWorkshopService: ObservableObject {
 
     private static func fetchWorkshopItem(stub: SteamWorkshopBrowseStub) async throws -> SteamWorkshopBrowserItem {
         if let cached = loadDetailCache(id: stub.id) {
-            return mergeStub(stub, into: cached)
+            let merged = mergeStub(stub, into: cached)
+            let enriched = try await enrichPreviewKind(for: merged)
+            if enriched != cached {
+                saveDetailCache(item: enriched)
+            }
+            return enriched
         }
 
         let detailURL = makeDetailURL(id: stub.id)
@@ -2414,6 +2798,7 @@ final class SteamWorkshopService: ObservableObject {
             title: parsed.title,
             author: parsed.author,
             authorProfileURL: parsed.authorProfileURL ?? stub.authorProfileURL,
+            authorWorkshopURL: parsed.authorWorkshopURL ?? stub.authorWorkshopURL,
             hasAdultContent: stub.hasAdultContent,
             summary: parsed.summary,
             descriptionText: parsed.descriptionText,
@@ -2435,8 +2820,10 @@ final class SteamWorkshopService: ObservableObject {
             detailFields: parsed.detailFields,
             detailURL: detailURL
         )
-        saveDetailCache(item: item)
-        return mergeStub(stub, into: item)
+        let merged = mergeStub(stub, into: item)
+        let enriched = try await enrichPreviewKind(for: merged)
+        saveDetailCache(item: enriched)
+        return enriched
     }
 
     private static func fetchHTML(url: URL) async throws -> String {
@@ -2472,6 +2859,12 @@ final class SteamWorkshopService: ObservableObject {
                 in: html
             )
         )
+        let authorWorkshopURL = normalizedAuthorWorkshopURL(
+            firstURLMatch(
+                pattern: #"https://steamcommunity\.com/(?:profiles/\d+|id/[^/"?]+)/myworkshopfiles/(?:\?[^"'\\<]*)?"#,
+                in: html
+            )
+        )
 
         let summary = metaContent(property: "og:description", in: html)
             ?? firstCapture(pattern: #"<div[^>]*class="workshopItemDescription"[^>]*>(.*?)</div>"#, in: html)
@@ -2497,6 +2890,7 @@ final class SteamWorkshopService: ObservableObject {
             title: normalizeText(title),
             author: normalizeAuthorName(author),
             authorProfileURL: authorProfileURL,
+            authorWorkshopURL: authorWorkshopURL,
             summary: normalizeText(summary),
             descriptionText: normalizeText(descriptionText),
             tags: tags.map(normalizeText),
@@ -2673,6 +3067,44 @@ final class SteamWorkshopService: ObservableObject {
         return URL(string: decoded)
     }
 
+    private static func normalizedAuthorWorkshopURL(_ url: URL?) -> URL? {
+        guard let url else { return nil }
+        let absoluteURL = url.absoluteURL
+        guard absoluteURL.path.contains("/myworkshopfiles") else { return absoluteURL }
+        guard var components = URLComponents(url: absoluteURL, resolvingAgainstBaseURL: false) else {
+            return absoluteURL
+        }
+
+        var queryItems = (components.queryItems ?? []).filter { $0.name != "appid" }
+        queryItems.append(URLQueryItem(name: "appid", value: Constants.workshopAppID))
+        components.queryItems = queryItems
+        return components.url ?? absoluteURL
+    }
+
+    private static func resolvedAuthorWorkshopURL(for item: SteamWorkshopBrowserItem) -> URL? {
+        if let authorWorkshopURL = normalizedAuthorWorkshopURL(item.authorWorkshopURL) {
+            return authorWorkshopURL
+        }
+        guard let authorProfileURL = item.authorProfileURL else { return nil }
+        if authorProfileURL.path.contains("/myworkshopfiles") {
+            return normalizedAuthorWorkshopURL(authorProfileURL) ?? authorProfileURL
+        }
+        guard var components = URLComponents(
+            url: authorProfileURL.appendingPathComponent("myworkshopfiles"),
+            resolvingAgainstBaseURL: false
+        ) else {
+            return authorProfileURL
+        }
+        components.queryItems = [URLQueryItem(name: "appid", value: Constants.workshopAppID)]
+        return components.url ?? authorProfileURL
+    }
+
+    private static func browsePageHasMore(html: String, currentPage: Int) -> Bool {
+        let nextPage = currentPage + 1
+        let pattern = #"href\s*=\s*["'][^"']*[?&]p=\#(nextPage)(?:[&#][^"']*|[^"']*)?["']"#
+        return firstCapture(pattern: pattern, in: html) != nil
+    }
+
     private static func parseBrowsePage(html: String) -> [SteamWorkshopBrowseStub] {
         var results: [SteamWorkshopBrowseStub] = []
         var seen = Set<String>()
@@ -2703,6 +3135,12 @@ final class SteamWorkshopService: ObservableObject {
                 pattern: #"<div[^>]*class="workshopItemAuthorName[^"]*"[^>]*>.*?<a[^>]*>\s*(.*?)\s*</a>"#,
                 in: block
             )
+            let authorWorkshopURL = normalizedAuthorWorkshopURL(
+                firstURLMatch(
+                    pattern: #"<a[^>]*class="workshop_author_link"[^>]*href="([^"]+)""#,
+                    in: block
+                )
+            )
 
             let previewImageURL = firstURLMatch(
                 pattern: #"<img[^>]*class="workshopItemPreviewImage[^"]*"[^>]*src="([^"]+)""#,
@@ -2715,6 +3153,7 @@ final class SteamWorkshopService: ObservableObject {
                     title: title.map(normalizeText),
                     author: author.map(normalizeAuthorName),
                     authorProfileURL: nil,
+                    authorWorkshopURL: authorWorkshopURL,
                     hasAdultContent: block.localizedCaseInsensitiveContains("has_adult_content"),
                     summary: browseSummaries[id].map(normalizeText),
                     previewImageURL: previewImageURL
@@ -2759,6 +3198,9 @@ final class SteamWorkshopService: ObservableObject {
     }
 
     private static func enrichPreviewKind(for item: SteamWorkshopBrowserItem) async throws -> SteamWorkshopBrowserItem {
+        if item.previewAssetKind != .unknown {
+            return item
+        }
         if item.previewVideoURL != nil {
             return withPreviewKind(.video, item: item)
         }
@@ -2797,6 +3239,7 @@ final class SteamWorkshopService: ObservableObject {
             title: item.title,
             author: item.author,
             authorProfileURL: item.authorProfileURL,
+            authorWorkshopURL: item.authorWorkshopURL,
             hasAdultContent: item.hasAdultContent,
             summary: item.summary,
             descriptionText: item.descriptionText,
@@ -2826,6 +3269,7 @@ final class SteamWorkshopService: ObservableObject {
             title: normalizedStubTitle(stub),
             author: normalizedStubAuthor(stub),
             authorProfileURL: stub.authorProfileURL,
+            authorWorkshopURL: stub.authorWorkshopURL,
             hasAdultContent: stub.hasAdultContent,
             summary: stub.summary ?? "",
             descriptionText: stub.summary ?? "",
@@ -2855,6 +3299,7 @@ final class SteamWorkshopService: ObservableObject {
             title: item.title.isEmpty ? normalizedStubTitle(stub) : item.title,
             author: item.author.isEmpty ? normalizedStubAuthor(stub) : item.author,
             authorProfileURL: item.authorProfileURL ?? stub.authorProfileURL,
+            authorWorkshopURL: item.authorWorkshopURL ?? stub.authorWorkshopURL,
             hasAdultContent: item.hasAdultContent || stub.hasAdultContent,
             summary: item.summary,
             descriptionText: item.descriptionText,

@@ -58,14 +58,23 @@ private struct SteamWorkshopBrowserContentView: View {
     private var content: some View {
         switch service.browserState {
         case .idle, .loading:
-            SteamWorkshopBrowserLoadingView()
+            SteamWorkshopBrowserLoadingView(
+                text: service.isBrowsingAuthorWorkshop
+                    ? "正在抓取 \(service.activeAuthorWorkshopName ?? "作者") 的工坊列表…"
+                    : "正在抓取创意工坊视频列表…"
+            )
         case .failed(let message):
-            SteamWorkshopBrowserErrorView(message: message) {
+            SteamWorkshopBrowserErrorView(
+                title: service.isBrowsingAuthorWorkshop ? "抓取作者工坊信息失败" : "抓取创意工坊信息失败",
+                message: message
+            ) {
                 service.refresh()
             }
         case .loaded:
-            if service.browserItems.isEmpty {
-                SteamWorkshopBrowserEmptyView()
+            if !service.hasVisibleBrowserItems {
+                SteamWorkshopBrowserEmptyView(
+                    message: emptyStateMessage
+                )
             } else {
                 ZStack(alignment: .bottom) {
                     AppKitSteamWorkshopBrowserGridView(
@@ -89,6 +98,18 @@ private struct SteamWorkshopBrowserContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+    }
+
+    private var emptyStateMessage: String {
+        let trimmedQuery = service.browserQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if service.isBrowsingAuthorWorkshop,
+           !trimmedQuery.isEmpty,
+           !service.browserItems.isEmpty {
+            return "当前搜索没有匹配到作者作品"
+        }
+        return service.isBrowsingAuthorWorkshop
+                        ? "\(service.activeAuthorWorkshopName ?? "该作者") 当前没有抓取到视频项目"
+                        : "当前条件下没有抓取到视频项目"
     }
 }
 
@@ -183,6 +204,14 @@ private struct SteamWorkshopItemDetailSheet: View {
 
     private var downloadRecord: SteamWorkshopDownloadRecord? {
         service.downloadRecord(for: item.id)
+    }
+
+    private var latestDownloadRecord: SteamWorkshopDownloadRecord? {
+        service.latestDownloadRecord(for: item.id)
+    }
+
+    private var latestDownloadFailure: String? {
+        latestDownloadRecord?.failureMessage
     }
 
     private var isRefreshingDetail: Bool {
@@ -342,6 +371,14 @@ private struct SteamWorkshopItemDetailSheet: View {
                 }
             }
 
+            if let latestDownloadFailure,
+               !service.isDownloading(itemID: item.id),
+               downloadRecord == nil {
+                SteamWorkshopInlineErrorNotice(message: "上次下载失败：\(latestDownloadFailure)") {
+                    service.downloadWorkshopItem(id: item.id, pageTitle: item.title)
+                }
+            }
+
             footerActions
                 .overlay(alignment: .top) {
                     if item.hasAdultContent {
@@ -380,11 +417,11 @@ private struct SteamWorkshopItemDetailSheet: View {
             .buttonStyle(.bordered)
             .frame(width: 88)
 
-            Button("作者主页") {
-                service.openAuthorWorksPage(for: item)
+            Button("作者工坊") {
+                service.showAuthorWorkshop(for: item)
             }
             .buttonStyle(.bordered)
-            .disabled(item.authorProfileURL == nil)
+            .disabled(item.authorProfileURL == nil && item.authorWorkshopURL == nil)
             .frame(width: 88)
 
             Button("刷新详情") {
@@ -416,6 +453,12 @@ private struct SteamWorkshopItemDetailSheet: View {
                 service.setAsWallpaper(downloadRecord)
             }
             .buttonStyle(.borderedProminent)
+        } else if latestDownloadFailure != nil {
+            Button("重新下载") {
+                service.downloadWorkshopItem(id: item.id, pageTitle: item.title)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(service.activeDownloadItemID != nil)
         } else {
             Button("下载视频") {
                 service.downloadWorkshopItem(id: item.id, pageTitle: item.title)
@@ -662,11 +705,13 @@ private struct SteamWorkshopAutoPlayPreview: View {
 }
 
 private struct SteamWorkshopBrowserLoadingView: View {
+    let text: String
+
     var body: some View {
         VStack(spacing: 12) {
             ProgressView()
                 .controlSize(.large)
-            Text("正在抓取创意工坊视频列表…")
+            Text(text)
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
         }
@@ -676,6 +721,7 @@ private struct SteamWorkshopBrowserLoadingView: View {
 }
 
 private struct SteamWorkshopBrowserErrorView: View {
+    let title: String
     let message: String
     let retry: () -> Void
 
@@ -684,7 +730,7 @@ private struct SteamWorkshopBrowserErrorView: View {
             Image(systemName: "wifi.exclamationmark")
                 .font(.system(size: 30))
                 .foregroundStyle(.secondary)
-            Text("抓取创意工坊信息失败")
+            Text(title)
                 .font(.system(size: 14, weight: .semibold))
             Text(message)
                 .font(.system(size: 12))
@@ -715,12 +761,14 @@ private struct SteamWorkshopBrowserLoadMoreView: View {
 }
 
 private struct SteamWorkshopBrowserEmptyView: View {
+    let message: String
+
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: "square.grid.2x2")
                 .font(.system(size: 32))
                 .foregroundStyle(.secondary)
-            Text("当前条件下没有抓取到视频项目")
+            Text(message)
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
         }
@@ -728,6 +776,7 @@ private struct SteamWorkshopBrowserEmptyView: View {
         .padding(.vertical, 80)
     }
 }
+
 
 private struct FlowLayout<Content: View>: View {
     let spacing: CGFloat

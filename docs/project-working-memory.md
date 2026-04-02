@@ -114,13 +114,16 @@
 - `scripts/steam_workshop_snapshot.py` 现已支持额外输出：
   - `page-summary.json`
 - `page-summary.json` 当前会提取：
-  - `page_kind`（`browse` / `detail` / `age-check`）
+  - `page_kind`（`browse` / `detail` / `age-check` / `author-workshop`）
   - `workshop_item_ids`
   - `hover_bind_ids`
   - `preview_image_urls`
   - `preview_video_urls`
   - `detail_stats`
   - `detail_tags`
+  - `detected_author_profile_url`
+  - `detected_author_workshop_url`
+  - `browse_author_links`
 - 这意味着后续做解析器或回归检查时，不必每次重新人工翻整页 HTML。
 
 ### Confirmed Crawl Entry URLs / Endpoints
@@ -165,6 +168,7 @@
   - `img.workshopItemPreviewImage`
   - `div.workshopItemTitle`
   - `div.workshopItemAuthorName`
+  - `a.workshop_author_link`
 - 浏览页摘要数据来自页面内联脚本：
   - `SharedFileBindMouseHover("sharedfile_<id>", false, {...})`
 - 当前从这个内联 JSON 中已确认可取：
@@ -177,6 +181,14 @@
   - `div.workshopTags`
   - `div.detailsStatLeft`
   - `div.detailsStatRight`
+- 2026-04-02 新增确认的作者入口规则：
+  - 浏览页卡片作者链接 `a.workshop_author_link` 直接就是作者作品页入口
+  - 链接格式可能是：
+    - `https://steamcommunity.com/profiles/<steamid64>/myworkshopfiles/?appid=431960`
+    - `https://steamcommunity.com/id/<vanity>/myworkshopfiles/?appid=431960`
+  - 详情页“创建者”卡片里的 `a.friendBlockLinkOverlay` 只是个人主页根链接
+  - 详情页面包屑里的“<作者> 的创意工坊”才是更准确的作者作品页入口
+  - 作者作品页自身再次跳转后，URL 可能丢掉 `appid` 参数；客户端打开时应主动补回 `appid=431960`
 
 ### External JS Files Inspected
 - 已检查过这些脚本是否负责补动态缩略图：
@@ -356,6 +368,9 @@
   - 浏览页 hover 摘要解析
   - 预览图 MIME 探测
   - GIF / JPG 区分
+  - 详情缓存已回写预览类型结果，避免同一批条目反复做 MIME 探测
+  - 作者个人主页 URL 与作者作品页 URL 分离建模，详情按钮优先直达作者作品页
+  - 作者工坊页已复用同一套列表抓取 / 分页 / 详情补全链路，不再依赖外部浏览器
 - 2026-04-02 这一轮已经额外接入：
   - 详情页完整字段承载模型，而不只是少数固定字段
   - `Type / Age Rating / Genre / Category / File Size / Resolution / Posted / Updated / Favorites / Subscriptions / Score`
@@ -366,6 +381,10 @@
   - GIF 动态预览显示
   - 根据真实预览类型显示“动态预览 / 静态预览”
   - 浏览页网格已改成 AppKit 容器，布局思路与其他模块一致
+  - 浏览卡片会跟随下载状态实时切换：
+    - 下载中显示进度文本并允许取消
+    - 下载失败显示重试态
+    - 已下载显示本地完成态
   - 卡片详情弹层显示：
     - 类型
     - 年龄分级
@@ -379,6 +398,11 @@
     - 订阅
     - 评分
   - 卡片详情弹层新增完整“详细信息”区，会把详情页抓到的字段尽量完整展示
+  - 详情弹层会显示最近一次下载失败原因，并提供就地重试入口
+  - 详情弹层“作者工坊”按钮已改为优先使用页面里真实暴露的作者作品页直链
+  - 点击“作者工坊”会在模块内部切换到该作者的工坊列表，并复用原有列表抓取流程
+  - 作者工坊模式已接入独立分页判断，不再沿用总榜的页容量阈值
+  - 从作者工坊“返回总榜”时，会恢复进入前的总榜列表状态、滚动位置和详情选中项
 - `SteamWorkshopToolbarController` 当前已接入：
   - 排序
   - 热门时间段
@@ -386,6 +410,9 @@
   - 年龄分级筛选
   - 分辨率筛选
   - 分类筛选
+  - 作者工坊模式下会禁用排序 / 热门时间段 / 筛选，搜索改为作者列表内搜索
+  - 作者工坊模式下工具栏会显示“返回总榜”入口
+  - 进入 / 退出作者工坊时，工具栏按钮状态会立即同步，不再等到二次点击后才刷新
 - 2026-04-02 本轮新增确认：
   - 工具栏筛选菜单已完成中文化
   - 筛选摘要不再显示后台英文 tag 值，改为显示中文筛选名称
@@ -393,13 +420,14 @@
   - AppKit 卡片已加入 hover 高亮、边框和阴影反馈
   - AppKit 卡片二级元信息和标签已做中文化映射
   - 浏览卡片已接入下载状态：
-    - 下载中显示进度角标与取消按钮
-    - 已下载显示状态角标并禁用重复下载
+    - 下载中会实时刷新进度文本并允许取消
+    - 下载失败会切到重试态
+    - 已下载显示完成态并禁用重复下载
   - 详情面板已接入本地状态操作：
     - 已下载项目显示“打开文件夹”
     - 已下载项目可直接“设为壁纸”
 - 仍建议后续补上：
-  - 预览 MIME 结果缓存，避免每次刷新都重新探测
+  - 如果后续要覆盖“详情抓取失败时的回退卡片”，仍可继续补独立的预览 URL 级 MIME 缓存
   - AppKit 卡片选中 / 下载进度视觉继续细化到更接近官方客户端
 
 ## 2026-04-02 Module Integration Notes
@@ -432,9 +460,8 @@
   - 当前更稳定的是图片 / GIF 预览
   - 不能假设每个详情页都有可直接播放的视频预览资源
 - 浏览页卡片层已经开始展示类型、年龄分级、题材、分类等元信息，但距离官方客户端仍差一层更完整的状态组织与下载态表达。
-- 浏览页卡片的下载态已经接入第一版，但还可以继续补：
+- 浏览页卡片的下载态已经补到“下载中 / 失败重试 / 已下载”三种基础状态，但还可以继续补：
   - 下载完成后的更明确视觉层级
-  - 失败态提示
   - 已安装与可更新的差异化表达
 - 详情页字段存在中英文混排：
   - 当前代码已经兼容一部分中英文 key
@@ -451,11 +478,11 @@
   - 数据源仍以 Steam 浏览页 + 详情页 HTML 为主
   - 当前默认视频浏览页样本稳定有 30 个项目
   - `3693979526` 是新的有效详情页基准样本
-  - 本轮已完成“字段接入模块”、“详情弹层展示增强”、“AppKit 网格替换”、“筛选菜单中文化”
+  - 本轮已完成“字段接入模块”、“详情弹层展示增强”、“AppKit 网格替换”、“筛选菜单中文化”、“预览类型缓存回写”、“下载失败重试态接入”、“作者工坊模块内二次抓取”
   - 下一阶段更值得做的是：
-    - 继续增强卡片列表的失败态 / 已更新态 / 可更新态表达
+    - 继续增强卡片列表的已更新态 / 可更新态表达
     - 做成人页 / 异常页兜底细化
-    - 做 MIME / 详情解析缓存优化
+    - 把 MIME 缓存从条目级进一步扩展到 URL 级回退链路
 
 ## Current Build Status
 - 主 app 的 `ENABLE_APP_SANDBOX` 已改为 `NO`

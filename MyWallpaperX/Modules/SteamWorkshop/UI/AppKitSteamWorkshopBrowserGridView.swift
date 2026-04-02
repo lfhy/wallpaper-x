@@ -76,6 +76,8 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
             let cell = AppKitSteamWorkshopBrowserItem(nibName: nil, bundle: nil)
             cell.configure(
                 item: item,
+                downloadRecord: self.service.latestDownloadRecord(for: id),
+                downloadProgressText: self.service.downloadProgressLabel(for: id),
                 isDownloading: self.service.isDownloading(itemID: id),
                 isDownloaded: self.service.isDownloaded(itemID: id),
                 onOpen: { [weak self] in self?.onOpen(item) },
@@ -137,7 +139,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
-        service.$browserItems
+        service.$displayedBrowserItems
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in self?.applyItems($0) }
             .store(in: &cancellables)
@@ -148,11 +150,18 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
             .store(in: &cancellables)
 
         service.$activeDownloadItemID
-        .receive(on: DispatchQueue.main)
-        .sink { [weak self] _ in
-            self?.reloadVisibleItems()
-        }
-        .store(in: &cancellables)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.reloadVisibleItems()
+            }
+            .store(in: &cancellables)
+
+        service.$activeDownloadProgressText
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.reloadVisibleItems()
+            }
+            .store(in: &cancellables)
 
         service.$downloads
             .receive(on: DispatchQueue.main)
@@ -167,9 +176,19 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
         )
         .receive(on: DispatchQueue.main)
         .sink { [weak self] _ in
-            self?.checkLoadMore()
+            guard let self else { return }
+            self.service.updateBrowserScrollOffset(self.scrollView.contentView.bounds.origin.y)
+            self.checkLoadMore()
         }
         .store(in: &cancellables)
+
+        service.$pendingBrowserScrollRestoreOffset
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] offsetY in
+                guard let self, let offsetY else { return }
+                self.restoreScrollOffset(offsetY)
+            }
+            .store(in: &cancellables)
 
         moduleActivationObserver = NotificationCenter.default.addObserver(
             forName: .moduleDidBecomeActive,
@@ -181,7 +200,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
             self?.requestFocus()
         }
 
-        applyItems(service.browserItems)
+        applyItems(service.displayedBrowserItems)
     }
 
     private func applyItems(_ items: [SteamWorkshopBrowserItem]) {
@@ -192,6 +211,9 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
         snapshot.appendSections([.main])
         snapshot.appendItems(orderedIDs, toSection: .main)
         dataSource.apply(snapshot, animatingDifferences: true)
+        DispatchQueue.main.async { [weak self] in
+            self?.checkLoadMore()
+        }
     }
 
     private func reloadVisibleItems() {
@@ -202,6 +224,8 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
             guard let item = itemsByID[id] else { continue }
             cell.configure(
                 item: item,
+                downloadRecord: service.latestDownloadRecord(for: id),
+                downloadProgressText: service.downloadProgressLabel(for: id),
                 isDownloading: service.isDownloading(itemID: id),
                 isDownloaded: service.isDownloaded(itemID: id),
                 onOpen: { [weak self] in self?.onOpen(item) },
@@ -244,5 +268,19 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
         guard flowLayout.itemSize != newSize else { return }
         flowLayout.itemSize = newSize
         collectionView.collectionViewLayout?.invalidateLayout()
+    }
+
+    private func restoreScrollOffset(_ offsetY: CGFloat) {
+        guard let documentView = scrollView.documentView else {
+            service.consumePendingBrowserScrollRestoreOffset()
+            return
+        }
+        scrollView.layoutSubtreeIfNeeded()
+        let maxOffsetY = max(0, documentView.bounds.height - scrollView.contentView.bounds.height)
+        let clampedOffsetY = min(max(0, offsetY), maxOffsetY)
+        scrollView.contentView.setBoundsOrigin(NSPoint(x: 0, y: clampedOffsetY))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        service.updateBrowserScrollOffset(clampedOffsetY)
+        service.consumePendingBrowserScrollRestoreOffset()
     }
 }

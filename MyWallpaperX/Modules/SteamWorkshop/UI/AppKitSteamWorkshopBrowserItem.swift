@@ -23,6 +23,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     private var onDownload: (() -> Void)?
     private var onCancelDownload: (() -> Void)?
     private var currentIsDownloading = false
+    private var currentSecondaryMetaColor: NSColor = .secondaryLabelColor
     private var trackingAreaRef: NSTrackingArea?
     private var isHovering = false
     private var currentCardScale: CGFloat = 1.0
@@ -66,6 +67,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         onDownload = nil
         onCancelDownload = nil
         currentIsDownloading = false
+        currentSecondaryMetaColor = .secondaryLabelColor
         isHovering = false
         currentCardScale = 1.0
         cardView.layer?.transform = CATransform3DIdentity
@@ -74,6 +76,8 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
 
     func configure(
         item: SteamWorkshopBrowserItem,
+        downloadRecord: SteamWorkshopDownloadRecord?,
+        downloadProgressText: String?,
         isDownloading: Bool,
         isDownloaded: Bool,
         onOpen: @escaping () -> Void,
@@ -87,7 +91,19 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
 
         titleLabel.stringValue = item.title
         metaLabel.stringValue = item.primaryMetaText
-        secondaryMetaLabel.stringValue = localizedSecondaryMetaText(for: item)
+        let baseSecondaryMeta = localizedSecondaryMetaText(for: item)
+        secondaryMetaLabel.stringValue = secondaryStatusText(
+            baseText: baseSecondaryMeta,
+            downloadRecord: downloadRecord,
+            isDownloading: isDownloading,
+            isDownloaded: isDownloaded,
+            downloadProgressText: downloadProgressText
+        )
+        currentSecondaryMetaColor = secondaryMetaColor(
+            downloadRecord: downloadRecord,
+            isDownloading: isDownloading,
+            isDownloaded: isDownloaded
+        )
 
         if isDownloading {
             actionButton.title = "取消下载"
@@ -97,6 +113,10 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             actionButton.title = "已下载"
             actionButton.isEnabled = false
             actionButton.bezelColor = NSColor.systemGreen
+        } else if downloadRecord?.failureMessage != nil {
+            actionButton.title = "重试下载"
+            actionButton.isEnabled = true
+            actionButton.bezelColor = NSColor.systemRed
         } else {
             actionButton.title = "下载"
             actionButton.isEnabled = true
@@ -240,7 +260,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         previewContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         titleLabel.textColor = .labelColor
         metaLabel.textColor = .secondaryLabelColor
-        secondaryMetaLabel.textColor = .secondaryLabelColor
+        secondaryMetaLabel.textColor = currentSecondaryMetaColor
     }
 
     private func configureLabel(_ label: NSTextField, font: NSFont, color: NSColor) {
@@ -314,6 +334,45 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         ]
         .compactMap { $0 }
         .joined(separator: "  ·  ")
+    }
+
+    private func secondaryStatusText(
+        baseText: String,
+        downloadRecord: SteamWorkshopDownloadRecord?,
+        isDownloading: Bool,
+        isDownloaded: Bool,
+        downloadProgressText: String?
+    ) -> String {
+        if isDownloading {
+            if let downloadProgressText, !downloadProgressText.isEmpty {
+                return downloadProgressText
+            }
+            return "下载中"
+        }
+        if downloadRecord?.failureMessage != nil {
+            return "下载失败，可重试"
+        }
+        if isDownloaded {
+            return baseText.isEmpty ? "已下载，可在详情中设为壁纸" : "已下载  ·  \(baseText)"
+        }
+        return baseText
+    }
+
+    private func secondaryMetaColor(
+        downloadRecord: SteamWorkshopDownloadRecord?,
+        isDownloading: Bool,
+        isDownloaded: Bool
+    ) -> NSColor {
+        if isDownloading {
+            return .controlAccentColor
+        }
+        if downloadRecord?.failureMessage != nil {
+            return .systemRed
+        }
+        if isDownloaded {
+            return .systemGreen
+        }
+        return .secondaryLabelColor
     }
 
     private func applyHoverStyle(animated: Bool) {

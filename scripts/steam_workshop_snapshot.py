@@ -165,9 +165,14 @@ class AssetParser(HTMLParser):
         detail_stats = self.extract_detail_stats(snapshot.html)
         detail_tags = self.extract_detail_tags(snapshot.html)
         detected_author = self.detected_author or self.extract_detail_author(snapshot.html)
+        detected_author_profile_url = self.extract_detail_author_profile_url(snapshot.html)
+        detected_author_workshop_url = self.extract_detail_author_workshop_url(snapshot.html)
+        browse_author_links = self.extract_browse_author_links(snapshot.html)
         page_kind = "unknown"
         if "workshop/browse" in snapshot.final_url:
             page_kind = "browse"
+        elif "myworkshopfiles" in snapshot.final_url:
+            page_kind = "author-workshop"
         elif "sharedfiles/filedetails" in snapshot.final_url:
             if "agecheck" in snapshot.final_url or "Please enter your birth date" in snapshot.html:
                 page_kind = "age-check"
@@ -190,6 +195,8 @@ class AssetParser(HTMLParser):
             "page_title": self.page_title,
             "detected_title": self.detected_title,
             "detected_author": detected_author,
+            "detected_author_profile_url": detected_author_profile_url,
+            "detected_author_workshop_url": detected_author_workshop_url,
             "canonical_url": self.canonical_url,
             "og_url": self.og_url,
             "og_type": self.og_type,
@@ -197,6 +204,7 @@ class AssetParser(HTMLParser):
             "workshop_item_count": len(set(self.workshop_item_ids)),
             "workshop_item_ids": sorted(set(self.workshop_item_ids)),
             "hover_bind_ids": sorted(set(self.hover_bind_ids)),
+            "browse_author_links": browse_author_links[:50],
             "preview_image_urls": self.preview_image_urls[:50],
             "preview_video_urls": self.preview_video_urls[:50],
             "detail_stats": detail_stats,
@@ -240,6 +248,47 @@ class AssetParser(HTMLParser):
             return None
         author = " ".join(re.sub(r"<.*?>", " ", match.group(1)).split())
         return author or None
+
+    @staticmethod
+    def extract_detail_author_profile_url(html: str) -> Optional[str]:
+        match = re.search(r'<a[^>]*class="friendBlockLinkOverlay"[^>]*href="([^"]+)"', html, flags=re.S)
+        if not match:
+            return None
+        return match.group(1)
+
+    @staticmethod
+    def extract_detail_author_workshop_url(html: str) -> Optional[str]:
+        match = re.search(
+            r'href="(https://steamcommunity\.com/(?:profiles/\d+|id/[^/"?]+)/myworkshopfiles/(?:\?[^"]*)?)"',
+            html,
+            flags=re.S,
+        )
+        if not match:
+            return None
+        return match.group(1)
+
+    @staticmethod
+    def extract_browse_author_links(html: str) -> List[Dict[str, str]]:
+        matches = re.findall(
+            r'<div[^>]*class="workshopItemAuthorName[^"]*"[^>]*>.*?<a[^>]*href="([^"]+)"[^>]*>\s*(.*?)\s*</a>',
+            html,
+            flags=re.S,
+        )
+        results: List[Dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for raw_url, raw_author in matches:
+            author = " ".join(re.sub(r"<.*?>", " ", raw_author).split())
+            key = (raw_url, author)
+            if not author or key in seen:
+                continue
+            seen.add(key)
+            results.append(
+                {
+                    "author": author,
+                    "url": raw_url,
+                }
+            )
+        return results
 
 
 @dataclass
@@ -304,6 +353,10 @@ def infer_label(url: str, explicit_label: Optional[str]) -> str:
     if "sharedfiles/filedetails" in parsed.path:
         match = re.search(r"[?&]id=(\d+)", parsed.query)
         return f"detail-{match.group(1)}" if match else "detail"
+    if "myworkshopfiles" in parsed.path:
+        owner = next((part for part in parsed.path.split("/") if part and part not in {"profiles", "id", "myworkshopfiles"}), None)
+        owner_slug = safe_slug(owner or "author")
+        return f"author-workshop-{owner_slug}"
     return "browse"
 
 
