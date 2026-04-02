@@ -380,7 +380,7 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
             currentOffset: SteamWorkshopService.shared.zoomOffset,
             for: width,
             minCols: 2,
-            maxCols: isDownloadsMode ? 4 : 5
+            maxCols: 5
         )
         let canZoom = delta > 0 ? availability.canZoomIn : availability.canZoomOut
         guard canZoom else { return }
@@ -402,7 +402,7 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
             currentOffset: SteamWorkshopService.shared.zoomOffset,
             for: gridWidth(),
             minCols: 2,
-            maxCols: isDownloadsMode ? 4 : 5
+            maxCols: 5
         )
         zoomControl.setEnabled(availability.canZoomIn, forSegment: 0)
         zoomControl.setEnabled(availability.canZoomOut, forSegment: 1)

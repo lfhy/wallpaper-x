@@ -6,17 +6,13 @@
 import AppKit
 
 final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
+    static let hoverScale: CGFloat = 1.012
     private let cardView = NSView()
     private let previewContainer = NSView()
     private let previewImageView = NSImageView()
     private let titleLabel = NSTextField(wrappingLabelWithString: "")
     private let metaLabel = NSTextField(labelWithString: "")
-    private let secondaryMetaLabel = NSTextField(wrappingLabelWithString: "")
-    private let authorLabel = NSTextField(labelWithString: "")
-    private let tagLabel = NSTextField(wrappingLabelWithString: "")
-    private let adultBadge = NSTextField(labelWithString: "成人内容")
-    private let previewKindBadge = NSTextField(labelWithString: "")
-    private let progressBadge = NSTextField(labelWithString: "")
+    private let secondaryMetaLabel = NSTextField(labelWithString: "")
     private let detailButton = NSButton(title: "查看详情", target: nil, action: nil)
     private let actionButton = NSButton(title: "下载", target: nil, action: nil)
 
@@ -28,6 +24,13 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     private var currentIsDownloading = false
     private var trackingAreaRef: NSTrackingArea?
     private var isHovering = false
+
+    private enum Layout {
+        static let outerInset: CGFloat = 4
+        static let contentInset: CGFloat = 10
+        static let buttonHeight: CGFloat = 30
+        static let buttonWidth: CGFloat = 92
+    }
 
     override init(nibName: NSNib.Name?, bundle: Bundle?) {
         super.init(nibName: nibName, bundle: bundle)
@@ -58,6 +61,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     func configure(
         item: SteamWorkshopBrowserItem,
         isDownloading: Bool,
+        isDownloaded: Bool,
         downloadProgressText: String?,
         onOpen: @escaping () -> Void,
         onDownload: @escaping () -> Void,
@@ -71,24 +75,20 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         titleLabel.stringValue = item.title
         metaLabel.stringValue = item.primaryMetaText
         secondaryMetaLabel.stringValue = localizedSecondaryMetaText(for: item)
-        authorLabel.stringValue = item.author
-        tagLabel.stringValue = [
-            localizedValue(item.workshopTypeText),
-            localizedValue(item.ageRatingText),
-            localizedValue(item.genreText),
-            localizedValue(item.categoryText)
-        ]
-        .compactMap { $0 }
-        .filter { !$0.isEmpty }
-        .joined(separator: "  ·  ")
 
-        adultBadge.isHidden = !item.hasAdultContent
-        previewKindBadge.stringValue = previewBadgeText(for: item.previewAssetKind)
-        progressBadge.stringValue = downloadProgressText ?? "下载中"
-        progressBadge.isHidden = !isDownloading
-
-        actionButton.title = isDownloading ? "取消下载" : "下载"
-        actionButton.bezelColor = isDownloading ? NSColor.controlColor : NSColor.controlAccentColor
+        if isDownloading {
+            actionButton.title = "取消下载"
+            actionButton.isEnabled = true
+            actionButton.bezelColor = NSColor.controlColor
+        } else if isDownloaded {
+            actionButton.title = "已下载"
+            actionButton.isEnabled = false
+            actionButton.bezelColor = NSColor.systemGreen
+        } else {
+            actionButton.title = "下载"
+            actionButton.isEnabled = true
+            actionButton.bezelColor = NSColor.controlAccentColor
+        }
 
         loadPreview(from: item.previewImageURL)
         applyHoverStyle(animated: false)
@@ -98,35 +98,26 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         super.viewDidLayout()
 
         let bounds = view.bounds
-        cardView.frame = bounds
-        let contentWidth = bounds.width - 24
-        let previewHeight = floor((bounds.width - 24) / (16.0 / 9.0))
+        cardView.frame = bounds.insetBy(dx: Layout.outerInset, dy: Layout.outerInset)
+        let contentWidth = cardView.bounds.width - Layout.contentInset * 2
+        let previewSide = contentWidth
 
-        previewContainer.frame = CGRect(x: 12, y: bounds.height - 12 - previewHeight, width: contentWidth, height: previewHeight)
+        previewContainer.frame = CGRect(
+            x: Layout.contentInset,
+            y: cardView.bounds.height - Layout.contentInset - previewSide,
+            width: contentWidth,
+            height: previewSide
+        )
         previewImageView.frame = previewContainer.bounds
 
-        let badgeHeight: CGFloat = 22
-        let previewBadgeWidth = max(60, min(92, previewKindBadge.intrinsicContentSize.width + 18))
-        previewKindBadge.frame = CGRect(x: 10, y: 10, width: previewBadgeWidth, height: badgeHeight)
+        let textTop = previewContainer.frame.minY - 10
+        titleLabel.frame = CGRect(x: Layout.contentInset, y: textTop - 38, width: contentWidth, height: 36)
+        metaLabel.frame = CGRect(x: Layout.contentInset, y: titleLabel.frame.minY - 18, width: contentWidth, height: 15)
+        secondaryMetaLabel.frame = CGRect(x: Layout.contentInset, y: metaLabel.frame.minY - 18, width: contentWidth, height: 15)
 
-        if !adultBadge.isHidden {
-            let adultWidth = max(66, min(96, adultBadge.intrinsicContentSize.width + 18))
-            adultBadge.frame = CGRect(x: previewContainer.bounds.width - adultWidth - 10, y: previewContainer.bounds.height - badgeHeight - 10, width: adultWidth, height: badgeHeight)
-        }
-
-        if !progressBadge.isHidden {
-            progressBadge.frame = CGRect(x: 10, y: 10, width: min(contentWidth - 20, 160), height: badgeHeight)
-        }
-
-        let textTop = previewContainer.frame.minY - 12
-        titleLabel.frame = CGRect(x: 12, y: textTop - 40, width: contentWidth, height: 38)
-        metaLabel.frame = CGRect(x: 12, y: titleLabel.frame.minY - 19, width: contentWidth, height: 16)
-        secondaryMetaLabel.frame = CGRect(x: 12, y: metaLabel.frame.minY - 30, width: contentWidth, height: 28)
-        authorLabel.frame = CGRect(x: 12, y: secondaryMetaLabel.frame.minY - 18, width: contentWidth, height: 16)
-        tagLabel.frame = CGRect(x: 12, y: authorLabel.frame.minY - 28, width: contentWidth, height: 24)
-
-        detailButton.frame = CGRect(x: 12, y: 12, width: 86, height: 30)
-        actionButton.frame = CGRect(x: detailButton.frame.maxX + 8, y: 12, width: 86, height: 30)
+        let buttonsY = Layout.contentInset
+        detailButton.frame = CGRect(x: Layout.contentInset, y: buttonsY, width: Layout.buttonWidth, height: Layout.buttonHeight)
+        actionButton.frame = CGRect(x: cardView.bounds.width - Layout.contentInset - Layout.buttonWidth, y: buttonsY, width: Layout.buttonWidth, height: Layout.buttonHeight)
         refreshTrackingArea()
     }
 
@@ -145,23 +136,22 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
 
         cardView.wantsLayer = true
         cardView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-        cardView.layer?.cornerRadius = 18
+        cardView.layer?.cornerRadius = 16
         cardView.layer?.borderWidth = 1
-        cardView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.25).cgColor
+        cardView.layer?.borderColor = NSColor.white.withAlphaComponent(0.10).cgColor
         cardView.layer?.shadowColor = NSColor.black.cgColor
         cardView.layer?.shadowOpacity = 0
-        cardView.layer?.shadowRadius = 20
-        cardView.layer?.shadowOffset = CGSize(width: 0, height: -2)
+        cardView.layer?.shadowRadius = 16
+        cardView.layer?.shadowOffset = CGSize(width: 0, height: -1)
         cardView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(cardView)
 
         previewContainer.wantsLayer = true
-        previewContainer.layer?.cornerRadius = 16
+        previewContainer.layer?.cornerRadius = 14
         previewContainer.layer?.masksToBounds = true
-        previewContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         cardView.addSubview(previewContainer)
 
-        previewImageView.imageScaling = .scaleAxesIndependently
+        previewImageView.imageScaling = .scaleProportionallyUpOrDown
         previewImageView.imageAlignment = .alignCenter
         previewContainer.addSubview(previewImageView)
 
@@ -173,24 +163,8 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         cardView.addSubview(metaLabel)
 
         configureLabel(secondaryMetaLabel, font: .systemFont(ofSize: 11), color: .secondaryLabelColor)
-        secondaryMetaLabel.maximumNumberOfLines = 2
+        secondaryMetaLabel.maximumNumberOfLines = 1
         cardView.addSubview(secondaryMetaLabel)
-
-        configureLabel(authorLabel, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
-        cardView.addSubview(authorLabel)
-
-        configureLabel(tagLabel, font: .systemFont(ofSize: 10, weight: .medium), color: .secondaryLabelColor)
-        tagLabel.maximumNumberOfLines = 2
-        cardView.addSubview(tagLabel)
-
-        configureBadge(adultBadge, background: NSColor.systemOrange.withAlphaComponent(0.96))
-        previewContainer.addSubview(adultBadge)
-
-        configureBadge(previewKindBadge, background: NSColor.black.withAlphaComponent(0.62))
-        previewContainer.addSubview(previewKindBadge)
-
-        configureBadge(progressBadge, background: NSColor.black.withAlphaComponent(0.62))
-        previewContainer.addSubview(progressBadge)
 
         detailButton.bezelStyle = .rounded
         detailButton.target = self
@@ -211,16 +185,6 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         label.isBordered = false
         label.isEditable = false
         label.translatesAutoresizingMaskIntoConstraints = false
-    }
-
-    private func configureBadge(_ label: NSTextField, background: NSColor) {
-        label.alignment = .center
-        label.font = .systemFont(ofSize: 10, weight: .semibold)
-        label.textColor = .white
-        label.wantsLayer = true
-        label.layer?.backgroundColor = background.cgColor
-        label.layer?.cornerRadius = 11
-        label.lineBreakMode = .byTruncatingTail
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -253,15 +217,6 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         }
     }
 
-    private func previewBadgeText(for kind: SteamWorkshopPreviewAssetKind) -> String {
-        switch kind {
-        case .video: return "视频预览"
-        case .animatedImage: return "动态预览"
-        case .stillImage: return "静态预览"
-        case .unknown: return "预览"
-        }
-    }
-
     private func localizedValue(_ value: String?) -> String? {
         guard let value, !value.isEmpty else { return nil }
         switch value {
@@ -289,8 +244,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         [
             localizedValue(item.workshopTypeText),
             localizedValue(item.ageRatingText),
-            localizedValue(item.genreText),
-            item.updatedText
+            localizedValue(item.genreText)
         ]
         .compactMap { $0 }
         .joined(separator: "  ·  ")
@@ -300,12 +254,12 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         let changes = {
             self.cardView.layer?.borderColor = (
                 self.isHovering
-                    ? NSColor.controlAccentColor.withAlphaComponent(0.38).cgColor
-                    : NSColor.separatorColor.withAlphaComponent(0.25).cgColor
+                    ? NSColor.white.withAlphaComponent(0.42).cgColor
+                    : NSColor.white.withAlphaComponent(0.10).cgColor
             )
-            self.cardView.layer?.shadowOpacity = self.isHovering ? 0.14 : 0
+            self.cardView.layer?.shadowOpacity = self.isHovering ? 0.18 : 0
             self.cardView.layer?.transform = self.isHovering
-                ? CATransform3DMakeScale(1.01, 1.01, 1)
+                ? CATransform3DMakeScale(1.012, 1.012, 1)
                 : CATransform3DIdentity
         }
 

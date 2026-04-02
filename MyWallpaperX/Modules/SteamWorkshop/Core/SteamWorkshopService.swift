@@ -235,6 +235,7 @@ struct SteamWorkshopBrowserItem: Identifiable, Equatable, Codable {
     let id: String
     let title: String
     let author: String
+    let authorProfileURL: URL?
     let hasAdultContent: Bool
     let summary: String
     let descriptionText: String
@@ -312,6 +313,7 @@ private struct SteamWorkshopProject: Decodable {
 private struct SteamWorkshopDetailParseResult {
     let title: String
     let author: String
+    let authorProfileURL: URL?
     let summary: String
     let descriptionText: String
     let tags: [String]
@@ -340,6 +342,7 @@ private struct SteamWorkshopBrowseStub: Equatable {
     let id: String
     let title: String?
     let author: String?
+    let authorProfileURL: URL?
     let hasAdultContent: Bool
     let summary: String?
     let previewImageURL: URL?
@@ -659,6 +662,14 @@ final class SteamWorkshopService: ObservableObject {
 
     func isDownloading(itemID: String) -> Bool {
         activeDownloadItemID == itemID
+    }
+
+    func downloadRecord(for itemID: String) -> SteamWorkshopDownloadRecord? {
+        downloads.first(where: { $0.id == itemID && $0.status == .ready })
+    }
+
+    func isDownloaded(itemID: String) -> Bool {
+        downloadRecord(for: itemID) != nil
     }
 
     func downloadProgressLabel(for itemID: String) -> String? {
@@ -1046,6 +1057,16 @@ final class SteamWorkshopService: ObservableObject {
 
     func openWorkshopDetailPage(for item: SteamWorkshopBrowserItem) {
         NSWorkspace.shared.open(item.detailURL)
+    }
+
+    func openAuthorWorksPage(for item: SteamWorkshopBrowserItem) {
+        guard let authorProfileURL = item.authorProfileURL else { return }
+        guard var components = URLComponents(url: authorProfileURL.appendingPathComponent("myworkshopfiles"), resolvingAgainstBaseURL: false) else {
+            NSWorkspace.shared.open(authorProfileURL)
+            return
+        }
+        components.queryItems = [URLQueryItem(name: "appid", value: Constants.workshopAppID)]
+        NSWorkspace.shared.open(components.url ?? authorProfileURL)
     }
 
     func revealItem(_ record: SteamWorkshopDownloadRecord) {
@@ -1971,6 +1992,7 @@ final class SteamWorkshopService: ObservableObject {
         || item.resolutionText == nil
         || item.workshopTypeText == nil
         || item.author == "未知作者"
+        || item.authorProfileURL == nil
     }
 
     private func refreshSelectedBrowserItemDetailIfNeeded(forceRefresh: Bool) {
@@ -1987,6 +2009,7 @@ final class SteamWorkshopService: ObservableObject {
             id: item.id,
             title: item.title,
             author: item.author,
+            authorProfileURL: item.authorProfileURL,
             hasAdultContent: item.hasAdultContent,
             summary: item.summary,
             previewImageURL: item.previewImageURL
@@ -2341,7 +2364,7 @@ final class SteamWorkshopService: ObservableObject {
         var ordered: [SteamWorkshopBrowseStub] = []
         var seen = Set<String>()
         for id in matches where seen.insert(id).inserted {
-            ordered.append(SteamWorkshopBrowseStub(id: id, title: nil, author: nil, hasAdultContent: false, summary: nil, previewImageURL: nil))
+            ordered.append(SteamWorkshopBrowseStub(id: id, title: nil, author: nil, authorProfileURL: nil, hasAdultContent: false, summary: nil, previewImageURL: nil))
         }
         return Array(ordered.prefix(Constants.browserPageSize))
     }
@@ -2390,6 +2413,7 @@ final class SteamWorkshopService: ObservableObject {
             id: stub.id,
             title: parsed.title,
             author: parsed.author,
+            authorProfileURL: parsed.authorProfileURL ?? stub.authorProfileURL,
             hasAdultContent: stub.hasAdultContent,
             summary: parsed.summary,
             descriptionText: parsed.descriptionText,
@@ -2442,6 +2466,12 @@ final class SteamWorkshopService: ObservableObject {
             pattern: #"<div[^>]*class="friendBlockContent"[^>]*>\s*(.*?)\s*<br"#,
             in: html
         ) ?? "未知作者"
+        let authorProfileURL = normalizeSteamCommunityURL(
+            firstCapture(
+                pattern: #"<a[^>]*class="friendBlockLinkOverlay"[^>]*href="([^"]+)""#,
+                in: html
+            )
+        )
 
         let summary = metaContent(property: "og:description", in: html)
             ?? firstCapture(pattern: #"<div[^>]*class="workshopItemDescription"[^>]*>(.*?)</div>"#, in: html)
@@ -2466,6 +2496,7 @@ final class SteamWorkshopService: ObservableObject {
         return SteamWorkshopDetailParseResult(
             title: normalizeText(title),
             author: normalizeAuthorName(author),
+            authorProfileURL: authorProfileURL,
             summary: normalizeText(summary),
             descriptionText: normalizeText(descriptionText),
             tags: tags.map(normalizeText),
@@ -2630,6 +2661,18 @@ final class SteamWorkshopService: ObservableObject {
         return URL(string: htmlDecode(value))
     }
 
+    private static func normalizeSteamCommunityURL(_ rawValue: String?) -> URL? {
+        guard let rawValue else { return nil }
+        let decoded = htmlDecode(rawValue)
+        if decoded.hasPrefix("//") {
+            return URL(string: "https:\(decoded)")
+        }
+        if decoded.hasPrefix("/") {
+            return URL(string: decoded, relativeTo: URL(string: "https://steamcommunity.com"))?.absoluteURL
+        }
+        return URL(string: decoded)
+    }
+
     private static func parseBrowsePage(html: String) -> [SteamWorkshopBrowseStub] {
         var results: [SteamWorkshopBrowseStub] = []
         var seen = Set<String>()
@@ -2671,6 +2714,7 @@ final class SteamWorkshopService: ObservableObject {
                     id: id,
                     title: title.map(normalizeText),
                     author: author.map(normalizeAuthorName),
+                    authorProfileURL: nil,
                     hasAdultContent: block.localizedCaseInsensitiveContains("has_adult_content"),
                     summary: browseSummaries[id].map(normalizeText),
                     previewImageURL: previewImageURL
@@ -2752,6 +2796,7 @@ final class SteamWorkshopService: ObservableObject {
             id: item.id,
             title: item.title,
             author: item.author,
+            authorProfileURL: item.authorProfileURL,
             hasAdultContent: item.hasAdultContent,
             summary: item.summary,
             descriptionText: item.descriptionText,
@@ -2780,6 +2825,7 @@ final class SteamWorkshopService: ObservableObject {
             id: stub.id,
             title: normalizedStubTitle(stub),
             author: normalizedStubAuthor(stub),
+            authorProfileURL: stub.authorProfileURL,
             hasAdultContent: stub.hasAdultContent,
             summary: stub.summary ?? "",
             descriptionText: stub.summary ?? "",
@@ -2808,6 +2854,7 @@ final class SteamWorkshopService: ObservableObject {
             id: item.id,
             title: item.title.isEmpty ? normalizedStubTitle(stub) : item.title,
             author: item.author.isEmpty ? normalizedStubAuthor(stub) : item.author,
+            authorProfileURL: item.authorProfileURL ?? stub.authorProfileURL,
             hasAdultContent: item.hasAdultContent || stub.hasAdultContent,
             summary: item.summary,
             descriptionText: item.descriptionText,

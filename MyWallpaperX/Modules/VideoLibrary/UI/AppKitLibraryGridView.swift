@@ -451,11 +451,12 @@ final class AppKitLibraryGridContainerView: NSView, ModuleFocusable {
     private func updateLayoutItemSize() {
         let availableWidth = max(0, bounds.width - flowLayout.sectionInset.left - flowLayout.sectionInset.right)
         let columnCount = calculateColumnCount(width: availableWidth)
+        let baseSpacing: CGFloat = 8
         // 动态间距：卡片宽 × (scale-1)，刚好容纳放大量不遮盖相邻卡片
-        let estimatedCardWidth = max(100, (availableWidth - flowLayout.minimumInteritemSpacing * CGFloat(max(0, columnCount - 1))) / CGFloat(columnCount))
+        let estimatedCardWidth = max(100, (availableWidth - baseSpacing * CGFloat(max(0, columnCount - 1))) / CGFloat(columnCount))
         let hoverScale: CGFloat = AppKitWallpaperItem.hoverScale
         let minSpacing = estimatedCardWidth * (hoverScale - 1.0)
-        let effectiveSpacing = max(flowLayout.minimumInteritemSpacing, minSpacing)
+        let effectiveSpacing = max(baseSpacing, minSpacing)
         flowLayout.minimumInteritemSpacing = effectiveSpacing
         flowLayout.minimumLineSpacing = effectiveSpacing
         let totalSpacing = CGFloat(max(0, columnCount - 1)) * effectiveSpacing
@@ -513,18 +514,10 @@ final class AppKitLibraryGridContainerView: NSView, ModuleFocusable {
     }
 
     private func calculateColumnCount(width: CGFloat) -> Int {
-        // 基础列数由窗口宽度决定，zoomOffset 在此基础上叠加偏移（负数=更大卡片，正数=更多列）。
-        let base: Int
-        if width >= 1200 {
-            base = 6
-        } else if width >= 900 {
-            base = 5
-        } else if width >= 600 {
-            base = 4
-        } else {
-            base = 3
-        }
-        return max(3, min(6, base + wallpaperManager.gridZoomOffset))
+        GridLayoutHelper.columnCount(
+            for: width,
+            zoomOffset: wallpaperManager.gridZoomOffset
+        )
     }
 
     private func enqueueThumbnailReload(forNormalizedPath path: String) {

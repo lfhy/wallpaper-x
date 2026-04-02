@@ -62,9 +62,9 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
 
     private lazy var flowLayout: NSCollectionViewFlowLayout = {
         let layout = NSCollectionViewFlowLayout()
-        layout.minimumInteritemSpacing = 14
-        layout.minimumLineSpacing = 18
-        layout.sectionInset = NSEdgeInsets(top: 12, left: 12, bottom: 48, right: 12)
+        layout.minimumInteritemSpacing = 8
+        layout.minimumLineSpacing = 16
+        layout.sectionInset = NSEdgeInsets(top: 8, left: 8, bottom: 40, right: 8)
         return layout
     }()
 
@@ -76,6 +76,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
             cell.configure(
                 item: item,
                 isDownloading: self.service.isDownloading(itemID: id),
+                isDownloaded: self.service.isDownloaded(itemID: id),
                 downloadProgressText: self.service.downloadProgressLabel(for: id),
                 onOpen: { [weak self] in self?.onOpen(item) },
                 onDownload: { [weak self] in self?.onDownload(item) },
@@ -151,6 +152,13 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
         }
         .store(in: &cancellables)
 
+        service.$downloads
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.reloadVisibleItems()
+            }
+            .store(in: &cancellables)
+
         NotificationCenter.default.publisher(
             for: NSView.boundsDidChangeNotification,
             object: scrollView.contentView
@@ -193,6 +201,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
             cell.configure(
                 item: item,
                 isDownloading: service.isDownloading(itemID: id),
+                isDownloaded: service.isDownloaded(itemID: id),
                 downloadProgressText: service.downloadProgressLabel(for: id),
                 onOpen: { [weak self] in self?.onOpen(item) },
                 onDownload: { [weak self] in self?.onDownload(item) },
@@ -221,17 +230,20 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable {
             minCols: 2,
             maxCols: 5
         )
-        let spacing: CGFloat = 14
+        let hoverScale: CGFloat = AppKitSteamWorkshopBrowserItem.hoverScale
+        let baseSpacing: CGFloat = 8
+        let estimatedWidth = max(100, (availableWidth - baseSpacing * CGFloat(max(0, columns - 1))) / CGFloat(columns))
+        let minSpacing = estimatedWidth * (hoverScale - 1.0)
+        let spacing = max(baseSpacing, minSpacing)
         flowLayout.minimumInteritemSpacing = spacing
-        flowLayout.minimumLineSpacing = 18
+        flowLayout.minimumLineSpacing = spacing
         let totalSpacing = CGFloat(max(0, columns - 1)) * spacing
         let cardWidth = max(220, floor((availableWidth - totalSpacing) / CGFloat(columns)))
-        let previewHeight = floor(cardWidth / (16.0 / 9.0))
-        let cardHeight = previewHeight + 178
+        let previewHeight = floor(cardWidth - 28)
+        let cardHeight = previewHeight + 132
         let newSize = NSSize(width: cardWidth, height: cardHeight)
         guard flowLayout.itemSize != newSize else { return }
         flowLayout.itemSize = newSize
         collectionView.collectionViewLayout?.invalidateLayout()
     }
 }
-
