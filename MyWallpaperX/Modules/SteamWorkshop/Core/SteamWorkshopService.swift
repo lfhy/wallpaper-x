@@ -290,6 +290,10 @@ struct SteamWorkshopBrowserItem: Identifiable, Equatable, Codable {
     let favoritesText: String?
     let subscriptionsText: String?
     let scoreText: String?
+    let lifetimeFavoritesText: String?
+    let lifetimeSubscriptionsText: String?
+    let visibilityText: String?
+    let moderationText: String?
     let detailFields: [SteamWorkshopDetailField]
     let detailURL: URL
 
@@ -401,6 +405,9 @@ private struct SteamWorkshopPublishedFileDetail: Decodable {
     let description: String?
     let timeCreated: Int64?
     let timeUpdated: Int64?
+    let visibility: Int?
+    let banned: Int?
+    let banReason: String?
     let subscriptions: Int?
     let favorited: Int?
     let lifetimeSubscriptions: Int?
@@ -420,6 +427,9 @@ private struct SteamWorkshopPublishedFileDetail: Decodable {
         case description
         case time_created
         case time_updated
+        case visibility
+        case banned
+        case ban_reason
         case subscriptions
         case favorited
         case lifetime_subscriptions
@@ -446,6 +456,9 @@ private struct SteamWorkshopPublishedFileDetail: Decodable {
         description = try container.decodeIfPresent(String.self, forKey: .description)
         timeCreated = Self.decodeLossyInt64(from: container, forKey: .time_created)
         timeUpdated = Self.decodeLossyInt64(from: container, forKey: .time_updated)
+        visibility = Self.decodeLossyInt(from: container, forKey: .visibility)
+        banned = Self.decodeLossyInt(from: container, forKey: .banned)
+        banReason = try container.decodeIfPresent(String.self, forKey: .ban_reason)
         subscriptions = Self.decodeLossyInt(from: container, forKey: .subscriptions)
         favorited = Self.decodeLossyInt(from: container, forKey: .favorited)
         lifetimeSubscriptions = Self.decodeLossyInt(from: container, forKey: .lifetime_subscriptions)
@@ -607,9 +620,82 @@ private enum SteamWorkshopCredentialStore {
     }
 }
 
+private actor SteamWorkshopAuthorNameStore {
+    private var namesByKey: [String: String] = [:]
+    private var didLoadFromDisk = false
+
+    func name(for keys: [String]) async -> String? {
+        await loadFromDiskIfNeeded()
+        for key in keys {
+            if let value = namesByKey[key], !value.isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
+    func store(name: String, for keys: [String]) async {
+        let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty, normalized != "未知作者", !keys.isEmpty else { return }
+        await loadFromDiskIfNeeded()
+        var didChange = false
+        for key in keys where !key.isEmpty {
+            if namesByKey[key] != normalized {
+                namesByKey[key] = normalized
+                didChange = true
+            }
+        }
+        if didChange {
+            persistToDisk()
+        }
+    }
+
+    func clear() async {
+        namesByKey.removeAll()
+        didLoadFromDisk = true
+        try? FileManager.default.removeItem(at: Self.cacheFileURL)
+    }
+
+    private func loadFromDiskIfNeeded() async {
+        guard !didLoadFromDisk else { return }
+        defer { didLoadFromDisk = true }
+        guard let data = try? Data(contentsOf: Self.cacheFileURL),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let payload = object as? [String: Any],
+              let names = payload["namesByKey"] as? [String: String] else {
+            return
+        }
+        namesByKey = names
+    }
+
+    private func persistToDisk() {
+        let payload: [String: Any] = [
+            "updatedAt": ISO8601DateFormatter().string(from: Date()),
+            "namesByKey": namesByKey
+        ]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
+            return
+        }
+        let directory = Self.cacheFileURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? data.write(to: Self.cacheFileURL, options: [.atomic])
+    }
+
+    private static var cacheFileURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Caches", isDirectory: true)
+            .appendingPathComponent("MyWallpaperX", isDirectory: true)
+            .appendingPathComponent("SteamWorkshop", isDirectory: true)
+            .appendingPathComponent("AuthorNames.json")
+    }
+}
+
 @MainActor
 final class SteamWorkshopService: ObservableObject {
     static let shared = SteamWorkshopService()
+    private static let authorNameStore = SteamWorkshopAuthorNameStore()
 
     private enum Constants {
         static let workshopAppID = "431960"
@@ -619,6 +705,8 @@ final class SteamWorkshopService: ObservableObject {
         static let authorWorkshopPageSize = 30
         static let detailHydrationBatchSize = 12
         static let detailHydrationInterBatchDelayNanoseconds: UInt64 = 700_000_000
+        static let detailPrefetchBatchSize = 8
+        static let detailPrefetchInterBatchDelayNanoseconds: UInt64 = 1_100_000_000
         static let bundledSteamBundleName = "SteamCMDRuntime.bundle"
         static let bundledSteamRootName = "Steam"
         static let bundledSteamMetadataName = "runtime-metadata.json"
@@ -715,6 +803,7 @@ final class SteamWorkshopService: ObservableObject {
     private var pendingBrowserDetailStubs: [SteamWorkshopBrowseStub] = []
     private var pendingBrowserDetailStubIDs = Set<String>()
     private var browserDetailRetryCounts: [String: Int] = [:]
+    private var prioritizedVisibleBrowserItemIDs: [String] = []
     private let defaults = UserDefaults.standard
     private var loginProcess: Process?
     private var loginInputHandle: FileHandle?
@@ -920,6 +1009,21 @@ final class SteamWorkshopService: ObservableObject {
         currentBrowserScrollOffsetY = offsetY
     }
 
+    func prioritizeVisibleBrowserItemIDs(_ ids: [String]) {
+        let normalized = Array(NSOrderedSet(array: ids.filter { !$0.isEmpty })) as? [String] ?? []
+        guard normalized != prioritizedVisibleBrowserItemIDs else { return }
+        prioritizedVisibleBrowserItemIDs = normalized
+        guard !normalized.isEmpty, pendingBrowserDetailStubs.count > 1 else { return }
+
+        let prioritizedSet = Set(normalized)
+        let front = pendingBrowserDetailStubs.filter { prioritizedSet.contains($0.id) }
+        guard !front.isEmpty else { return }
+        let back = pendingBrowserDetailStubs.filter { !prioritizedSet.contains($0.id) }
+        pendingBrowserDetailStubs = front.sorted { lhs, rhs in
+            (normalized.firstIndex(of: lhs.id) ?? .max) < (normalized.firstIndex(of: rhs.id) ?? .max)
+        } + back
+    }
+
     func consumePendingBrowserScrollRestoreOffset() {
         pendingBrowserScrollRestoreOffset = nil
     }
@@ -973,13 +1077,13 @@ final class SteamWorkshopService: ObservableObject {
                     page: page
                 )
                 let stubs = pageResult.stubs
+                let seededItems = stubs.map(Self.seededBrowserItem)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard let self else { return }
                     guard self.navigationVersion == expectedNavigationVersion, self.browseContext == browseContext else { return }
                     let existingIDs = Set(self.browserItems.map(\.id))
-                    let fallbackItems = stubs
-                        .map(Self.fallbackBrowserItem)
+                    let fallbackItems = seededItems
                         .filter { !existingIDs.contains($0.id) }
                     self.browserItems.append(contentsOf: fallbackItems)
                     self.browserNextPage = page + 1
@@ -1038,6 +1142,16 @@ final class SteamWorkshopService: ObservableObject {
         startupTask = Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             await self.prepareRuntimeIfNeeded()
+            await MainActor.run {
+                guard !self.isLoadingMoreBrowserItems else { return }
+                guard self.browserFetchTask == nil else { return }
+                if self.browserItems.isEmpty || self.browserState == .idle {
+                    self.logBrowserDebug(
+                        "prepareForBrowserEntry trigger initial fetch context=\(self.browseContext.title) state=\(self.browserState)"
+                    )
+                    self.fetchBrowserItems(forceRefresh: true)
+                }
+            }
         }
     }
 
@@ -1990,11 +2104,12 @@ final class SteamWorkshopService: ObservableObject {
                     page: 1
                 )
                 let stubs = pageResult.stubs
+                let seededItems = stubs.map(Self.seededBrowserItem)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard let self else { return }
                     guard self.browseContext == browseContext else { return }
-                    self.browserItems = stubs.map(Self.fallbackBrowserItem)
+                    self.browserItems = seededItems
                     self.browserState = .loaded
                     self.hasMoreBrowserItems = pageResult.hasMore
                     self.browserNextPage = 2
@@ -2446,6 +2561,57 @@ final class SteamWorkshopService: ObservableObject {
         }
     }
 
+    func clearAllCachedState() {
+        browserFetchTask?.cancel()
+        browserFetchTask = nil
+        cancelBrowserDetailHydration()
+        selectedItemDetailTask?.cancel()
+        selectedItemDetailTask = nil
+
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: cacheDirectoryURL)
+        try? fileManager.removeItem(at: Self.detailCacheDirectoryURL())
+        Task {
+            await Self.authorNameStore.clear()
+        }
+
+        browserItems = []
+        displayedBrowserItems = []
+        pendingBrowserScrollRestoreOffset = nil
+        browserState = .idle
+        isLoadingMoreBrowserItems = false
+        hasMoreBrowserItems = true
+        browserNextPage = 1
+        prefetchedBrowserPageKeys.removeAll()
+        prioritizedVisibleBrowserItemIDs = []
+        selectedBrowserItem = nil
+        selectedBrowserItemError = nil
+        isRefreshingSelectedBrowserItem = false
+        currentWorkshopItemID = nil
+
+        browseContext = .discovery
+        savedDiscoveryQueryBeforeAuthorBrowse = nil
+        isUpdatingBrowserQueryProgrammatically = true
+        browserQuery = ""
+        isUpdatingBrowserQueryProgrammatically = false
+
+        requestedURL = Self.makeBrowseURL(
+            source: source,
+            query: "",
+            trendingWindow: trendingWindow,
+            themeFilter: themeFilter,
+            ageRatingFilter: ageRatingFilter,
+            resolutionFilter: resolutionFilter,
+            categoryFilter: categoryFilter,
+            page: 1
+        )
+        navigationVersion += 1
+        currentPageTitle = browseContext.title
+        statusMessage = "Steam 创意工坊缓存已清空，重新进入模块后会重新抓取列表。"
+
+        reloadInstalledItems()
+    }
+
     private func mergeBrowserItems(_ items: [SteamWorkshopBrowserItem]) {
         guard !items.isEmpty else { return }
         var mergedByID = Dictionary(uniqueKeysWithValues: browserItems.map { ($0.id, $0) })
@@ -2492,6 +2658,7 @@ final class SteamWorkshopService: ObservableObject {
         }
 
         for stub in stubs {
+            guard Self.cachedItemNeedsHydration(for: stub) else { continue }
             guard pendingBrowserDetailStubIDs.insert(stub.id).inserted else { continue }
             pendingBrowserDetailStubs.append(stub)
         }
@@ -2688,6 +2855,7 @@ final class SteamWorkshopService: ObservableObject {
             ), !pageResult.stubs.isEmpty else {
                 return
             }
+            try? await Self.prewarmDetailCache(for: pageResult.stubs)
         }
     }
 
@@ -2988,6 +3156,14 @@ final class SteamWorkshopService: ObservableObject {
         }
         let html = try await fetchHTML(url: url)
         let stubs = parseBrowsePage(html: html)
+        for stub in stubs {
+            await saveAuthorNameIfPossible(
+                stub.author,
+                creatorID: creatorID(from: stub.authorProfileURL) ?? creatorID(from: stub.authorWorkshopURL),
+                authorProfileURL: stub.authorProfileURL,
+                authorWorkshopURL: stub.authorWorkshopURL
+            )
+        }
         let pageSize = context.isAuthorWorkshop ? Constants.authorWorkshopPageSize : Constants.browserPageSize
         let hasMore = browsePageHasMore(html: html, currentPage: page) || stubs.count >= pageSize
         if !stubs.isEmpty {
@@ -3017,27 +3193,81 @@ final class SteamWorkshopService: ObservableObject {
 
     private static func fetchWorkshopItems(stubs: [SteamWorkshopBrowseStub]) async throws -> [SteamWorkshopBrowserItem] {
         guard !stubs.isEmpty else { return [] }
-        let detailsByID = try await fetchPublishedFileDetails(ids: stubs.map(\.id))
-        var items: [SteamWorkshopBrowserItem] = []
-        items.reserveCapacity(stubs.count)
+        var itemsByID: [String: SteamWorkshopBrowserItem] = [:]
+        var unresolvedStubs: [SteamWorkshopBrowseStub] = []
+        itemsByID.reserveCapacity(stubs.count)
+        unresolvedStubs.reserveCapacity(stubs.count)
 
         for stub in stubs {
-            guard let detail = detailsByID[stub.id] else {
-                let fallback = fallbackBrowserItem(from: stub)
-                let enrichedFallback = try await enrichPreviewKind(for: fallback)
-                items.append(enrichedFallback)
+            if let cached = loadDetailCache(id: stub.id) {
+                let merged = mergeStub(stub, into: cached)
+                let enriched = try await enrichPreviewKind(for: merged)
+                if enriched != cached {
+                    saveDetailCache(item: enriched)
+                }
+                itemsByID[stub.id] = enriched
+            } else {
+                unresolvedStubs.append(stub)
+            }
+        }
+
+        let detailsByID = try await fetchPublishedFileDetails(ids: unresolvedStubs.map(\.id))
+        let missingIDs = unresolvedStubs.map(\.id).filter { detailsByID[$0] == nil }
+        if !missingIDs.isEmpty {
+            NSLog(
+                "[SteamWorkshopService] official details missing requested=%ld returned=%ld missing=%@",
+                unresolvedStubs.count,
+                detailsByID.count,
+                missingIDs.joined(separator: ",")
+            )
+        }
+        for stub in unresolvedStubs {
+            if let detail = detailsByID[stub.id] {
+                let item = try await fetchWorkshopItem(
+                    stub: stub,
+                    officialDetail: detail,
+                    allowHTMLFallback: false
+                )
+                itemsByID[stub.id] = item
                 continue
             }
 
-            let item = try await fetchWorkshopItem(
-                stub: stub,
-                officialDetail: detail,
-                allowHTMLFallback: false
-            )
-            items.append(item)
+            do {
+                let item = try await fetchWorkshopItem(
+                    stub: stub,
+                    officialDetail: nil,
+                    allowHTMLFallback: true
+                )
+                itemsByID[stub.id] = item
+            } catch {
+                let fallback = fallbackBrowserItem(from: stub)
+                let enrichedFallback = try await enrichPreviewKind(for: fallback)
+                itemsByID[stub.id] = enrichedFallback
+            }
         }
 
-        return items
+        return stubs.compactMap { itemsByID[$0.id] }
+    }
+
+    private static func prewarmDetailCache(for stubs: [SteamWorkshopBrowseStub]) async throws {
+        let uncachedStubs = stubs.filter { loadDetailCache(id: $0.id) == nil }
+        guard !uncachedStubs.isEmpty else { return }
+
+        var startIndex = 0
+        while startIndex < uncachedStubs.count {
+            let endIndex = min(startIndex + Constants.detailPrefetchBatchSize, uncachedStubs.count)
+            let batch = Array(uncachedStubs[startIndex..<endIndex])
+            let detailsByID = try await fetchPublishedFileDetails(ids: batch.map(\.id))
+            for stub in batch {
+                guard let detail = detailsByID[stub.id], detailRepresentsVideo(detail) else { continue }
+                let item = await item(from: detail, stub: stub)
+                saveDetailCache(item: item)
+            }
+            startIndex = endIndex
+            if startIndex < uncachedStubs.count {
+                try? await Task.sleep(nanoseconds: Constants.detailPrefetchInterBatchDelayNanoseconds)
+            }
+        }
     }
 
     private static func fetchWorkshopItem(
@@ -3046,7 +3276,7 @@ final class SteamWorkshopService: ObservableObject {
         allowHTMLFallback: Bool = true
     ) async throws -> SteamWorkshopBrowserItem {
         if let cached = loadDetailCache(id: stub.id) {
-            let merged = mergeStub(stub, into: cached)
+            let merged = await applyingCachedAuthorNameIfPossible(to: mergeStub(stub, into: cached))
             let enriched = try await enrichPreviewKind(for: merged)
             if enriched != cached {
                 saveDetailCache(item: enriched)
@@ -3067,7 +3297,7 @@ final class SteamWorkshopService: ObservableObject {
                     NSLocalizedDescriptionKey: "当前条目不是视频壁纸。"
                 ])
             }
-            resolvedItem = item(from: detail, stub: stub)
+            resolvedItem = await item(from: detail, stub: stub)
         } else {
             resolvedItem = fallbackBrowserItem(from: stub)
         }
@@ -3075,6 +3305,12 @@ final class SteamWorkshopService: ObservableObject {
         if allowHTMLFallback, shouldSupplementWithHTML(item: resolvedItem) {
             do {
                 let htmlItem = try await fetchWorkshopItemFromHTML(stub: stub)
+                await saveAuthorNameIfPossible(
+                    htmlItem.author,
+                    creatorID: detail?.creator,
+                    authorProfileURL: htmlItem.authorProfileURL ?? stub.authorProfileURL,
+                    authorWorkshopURL: htmlItem.authorWorkshopURL ?? stub.authorWorkshopURL
+                )
                 resolvedItem = mergeDetailedItem(preferred: htmlItem, fallback: resolvedItem)
             } catch {
                 // 官方接口成功时，不因为 HTML 兜底失败而让详情整体失败。
@@ -3121,6 +3357,10 @@ final class SteamWorkshopService: ObservableObject {
             favoritesText: parsed.favoritesText,
             subscriptionsText: parsed.subscriptionsText,
             scoreText: parsed.scoreText,
+            lifetimeFavoritesText: nil,
+            lifetimeSubscriptionsText: nil,
+            visibilityText: nil,
+            moderationText: nil,
             detailFields: parsed.detailFields,
             detailURL: detailURL
         )
@@ -3164,7 +3404,7 @@ final class SteamWorkshopService: ObservableObject {
         return result
     }
 
-    private static func item(from detail: SteamWorkshopPublishedFileDetail, stub: SteamWorkshopBrowseStub) -> SteamWorkshopBrowserItem {
+    private static func item(from detail: SteamWorkshopPublishedFileDetail, stub: SteamWorkshopBrowseStub) async -> SteamWorkshopBrowserItem {
         let tags = detail.tags.map(\.tag).map(normalizeText).filter { !$0.isEmpty }
         let authorProfileURL = detail.creator.flatMap { creator in
             URL(string: "https://steamcommunity.com/profiles/\(creator)/")
@@ -3172,6 +3412,12 @@ final class SteamWorkshopService: ObservableObject {
         let authorWorkshopURL = detail.creator.flatMap { creator in
             URL(string: "https://steamcommunity.com/profiles/\(creator)/myworkshopfiles/?appid=\(Constants.workshopAppID)")
         }
+        let resolvedAuthor = await resolvedAuthorName(
+            creatorID: detail.creator,
+            stub: stub,
+            authorProfileURL: authorProfileURL,
+            authorWorkshopURL: authorWorkshopURL
+        )
         let descriptionText = normalizeText(detail.description ?? "")
         let summaryText = stub.summary?.trimmingCharacters(in: .whitespacesAndNewlines)
         let summary = summaryText?.isEmpty == false ? summaryText! : descriptionText
@@ -3182,25 +3428,18 @@ final class SteamWorkshopService: ObservableObject {
         let genre = tags.first(where: { tag in
             !isSystemWorkshopTag(tag)
         })
-        let subscriptions = detail.subscriptions ?? detail.lifetimeSubscriptions
-        let favorites = detail.favorited ?? detail.lifetimeFavorited
+        let subscriptions = detail.subscriptions
+        let favorites = detail.favorited
+        let lifetimeSubscriptions = detail.lifetimeSubscriptions
+        let lifetimeFavorites = detail.lifetimeFavorited
         let scoreText = detail.views.map { "浏览 \($0)" }
+        let visibilityText = visibilityText(for: detail.visibility)
+        let moderationText = moderationText(banned: detail.banned, banReason: detail.banReason)
 
         return SteamWorkshopBrowserItem(
             id: detail.publishedfileid,
             title: normalizeText(detail.title ?? normalizedStubTitle(stub)),
-            author: normalizedStubAuthor(
-                SteamWorkshopBrowseStub(
-                    id: stub.id,
-                    title: stub.title,
-                    author: stub.author,
-                    authorProfileURL: authorProfileURL ?? stub.authorProfileURL,
-                    authorWorkshopURL: authorWorkshopURL ?? stub.authorWorkshopURL,
-                    hasAdultContent: stub.hasAdultContent,
-                    summary: stub.summary,
-                    previewImageURL: stub.previewImageURL
-                )
-            ),
+            author: resolvedAuthor,
             authorProfileURL: authorProfileURL ?? stub.authorProfileURL,
             authorWorkshopURL: authorWorkshopURL ?? stub.authorWorkshopURL,
             hasAdultContent: stub.hasAdultContent,
@@ -3221,6 +3460,10 @@ final class SteamWorkshopService: ObservableObject {
             favoritesText: favorites.map(formatCount),
             subscriptionsText: subscriptions.map(formatCount),
             scoreText: scoreText,
+            lifetimeFavoritesText: lifetimeFavorites.map(formatCount),
+            lifetimeSubscriptionsText: lifetimeSubscriptions.map(formatCount),
+            visibilityText: visibilityText,
+            moderationText: moderationText,
             detailFields: buildOfficialDetailFields(
                 fileSizeText: detail.fileSize.map(fileSizeText(forBytes:)),
                 resolutionText: resolution,
@@ -3228,6 +3471,10 @@ final class SteamWorkshopService: ObservableObject {
                 updatedText: formatSteamTimestamp(detail.timeUpdated),
                 subscriptionsText: subscriptions.map(formatCount),
                 favoritesText: favorites.map(formatCount),
+                lifetimeSubscriptionsText: lifetimeSubscriptions.map(formatCount),
+                lifetimeFavoritesText: lifetimeFavorites.map(formatCount),
+                visibilityText: visibilityText,
+                moderationText: moderationText,
                 tags: tags
             ),
             detailURL: makeDetailURL(id: detail.publishedfileid)
@@ -3273,6 +3520,10 @@ final class SteamWorkshopService: ObservableObject {
             favoritesText: preferred.favoritesText ?? fallback.favoritesText,
             subscriptionsText: preferred.subscriptionsText ?? fallback.subscriptionsText,
             scoreText: preferred.scoreText ?? fallback.scoreText,
+            lifetimeFavoritesText: preferred.lifetimeFavoritesText ?? fallback.lifetimeFavoritesText,
+            lifetimeSubscriptionsText: preferred.lifetimeSubscriptionsText ?? fallback.lifetimeSubscriptionsText,
+            visibilityText: preferred.visibilityText ?? fallback.visibilityText,
+            moderationText: preferred.moderationText ?? fallback.moderationText,
             detailFields: preferred.detailFields.isEmpty ? fallback.detailFields : preferred.detailFields,
             detailURL: preferred.detailURL
         )
@@ -3721,6 +3972,10 @@ final class SteamWorkshopService: ObservableObject {
             favoritesText: item.favoritesText,
             subscriptionsText: item.subscriptionsText,
             scoreText: item.scoreText,
+            lifetimeFavoritesText: item.lifetimeFavoritesText,
+            lifetimeSubscriptionsText: item.lifetimeSubscriptionsText,
+            visibilityText: item.visibilityText,
+            moderationText: item.moderationText,
             detailFields: item.detailFields,
             detailURL: item.detailURL
         )
@@ -3751,9 +4006,20 @@ final class SteamWorkshopService: ObservableObject {
             favoritesText: nil,
             subscriptionsText: nil,
             scoreText: nil,
+            lifetimeFavoritesText: nil,
+            lifetimeSubscriptionsText: nil,
+            visibilityText: nil,
+            moderationText: nil,
             detailFields: [],
             detailURL: makeDetailURL(id: stub.id)
         )
+    }
+
+    private static func seededBrowserItem(from stub: SteamWorkshopBrowseStub) -> SteamWorkshopBrowserItem {
+        guard let cached = loadDetailCache(id: stub.id) else {
+            return fallbackBrowserItem(from: stub)
+        }
+        return mergeStub(stub, into: cached)
     }
 
     private static func mergeStub(_ stub: SteamWorkshopBrowseStub, into item: SteamWorkshopBrowserItem) -> SteamWorkshopBrowserItem {
@@ -3781,9 +4047,156 @@ final class SteamWorkshopService: ObservableObject {
             favoritesText: item.favoritesText,
             subscriptionsText: item.subscriptionsText,
             scoreText: item.scoreText,
+            lifetimeFavoritesText: item.lifetimeFavoritesText,
+            lifetimeSubscriptionsText: item.lifetimeSubscriptionsText,
+            visibilityText: item.visibilityText,
+            moderationText: item.moderationText,
             detailFields: item.detailFields,
             detailURL: item.detailURL
         )
+    }
+
+    private static func cachedItemNeedsHydration(for stub: SteamWorkshopBrowseStub) -> Bool {
+        guard let cached = loadDetailCache(id: stub.id) else { return true }
+        let merged = mergeStub(stub, into: cached)
+        return merged.detailFields.isEmpty
+            || merged.fileSizeText == nil
+            || merged.resolutionText == nil
+            || merged.workshopTypeText == nil
+            || merged.author == "未知作者"
+            || (merged.authorProfileURL == nil && merged.authorWorkshopURL == nil)
+    }
+
+    private static func applyingCachedAuthorNameIfPossible(to item: SteamWorkshopBrowserItem) async -> SteamWorkshopBrowserItem {
+        guard item.author == "未知作者" else { return item }
+        let keys = authorCacheKeys(
+            creatorID: creatorID(from: item.authorProfileURL) ?? creatorID(from: item.authorWorkshopURL),
+            authorProfileURL: item.authorProfileURL,
+            authorWorkshopURL: item.authorWorkshopURL
+        )
+        guard let cachedAuthorName = await Self.authorNameStore.name(for: keys) else { return item }
+        return SteamWorkshopBrowserItem(
+            id: item.id,
+            title: item.title,
+            author: cachedAuthorName,
+            authorProfileURL: item.authorProfileURL,
+            authorWorkshopURL: item.authorWorkshopURL,
+            hasAdultContent: item.hasAdultContent,
+            summary: item.summary,
+            descriptionText: item.descriptionText,
+            tags: item.tags,
+            workshopTypeText: item.workshopTypeText,
+            ageRatingText: item.ageRatingText,
+            genreText: item.genreText,
+            categoryText: item.categoryText,
+            previewImageURL: item.previewImageURL,
+            previewVideoURL: item.previewVideoURL,
+            previewAssetKind: item.previewAssetKind,
+            fileSizeText: item.fileSizeText,
+            resolutionText: item.resolutionText,
+            postedText: item.postedText,
+            updatedText: item.updatedText,
+            favoritesText: item.favoritesText,
+            subscriptionsText: item.subscriptionsText,
+            scoreText: item.scoreText,
+            lifetimeFavoritesText: item.lifetimeFavoritesText,
+            lifetimeSubscriptionsText: item.lifetimeSubscriptionsText,
+            visibilityText: item.visibilityText,
+            moderationText: item.moderationText,
+            detailFields: item.detailFields,
+            detailURL: item.detailURL
+        )
+    }
+
+    private static func resolvedAuthorName(
+        creatorID: String?,
+        stub: SteamWorkshopBrowseStub,
+        authorProfileURL: URL?,
+        authorWorkshopURL: URL?
+    ) async -> String {
+        let stubAuthor = normalizedStubAuthor(
+            SteamWorkshopBrowseStub(
+                id: stub.id,
+                title: stub.title,
+                author: stub.author,
+                authorProfileURL: authorProfileURL ?? stub.authorProfileURL,
+                authorWorkshopURL: authorWorkshopURL ?? stub.authorWorkshopURL,
+                hasAdultContent: stub.hasAdultContent,
+                summary: stub.summary,
+                previewImageURL: stub.previewImageURL
+            )
+        )
+
+        if stubAuthor != "未知作者" {
+            await saveAuthorNameIfPossible(
+                stubAuthor,
+                creatorID: creatorID,
+                authorProfileURL: authorProfileURL ?? stub.authorProfileURL,
+                authorWorkshopURL: authorWorkshopURL ?? stub.authorWorkshopURL
+            )
+            return stubAuthor
+        }
+
+        let keys = authorCacheKeys(
+            creatorID: creatorID,
+            authorProfileURL: authorProfileURL ?? stub.authorProfileURL,
+            authorWorkshopURL: authorWorkshopURL ?? stub.authorWorkshopURL
+        )
+        if let cachedName = await Self.authorNameStore.name(for: keys) {
+            return cachedName
+        }
+        return stubAuthor
+    }
+
+    private static func saveAuthorNameIfPossible(
+        _ authorName: String?,
+        creatorID: String?,
+        authorProfileURL: URL?,
+        authorWorkshopURL: URL?
+    ) async {
+        guard let authorName else { return }
+        let normalizedName = normalizeAuthorName(authorName)
+        let keys = authorCacheKeys(
+            creatorID: creatorID,
+            authorProfileURL: authorProfileURL,
+            authorWorkshopURL: authorWorkshopURL
+        )
+        await Self.authorNameStore.store(name: normalizedName, for: keys)
+    }
+
+    private static func authorCacheKeys(
+        creatorID explicitCreatorID: String?,
+        authorProfileURL: URL?,
+        authorWorkshopURL: URL?
+    ) -> [String] {
+        var keys: [String] = []
+        if let explicitCreatorID, !explicitCreatorID.isEmpty {
+            keys.append("creator:\(explicitCreatorID)")
+        }
+        if let authorProfileURL {
+            keys.append("profile:\((normalizeSteamCommunityURL(authorProfileURL.absoluteString) ?? authorProfileURL).absoluteString.lowercased())")
+        }
+        if let normalizedWorkshopURL = normalizedAuthorWorkshopURL(authorWorkshopURL) {
+            keys.append("workshop:\(normalizedWorkshopURL.absoluteString.lowercased())")
+        }
+        if let profileCreatorID = creatorID(from: authorProfileURL) {
+            keys.append("creator:\(profileCreatorID)")
+        }
+        if let workshopCreatorID = creatorID(from: authorWorkshopURL) {
+            keys.append("creator:\(workshopCreatorID)")
+        }
+        return Array(NSOrderedSet(array: keys)) as? [String] ?? keys
+    }
+
+    private static func creatorID(from url: URL?) -> String? {
+        guard let url else { return nil }
+        let components = url.absoluteURL.pathComponents
+        guard let profilesIndex = components.firstIndex(of: "profiles"),
+              components.indices.contains(profilesIndex + 1) else {
+            return nil
+        }
+        let candidate = components[profilesIndex + 1].trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return candidate.isEmpty ? nil : candidate
     }
 
     private static func normalizedStubTitle(_ stub: SteamWorkshopBrowseStub) -> String {
@@ -3818,6 +4231,10 @@ final class SteamWorkshopService: ObservableObject {
         updatedText: String?,
         subscriptionsText: String?,
         favoritesText: String?,
+        lifetimeSubscriptionsText: String?,
+        lifetimeFavoritesText: String?,
+        visibilityText: String?,
+        moderationText: String?,
         tags: [String]
     ) -> [SteamWorkshopDetailField] {
         var fields: [SteamWorkshopDetailField] = []
@@ -3833,10 +4250,34 @@ final class SteamWorkshopService: ObservableObject {
         appendField("Updated", updatedText)
         appendField("Subscriptions", subscriptionsText)
         appendField("Favorited", favoritesText)
+        appendField("Lifetime Subscriptions", lifetimeSubscriptionsText)
+        appendField("Lifetime Favorited", lifetimeFavoritesText)
+        appendField("Visibility", visibilityText)
+        appendField("Moderation", moderationText)
         if !tags.isEmpty {
             appendField("Tags", tags.joined(separator: " · "))
         }
         return fields
+    }
+
+    private static func visibilityText(for visibility: Int?) -> String? {
+        guard let visibility else { return nil }
+        switch visibility {
+        case 0: return "公开"
+        case 1: return "好友可见"
+        case 2: return "私有"
+        case 3: return "未列出"
+        default: return "可见性 \(visibility)"
+        }
+    }
+
+    private static func moderationText(banned: Int?, banReason: String?) -> String? {
+        guard let banned else { return nil }
+        if banned == 0 {
+            return "正常"
+        }
+        let reason = normalizeText(banReason ?? "")
+        return reason.isEmpty ? "已封禁" : "已封禁 · \(reason)"
     }
 
     private static func preferredTag(in tags: [String], matching candidates: [String]) -> String? {

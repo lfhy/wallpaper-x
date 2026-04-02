@@ -7,6 +7,7 @@ import SwiftUI
 import AppKit
 import Combine
 import UniformTypeIdentifiers
+import Foundation
 
 struct AppKitSettingsView: NSViewRepresentable {
     @EnvironmentObject var wallpaperManager: WallpaperManager
@@ -840,15 +841,16 @@ final class AppKitSettingsContainerView: NSView {
     @objc private func handleClearCache() {
         let alert = makeAppAlert(
             title: "清空缓存",
-            message: "将删除视频库的所有缩略图和静帧缓存，不会删除已导入的视频/图片和当前设置。图片库无独立缓存。",
+            message: "将删除视频库的所有缩略图和静帧缓存，并重置 Steam 创意工坊的列表/详情缓存与当前浏览状态；不会删除已导入的视频、图片和已下载的工坊文件，也不会清除当前设置。",
             buttons: ["清空", "取消"]
         )
         presentAppAlert(alert, in: appModalHostWindow()) { [weak self] response in
             guard let self, response == .alertFirstButtonReturn else { return }
             self.wallpaperManager.clearAllCaches()
+            SteamWorkshopService.shared.clearAllCachedState()
             let result = makeAppAlert(
                 title: "缓存已清空",
-                message: "下次浏览或切换壁纸时会重新生成缓存。"
+                message: "下次浏览视频库、图片库或 Steam 创意工坊时会重新生成缓存。"
             )
             presentAppAlert(result, in: appModalHostWindow())
         }

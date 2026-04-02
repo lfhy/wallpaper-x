@@ -127,6 +127,30 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         applyHoverStyle(animated: false)
     }
 
+    func configureMetadataOnly(
+        item: SteamWorkshopBrowserItem,
+        downloadRecord: SteamWorkshopDownloadRecord?,
+        downloadProgressText: String?,
+        isDownloading: Bool,
+        isDownloaded: Bool
+    ) {
+        metaLabel.stringValue = item.primaryMetaText
+        let baseSecondaryMeta = localizedSecondaryMetaText(for: item)
+        secondaryMetaLabel.stringValue = secondaryStatusText(
+            baseText: baseSecondaryMeta,
+            downloadRecord: downloadRecord,
+            isDownloading: isDownloading,
+            isDownloaded: isDownloaded,
+            downloadProgressText: downloadProgressText
+        )
+        currentSecondaryMetaColor = secondaryMetaColor(
+            downloadRecord: downloadRecord,
+            isDownloading: isDownloading,
+            isDownloaded: isDownloaded
+        )
+        refreshThemeAwareAppearance()
+    }
+
     override func viewDidLayout() {
         super.viewDidLayout()
 

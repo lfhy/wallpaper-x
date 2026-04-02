@@ -64,6 +64,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
     private var isApplyingSnapshot = false
     private var pendingFooterSnapshotRefresh = false
     private var moduleActivationObserver: NSObjectProtocol?
+    private var lastPrioritizedVisibleIDs: [String] = []
 
     private let scrollView: NSScrollView = {
         let scrollView = NSScrollView()
@@ -220,6 +221,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         .sink { [weak self] _ in
             guard let self else { return }
             self.updateBrowserScrollMetrics()
+            self.prioritizeVisibleItemsForHydration()
             self.checkLoadMore()
         }
         .store(in: &cancellables)
@@ -246,11 +248,31 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
     }
 
     private func applyItems(_ items: [SteamWorkshopBrowserItem]) {
+        let previousItemsByID = itemsByID
+        let previousOrderedIDs = orderedIDs
+        let previousFooterState = footerState
         itemsByID = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
         orderedIDs = items.map(\.id)
         footerState = resolvedFooterState()
         displayIDs = orderedIDs + (footerState == .hidden ? [] : [Self.footerItemID])
-        log("applyItems count=\(items.count)")
+        let changedIDs = orderedIDs.filter { id in
+            guard let previous = previousItemsByID[id], let current = itemsByID[id] else { return false }
+            return previous != current
+        }
+        log("applyItems count=\(items.count) changed=\(changedIDs.count)")
+
+        let structureUnchanged = previousOrderedIDs == orderedIDs && previousFooterState == footerState
+        if structureUnchanged {
+            if !changedIDs.isEmpty {
+                reloadVisibleMetadata(for: Set(changedIDs))
+            } else if footerState != .hidden {
+                configureVisibleFooterIfNeeded()
+            }
+            updateBrowserScrollMetrics()
+            prioritizeVisibleItemsForHydration()
+            checkLoadMore()
+            return
+        }
 
         var snapshot = NSDiffableDataSourceSnapshot<Section, String>()
         snapshot.appendSections([.main])
@@ -263,10 +285,30 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         dataSource.apply(snapshot, animatingDifferences: true) { [weak self] in
             guard let self else { return }
             self.isApplyingSnapshot = false
-            self.log("snapshot applied count=\(self.displayIDs.count)")
+            self.log("snapshot applied count=\(self.displayIDs.count) changed=\(changedIDs.count)")
+            if !changedIDs.isEmpty {
+                self.reloadVisibleItems()
+            }
             self.refreshFooterState(forceReload: true)
             self.updateBrowserScrollMetrics()
+            self.prioritizeVisibleItemsForHydration()
             self.checkLoadMore()
+        }
+    }
+
+    private func reloadVisibleMetadata(for changedIDs: Set<String>) {
+        guard !changedIDs.isEmpty else { return }
+        for indexPath in collectionView.indexPathsForVisibleItems() {
+            guard let id = dataSource.itemIdentifier(for: indexPath), changedIDs.contains(id) else { continue }
+            guard let cell = collectionView.item(at: indexPath) as? AppKitSteamWorkshopBrowserItem else { continue }
+            guard let item = itemsByID[id] else { continue }
+            cell.configureMetadataOnly(
+                item: item,
+                downloadRecord: service.latestDownloadRecord(for: id),
+                downloadProgressText: service.downloadProgressLabel(for: id),
+                isDownloading: service.isDownloading(itemID: id),
+                isDownloaded: service.isDownloaded(itemID: id)
+            )
         }
     }
 
@@ -310,6 +352,20 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             log("checkLoadMore trigger offsetY=\(offsetY) contentHeight=\(contentHeight) viewportHeight=\(viewportHeight) itemCount=\(orderedIDs.count)")
             service.loadMoreBrowserItemsIfNeeded()
         }
+    }
+
+    private func prioritizeVisibleItemsForHydration() {
+        let visibleIDs = collectionView.indexPathsForVisibleItems()
+            .sorted()
+            .compactMap { indexPath -> String? in
+                guard let id = dataSource.itemIdentifier(for: indexPath), id != Self.footerItemID else { return nil }
+                return id
+            }
+        guard !visibleIDs.isEmpty else { return }
+        let prioritized = Array(visibleIDs.prefix(10))
+        guard prioritized != lastPrioritizedVisibleIDs else { return }
+        lastPrioritizedVisibleIDs = prioritized
+        service.prioritizeVisibleBrowserItemIDs(prioritized)
     }
 
     private func updateLayoutItemSize() {
@@ -425,6 +481,35 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             return NSSize(width: floor(width), height: 40)
         }
         return flowLayout.itemSize
+    }
+
+    func collectionView(
+        _ collectionView: NSCollectionView,
+        willDisplay item: NSCollectionViewItem,
+        forRepresentedObjectAt indexPath: IndexPath
+    ) {
+        guard let id = dataSource.itemIdentifier(for: indexPath) else { return }
+        if id == Self.footerItemID {
+            (item as? AppKitSteamWorkshopBrowserFooterItem)?.configure(
+                text: footerState == .loading ? "正在加载更多项目…" : "没有更多内容了",
+                showsProgress: footerState == .loading
+            )
+            return
+        }
+
+        guard let cell = item as? AppKitSteamWorkshopBrowserItem else { return }
+        guard let browserItem = itemsByID[id] else { return }
+        cell.configure(
+            item: browserItem,
+            downloadRecord: service.latestDownloadRecord(for: id),
+            downloadProgressText: service.downloadProgressLabel(for: id),
+            isDownloading: service.isDownloading(itemID: id),
+            isDownloaded: service.isDownloaded(itemID: id),
+            onOpen: { [weak self] in self?.onOpen(browserItem) },
+            onDownload: { [weak self] in self?.onDownload(browserItem) },
+            onCancelDownload: { [weak self] in self?.onCancelDownload() }
+        )
+        prioritizeVisibleItemsForHydration()
     }
 
     private func log(_ message: String) {

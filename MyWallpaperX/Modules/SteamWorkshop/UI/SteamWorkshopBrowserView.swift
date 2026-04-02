@@ -253,14 +253,26 @@ private struct SteamWorkshopItemDetailSheet: View {
 
     private var secondaryFactText: String? {
         let values = [
-            item.scoreText.map { "评分 \($0)" },
+            item.scoreText,
             item.subscriptionsText.map { "订阅 \($0)" },
-            item.favoritesText.map { "收藏 \($0)" }
+            item.favoritesText.map { "收藏 \($0)" },
+            item.lifetimeSubscriptionsText.map { "总订阅 \($0)" },
+            item.lifetimeFavoritesText.map { "总收藏 \($0)" }
         ]
         .compactMap { $0 }
 
         guard !values.isEmpty else { return nil }
         return values.joined(separator: "  ·  ")
+    }
+
+    private var statusFactText: String? {
+        [
+            item.visibilityText.map { "可见性 \($0)" },
+            item.moderationText.map { "状态 \($0)" }
+        ]
+        .compactMap { $0 }
+        .joined(separator: "  ·  ")
+        .nilIfEmpty
     }
 
     var body: some View {
@@ -333,6 +345,12 @@ private struct SteamWorkshopItemDetailSheet: View {
 
             if let postedText = item.postedText, !postedText.isEmpty {
                 SteamWorkshopSingleFactCard(label: "发布时间", value: postedText)
+            }
+
+            if let statusFactText {
+                Text(statusFactText)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
             }
 
             if let secondaryFactText {
@@ -461,6 +479,12 @@ private struct SteamWorkshopItemDetailSheet: View {
             .buttonStyle(.borderedProminent)
             .disabled(service.activeDownloadItemID != nil)
         }
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }
 
