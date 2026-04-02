@@ -375,6 +375,115 @@ private struct SteamWorkshopDetailParseResult {
     let detailFields: [SteamWorkshopDetailField]
 }
 
+private struct SteamWorkshopPublishedFileResponseEnvelope: Decodable {
+    let response: SteamWorkshopPublishedFileResponse
+}
+
+private struct SteamWorkshopPublishedFileResponse: Decodable {
+    let result: Int?
+    let resultcount: Int?
+    let publishedfiledetails: [SteamWorkshopPublishedFileDetail]
+}
+
+private struct SteamWorkshopPublishedFileTag: Decodable {
+    let tag: String
+}
+
+private struct SteamWorkshopPublishedFileDetail: Decodable {
+    let publishedfileid: String
+    let result: Int
+    let creator: String?
+    let creatorAppID: Int?
+    let consumerAppID: Int?
+    let fileSize: Int64?
+    let previewURL: URL?
+    let title: String?
+    let description: String?
+    let timeCreated: Int64?
+    let timeUpdated: Int64?
+    let subscriptions: Int?
+    let favorited: Int?
+    let lifetimeSubscriptions: Int?
+    let lifetimeFavorited: Int?
+    let views: Int?
+    let tags: [SteamWorkshopPublishedFileTag]
+
+    enum CodingKeys: String, CodingKey {
+        case publishedfileid
+        case result
+        case creator
+        case creator_app_id
+        case consumer_app_id
+        case file_size
+        case preview_url
+        case title
+        case description
+        case time_created
+        case time_updated
+        case subscriptions
+        case favorited
+        case lifetime_subscriptions
+        case lifetime_favorited
+        case views
+        case tags
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        publishedfileid = try container.decode(String.self, forKey: .publishedfileid)
+        result = Self.decodeLossyInt(from: container, forKey: .result) ?? 0
+        creator = try container.decodeIfPresent(String.self, forKey: .creator)
+        creatorAppID = Self.decodeLossyInt(from: container, forKey: .creator_app_id)
+        consumerAppID = Self.decodeLossyInt(from: container, forKey: .consumer_app_id)
+        fileSize = Self.decodeLossyInt64(from: container, forKey: .file_size)
+        if let preview = try container.decodeIfPresent(String.self, forKey: .preview_url),
+           !preview.isEmpty {
+            previewURL = URL(string: preview)
+        } else {
+            previewURL = nil
+        }
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        timeCreated = Self.decodeLossyInt64(from: container, forKey: .time_created)
+        timeUpdated = Self.decodeLossyInt64(from: container, forKey: .time_updated)
+        subscriptions = Self.decodeLossyInt(from: container, forKey: .subscriptions)
+        favorited = Self.decodeLossyInt(from: container, forKey: .favorited)
+        lifetimeSubscriptions = Self.decodeLossyInt(from: container, forKey: .lifetime_subscriptions)
+        lifetimeFavorited = Self.decodeLossyInt(from: container, forKey: .lifetime_favorited)
+        views = Self.decodeLossyInt(from: container, forKey: .views)
+        tags = (try? container.decode([SteamWorkshopPublishedFileTag].self, forKey: .tags)) ?? []
+    }
+
+    private static func decodeLossyInt(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) -> Int? {
+        if let value = try? container.decode(Int.self, forKey: key) {
+            return value
+        }
+        if let string = try? container.decode(String.self, forKey: key) {
+            return Int(string)
+        }
+        return nil
+    }
+
+    private static func decodeLossyInt64(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) -> Int64? {
+        if let value = try? container.decode(Int64.self, forKey: key) {
+            return value
+        }
+        if let value = try? container.decode(Int.self, forKey: key) {
+            return Int64(value)
+        }
+        if let string = try? container.decode(String.self, forKey: key) {
+            return Int64(string)
+        }
+        return nil
+    }
+}
+
 private struct SteamWorkshopBrowserCacheSnapshot: Codable {
     let fetchedAt: Date
     let items: [SteamWorkshopBrowserItem]
@@ -506,8 +615,10 @@ final class SteamWorkshopService: ObservableObject {
         static let workshopAppID = "431960"
         static let steamCommunityBase = "https://steamcommunity.com/workshop/browse/"
         static let detailBase = "https://steamcommunity.com/sharedfiles/filedetails/"
+        static let publishedFileDetailsAPI = "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/"
         static let authorWorkshopPageSize = 30
-        static let detailFetchConcurrencyLimit = 4
+        static let detailHydrationBatchSize = 12
+        static let detailHydrationInterBatchDelayNanoseconds: UInt64 = 700_000_000
         static let bundledSteamBundleName = "SteamCMDRuntime.bundle"
         static let bundledSteamRootName = "Steam"
         static let bundledSteamMetadataName = "runtime-metadata.json"
@@ -2424,59 +2535,61 @@ final class SteamWorkshopService: ObservableObject {
         }
 
         while !Task.isCancelled {
-            let stub: SteamWorkshopBrowseStub? = await MainActor.run {
+            let stubs: [SteamWorkshopBrowseStub] = await MainActor.run {
                 guard self.navigationVersion == navigationVersion, self.browseContext == context else {
                     self.pendingBrowserDetailStubs.removeAll()
                     self.pendingBrowserDetailStubIDs.removeAll()
                     self.browserDetailRetryCounts.removeAll()
-                    return nil
+                    return []
                 }
-                guard !self.pendingBrowserDetailStubs.isEmpty else { return nil }
-                let next = self.pendingBrowserDetailStubs.removeFirst()
-                self.pendingBrowserDetailStubIDs.remove(next.id)
-                return next
+                guard !self.pendingBrowserDetailStubs.isEmpty else { return [] }
+                let batchCount = min(Constants.detailHydrationBatchSize, self.pendingBrowserDetailStubs.count)
+                let nextBatch = Array(self.pendingBrowserDetailStubs.prefix(batchCount))
+                self.pendingBrowserDetailStubs.removeFirst(batchCount)
+                nextBatch.forEach { self.pendingBrowserDetailStubIDs.remove($0.id) }
+                return nextBatch
             }
 
-            guard let stub else { break }
+            guard !stubs.isEmpty else { break }
 
             do {
-                let item = try await Self.fetchWorkshopItem(stub: stub)
+                let items = try await Self.fetchWorkshopItems(stubs: stubs)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard self.navigationVersion == navigationVersion, self.browseContext == context else { return }
-                    self.browserDetailRetryCounts[stub.id] = nil
-                    self.mergeBrowserItem(item)
-                    if self.selectedBrowserItem?.id == item.id {
-                        self.selectedBrowserItem = item
-                        self.selectedBrowserItemError = nil
+                    for item in items {
+                        self.browserDetailRetryCounts[item.id] = nil
+                        self.mergeBrowserItem(item)
+                        if self.selectedBrowserItem?.id == item.id {
+                            self.selectedBrowserItem = item
+                            self.selectedBrowserItemError = nil
+                        }
                     }
                 }
-                try? await Task.sleep(nanoseconds: 800_000_000)
+                try? await Task.sleep(nanoseconds: Constants.detailHydrationInterBatchDelayNanoseconds)
             } catch {
                 guard !Task.isCancelled else { return }
                 let nsError = error as NSError
-                if nsError.domain == "SteamWorkshop", nsError.code == 13 {
-                    await MainActor.run {
-                        self.browserDetailRetryCounts[stub.id] = nil
-                    }
-                    try? await Task.sleep(nanoseconds: 250_000_000)
-                    continue
-                }
-
                 let shouldRetry = nsError.domain == NSURLErrorDomain && nsError.code == 429
                 let attempt = await MainActor.run { () -> Int in
-                    let next = (self.browserDetailRetryCounts[stub.id] ?? 0) + 1
-                    self.browserDetailRetryCounts[stub.id] = next
-                    return next
+                    var highestAttempt = 0
+                    for stub in stubs {
+                        let next = (self.browserDetailRetryCounts[stub.id] ?? 0) + 1
+                        self.browserDetailRetryCounts[stub.id] = next
+                        highestAttempt = max(highestAttempt, next)
+                    }
+                    return highestAttempt
                 }
 
                 if shouldRetry, attempt <= 4 {
                     await MainActor.run {
-                        if self.pendingBrowserDetailStubIDs.insert(stub.id).inserted {
-                            self.pendingBrowserDetailStubs.insert(stub, at: 0)
+                        for stub in stubs.reversed() {
+                            if self.pendingBrowserDetailStubIDs.insert(stub.id).inserted {
+                                self.pendingBrowserDetailStubs.insert(stub, at: 0)
+                            }
                         }
                         self.logBrowserDebug(
-                            "detail hydration rate-limited id=\(stub.id) attempt=\(attempt) queueCount=\(self.pendingBrowserDetailStubs.count)"
+                            "detail hydration rate-limited batchCount=\(stubs.count) attempt=\(attempt) queueCount=\(self.pendingBrowserDetailStubs.count)"
                         )
                     }
                     let backoffSeconds = UInt64(min(20, attempt * 4))
@@ -2486,7 +2599,7 @@ final class SteamWorkshopService: ObservableObject {
 
                 await MainActor.run {
                     self.logBrowserDebug(
-                        "detail hydration failed id=\(stub.id) code=\(nsError.code) domain=\(nsError.domain) error=\(nsError.localizedDescription)"
+                        "detail hydration failed batchCount=\(stubs.count) code=\(nsError.code) domain=\(nsError.domain) error=\(nsError.localizedDescription)"
                     )
                 }
                 try? await Task.sleep(nanoseconds: 1_200_000_000)
@@ -2904,40 +3017,34 @@ final class SteamWorkshopService: ObservableObject {
 
     private static func fetchWorkshopItems(stubs: [SteamWorkshopBrowseStub]) async throws -> [SteamWorkshopBrowserItem] {
         guard !stubs.isEmpty else { return [] }
-        let chunkSize = max(1, Constants.detailFetchConcurrencyLimit)
-        var resolvedItems: [SteamWorkshopBrowserItem] = []
-        resolvedItems.reserveCapacity(stubs.count)
+        let detailsByID = try await fetchPublishedFileDetails(ids: stubs.map(\.id))
+        var items: [SteamWorkshopBrowserItem] = []
+        items.reserveCapacity(stubs.count)
 
-        for chunkStart in stride(from: 0, to: stubs.count, by: chunkSize) {
-            let chunk = Array(stubs[chunkStart..<min(chunkStart + chunkSize, stubs.count)])
-            let chunkItems = try await withThrowingTaskGroup(of: (Int, SteamWorkshopBrowserItem?).self) { group in
-                for (offset, stub) in chunk.enumerated() {
-                    group.addTask {
-                        do {
-                            return (offset, try await fetchWorkshopItem(stub: stub))
-                        } catch {
-                            let nsError = error as NSError
-                            if nsError.domain == "SteamWorkshop", nsError.code == 13 {
-                                return (offset, nil)
-                            }
-                            let fallback = await fallbackBrowserItem(from: stub)
-                            return (offset, try? await enrichPreviewKind(for: fallback))
-                        }
-                    }
-                }
-
-                var results = Array<SteamWorkshopBrowserItem?>(repeating: nil, count: chunk.count)
-                for try await (offset, item) in group {
-                    results[offset] = item
-                }
-                return results.compactMap { $0 }
+        for stub in stubs {
+            guard let detail = detailsByID[stub.id] else {
+                let fallback = fallbackBrowserItem(from: stub)
+                let enrichedFallback = try await enrichPreviewKind(for: fallback)
+                items.append(enrichedFallback)
+                continue
             }
-            resolvedItems.append(contentsOf: chunkItems)
+
+            let item = try await fetchWorkshopItem(
+                stub: stub,
+                officialDetail: detail,
+                allowHTMLFallback: false
+            )
+            items.append(item)
         }
-        return resolvedItems
+
+        return items
     }
 
-    private static func fetchWorkshopItem(stub: SteamWorkshopBrowseStub) async throws -> SteamWorkshopBrowserItem {
+    private static func fetchWorkshopItem(
+        stub: SteamWorkshopBrowseStub,
+        officialDetail: SteamWorkshopPublishedFileDetail? = nil,
+        allowHTMLFallback: Bool = true
+    ) async throws -> SteamWorkshopBrowserItem {
         if let cached = loadDetailCache(id: stub.id) {
             let merged = mergeStub(stub, into: cached)
             let enriched = try await enrichPreviewKind(for: merged)
@@ -2947,6 +3054,40 @@ final class SteamWorkshopService: ObservableObject {
             return enriched
         }
 
+        let detail = if let officialDetail {
+            officialDetail
+        } else {
+            try await fetchPublishedFileDetails(ids: [stub.id])[stub.id]
+        }
+
+        var resolvedItem: SteamWorkshopBrowserItem
+        if let detail {
+            if !detailRepresentsVideo(detail) {
+                throw NSError(domain: "SteamWorkshop", code: 13, userInfo: [
+                    NSLocalizedDescriptionKey: "当前条目不是视频壁纸。"
+                ])
+            }
+            resolvedItem = item(from: detail, stub: stub)
+        } else {
+            resolvedItem = fallbackBrowserItem(from: stub)
+        }
+
+        if allowHTMLFallback, shouldSupplementWithHTML(item: resolvedItem) {
+            do {
+                let htmlItem = try await fetchWorkshopItemFromHTML(stub: stub)
+                resolvedItem = mergeDetailedItem(preferred: htmlItem, fallback: resolvedItem)
+            } catch {
+                // 官方接口成功时，不因为 HTML 兜底失败而让详情整体失败。
+            }
+        }
+
+        let merged = mergeStub(stub, into: resolvedItem)
+        let enriched = try await enrichPreviewKind(for: merged)
+        saveDetailCache(item: enriched)
+        return enriched
+    }
+
+    private static func fetchWorkshopItemFromHTML(stub: SteamWorkshopBrowseStub) async throws -> SteamWorkshopBrowserItem {
         let detailURL = makeDetailURL(id: stub.id)
         let html = try await fetchHTML(url: detailURL)
         let parsed = parseDetailPage(html: html, fallbackID: stub.id)
@@ -2956,7 +3097,7 @@ final class SteamWorkshopService: ObservableObject {
                 NSLocalizedDescriptionKey: "当前条目详情页标记类型为 \(workshopTypeText)，不是视频壁纸。"
             ])
         }
-        let item = SteamWorkshopBrowserItem(
+        return SteamWorkshopBrowserItem(
             id: stub.id,
             title: parsed.title,
             author: parsed.author,
@@ -2983,10 +3124,158 @@ final class SteamWorkshopService: ObservableObject {
             detailFields: parsed.detailFields,
             detailURL: detailURL
         )
-        let merged = mergeStub(stub, into: item)
-        let enriched = try await enrichPreviewKind(for: merged)
-        saveDetailCache(item: enriched)
-        return enriched
+    }
+
+    private static func fetchPublishedFileDetails(ids: [String]) async throws -> [String: SteamWorkshopPublishedFileDetail] {
+        let normalizedIDs = Array(NSOrderedSet(array: ids.filter { !$0.isEmpty })) as? [String] ?? []
+        guard !normalizedIDs.isEmpty else { return [:] }
+
+        var request = URLRequest(url: URL(string: Constants.publishedFileDetailsAPI)!)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 20
+        request.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) MyWallpaperX/1.0", forHTTPHeaderField: "User-Agent")
+
+        var formItems = ["itemcount=\(normalizedIDs.count)"]
+        formItems.append(contentsOf: normalizedIDs.enumerated().map { index, id in
+            "publishedfileids[\(index)]=\(id)"
+        })
+        request.httpBody = formItems.joined(separator: "&").data(using: .utf8)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw NSError(
+                domain: NSURLErrorDomain,
+                code: http.statusCode,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Steam 官方详情接口请求失败，HTTP \(http.statusCode)"
+                ]
+            )
+        }
+
+        let decoded = try JSONDecoder().decode(SteamWorkshopPublishedFileResponseEnvelope.self, from: data)
+        var result: [String: SteamWorkshopPublishedFileDetail] = [:]
+        for detail in decoded.response.publishedfiledetails where detail.result == 1 {
+            result[detail.publishedfileid] = detail
+        }
+        return result
+    }
+
+    private static func item(from detail: SteamWorkshopPublishedFileDetail, stub: SteamWorkshopBrowseStub) -> SteamWorkshopBrowserItem {
+        let tags = detail.tags.map(\.tag).map(normalizeText).filter { !$0.isEmpty }
+        let authorProfileURL = detail.creator.flatMap { creator in
+            URL(string: "https://steamcommunity.com/profiles/\(creator)/")
+        }
+        let authorWorkshopURL = detail.creator.flatMap { creator in
+            URL(string: "https://steamcommunity.com/profiles/\(creator)/myworkshopfiles/?appid=\(Constants.workshopAppID)")
+        }
+        let descriptionText = normalizeText(detail.description ?? "")
+        let summaryText = stub.summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary = summaryText?.isEmpty == false ? summaryText! : descriptionText
+        let workshopType = preferredTag(in: tags, matching: ["Video"])
+        let ageRating = preferredTag(in: tags, matching: SteamWorkshopAgeRatingFilter.allCases.map(\.rawValue))
+        let category = preferredTag(in: tags, matching: SteamWorkshopCategoryFilter.allCases.dropFirst().map(\.rawValue))
+        let resolution = tags.first(where: isResolutionTag)
+        let genre = tags.first(where: { tag in
+            !isSystemWorkshopTag(tag)
+        })
+        let subscriptions = detail.subscriptions ?? detail.lifetimeSubscriptions
+        let favorites = detail.favorited ?? detail.lifetimeFavorited
+        let scoreText = detail.views.map { "浏览 \($0)" }
+
+        return SteamWorkshopBrowserItem(
+            id: detail.publishedfileid,
+            title: normalizeText(detail.title ?? normalizedStubTitle(stub)),
+            author: normalizedStubAuthor(
+                SteamWorkshopBrowseStub(
+                    id: stub.id,
+                    title: stub.title,
+                    author: stub.author,
+                    authorProfileURL: authorProfileURL ?? stub.authorProfileURL,
+                    authorWorkshopURL: authorWorkshopURL ?? stub.authorWorkshopURL,
+                    hasAdultContent: stub.hasAdultContent,
+                    summary: stub.summary,
+                    previewImageURL: stub.previewImageURL
+                )
+            ),
+            authorProfileURL: authorProfileURL ?? stub.authorProfileURL,
+            authorWorkshopURL: authorWorkshopURL ?? stub.authorWorkshopURL,
+            hasAdultContent: stub.hasAdultContent,
+            summary: summary,
+            descriptionText: descriptionText.isEmpty ? summary : descriptionText,
+            tags: tags,
+            workshopTypeText: workshopType,
+            ageRatingText: ageRating,
+            genreText: genre,
+            categoryText: category,
+            previewImageURL: detail.previewURL ?? stub.previewImageURL,
+            previewVideoURL: nil,
+            previewAssetKind: .unknown,
+            fileSizeText: detail.fileSize.map(fileSizeText(forBytes:)),
+            resolutionText: resolution,
+            postedText: formatSteamTimestamp(detail.timeCreated),
+            updatedText: formatSteamTimestamp(detail.timeUpdated),
+            favoritesText: favorites.map(formatCount),
+            subscriptionsText: subscriptions.map(formatCount),
+            scoreText: scoreText,
+            detailFields: buildOfficialDetailFields(
+                fileSizeText: detail.fileSize.map(fileSizeText(forBytes:)),
+                resolutionText: resolution,
+                postedText: formatSteamTimestamp(detail.timeCreated),
+                updatedText: formatSteamTimestamp(detail.timeUpdated),
+                subscriptionsText: subscriptions.map(formatCount),
+                favoritesText: favorites.map(formatCount),
+                tags: tags
+            ),
+            detailURL: makeDetailURL(id: detail.publishedfileid)
+        )
+    }
+
+    private static func detailRepresentsVideo(_ detail: SteamWorkshopPublishedFileDetail) -> Bool {
+        detail.tags.contains { $0.tag.localizedCaseInsensitiveContains("Video") }
+    }
+
+    private static func shouldSupplementWithHTML(item: SteamWorkshopBrowserItem) -> Bool {
+        item.author == "未知作者"
+            || item.descriptionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || item.authorWorkshopURL == nil
+            || item.previewVideoURL == nil
+    }
+
+    private static func mergeDetailedItem(
+        preferred: SteamWorkshopBrowserItem,
+        fallback: SteamWorkshopBrowserItem
+    ) -> SteamWorkshopBrowserItem {
+        SteamWorkshopBrowserItem(
+            id: preferred.id,
+            title: preferred.title.isEmpty ? fallback.title : preferred.title,
+            author: preferred.author == "未知作者" ? fallback.author : preferred.author,
+            authorProfileURL: preferred.authorProfileURL ?? fallback.authorProfileURL,
+            authorWorkshopURL: preferred.authorWorkshopURL ?? fallback.authorWorkshopURL,
+            hasAdultContent: preferred.hasAdultContent || fallback.hasAdultContent,
+            summary: preferred.summary.isEmpty ? fallback.summary : preferred.summary,
+            descriptionText: preferred.descriptionText.isEmpty ? fallback.descriptionText : preferred.descriptionText,
+            tags: preferred.tags.isEmpty ? fallback.tags : preferred.tags,
+            workshopTypeText: preferred.workshopTypeText ?? fallback.workshopTypeText,
+            ageRatingText: preferred.ageRatingText ?? fallback.ageRatingText,
+            genreText: preferred.genreText ?? fallback.genreText,
+            categoryText: preferred.categoryText ?? fallback.categoryText,
+            previewImageURL: preferred.previewImageURL ?? fallback.previewImageURL,
+            previewVideoURL: preferred.previewVideoURL ?? fallback.previewVideoURL,
+            previewAssetKind: preferred.previewAssetKind == .unknown ? fallback.previewAssetKind : preferred.previewAssetKind,
+            fileSizeText: preferred.fileSizeText ?? fallback.fileSizeText,
+            resolutionText: preferred.resolutionText ?? fallback.resolutionText,
+            postedText: preferred.postedText ?? fallback.postedText,
+            updatedText: preferred.updatedText ?? fallback.updatedText,
+            favoritesText: preferred.favoritesText ?? fallback.favoritesText,
+            subscriptionsText: preferred.subscriptionsText ?? fallback.subscriptionsText,
+            scoreText: preferred.scoreText ?? fallback.scoreText,
+            detailFields: preferred.detailFields.isEmpty ? fallback.detailFields : preferred.detailFields,
+            detailURL: preferred.detailURL
+        )
     }
 
     private static func fetchHTML(url: URL) async throws -> String {
@@ -3505,6 +3794,75 @@ final class SteamWorkshopService: ObservableObject {
     private static func normalizedStubAuthor(_ stub: SteamWorkshopBrowseStub) -> String {
         let author = normalizeAuthorName(stub.author ?? "")
         return author.isEmpty ? "未知作者" : author
+    }
+
+    private static func formatSteamTimestamp(_ timestamp: Int64?) -> String? {
+        guard let timestamp, timestamp > 0 else { return nil }
+        return DateFormatter.localizedString(
+            from: Date(timeIntervalSince1970: TimeInterval(timestamp)),
+            dateStyle: .medium,
+            timeStyle: .none
+        )
+    }
+
+    private static func formatCount(_ value: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+
+    private static func buildOfficialDetailFields(
+        fileSizeText: String?,
+        resolutionText: String?,
+        postedText: String?,
+        updatedText: String?,
+        subscriptionsText: String?,
+        favoritesText: String?,
+        tags: [String]
+    ) -> [SteamWorkshopDetailField] {
+        var fields: [SteamWorkshopDetailField] = []
+
+        func appendField(_ label: String, _ value: String?) {
+            guard let value, !value.isEmpty else { return }
+            fields.append(SteamWorkshopDetailField(label: label, value: value))
+        }
+
+        appendField("File Size", fileSizeText)
+        appendField("Resolution", resolutionText)
+        appendField("Posted", postedText)
+        appendField("Updated", updatedText)
+        appendField("Subscriptions", subscriptionsText)
+        appendField("Favorited", favoritesText)
+        if !tags.isEmpty {
+            appendField("Tags", tags.joined(separator: " · "))
+        }
+        return fields
+    }
+
+    private static func preferredTag(in tags: [String], matching candidates: [String]) -> String? {
+        tags.first { tag in
+            candidates.contains { candidate in
+                tag.compare(candidate, options: .caseInsensitive) == .orderedSame
+            }
+        }
+    }
+
+    private static func isResolutionTag(_ tag: String) -> Bool {
+        tag.range(of: #"\d{3,5}\s*x\s*\d{3,5}"#, options: [.regularExpression, .caseInsensitive]) != nil
+            || tag.range(of: #"\d{3,5}\s*×\s*\d{3,5}"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private static func isSystemWorkshopTag(_ tag: String) -> Bool {
+        if preferredTag(in: [tag], matching: ["Video"]) != nil {
+            return true
+        }
+        if preferredTag(in: [tag], matching: SteamWorkshopAgeRatingFilter.allCases.map(\.rawValue)) != nil {
+            return true
+        }
+        if preferredTag(in: [tag], matching: SteamWorkshopCategoryFilter.allCases.dropFirst().map(\.rawValue)) != nil {
+            return true
+        }
+        return isResolutionTag(tag)
     }
 
     private static func normalizeAuthorName(_ text: String) -> String {
