@@ -206,7 +206,7 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 }
 ```
 
-`moduleDidBecomeActive` 由 Shell 层在模块切换后 **120ms** 延迟发出（给工具栏重建留时间）。在线库已迁移到 AppKit 容器并实现该协议：浏览页与已下载项均可接管焦点。Steam 目前的真实实现仅由两个 AppKit 容器（浏览页与下载页）直接监听该通知并把 first responder 交给内部 `NSCollectionView`，`SteamWorkshopFocusHost` 虽然仍在目录中，但并未参与运行链路。纯 SwiftUI 页面若未桥接 AppKit 容器，暂无法接入该协议。
+`moduleDidBecomeActive` 由 Shell 层在模块切换后 **120ms** 延迟发出（给工具栏重建留时间）。在线库已迁移到 AppKit 容器并实现该协议：浏览页与已下载项均可接管焦点。Steam 当前的真实实现仅由两个 AppKit 容器（浏览页与下载页）直接监听该通知并把 first responder 交给内部 `NSCollectionView`，`SteamWorkshopFocusHost` 已经被移除，避免悬置的焦点桥接。纯 SwiftUI 页面若未桥接 AppKit 容器，暂无法接入该协议。
 
 ### 3.7 QuickLook
 

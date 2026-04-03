@@ -303,8 +303,17 @@ final class SteamWorkshopService: ObservableObject {
         return record
     }
 
+    func playableDownloadRecord(for itemID: String) -> SteamWorkshopDownloadRecord? {
+        guard let record = latestDownloadRecord(for: itemID),
+              record.status == .ready,
+              record.isPlayable else {
+            return nil
+        }
+        return record
+    }
+
     func isDownloaded(itemID: String) -> Bool {
-        downloadRecord(for: itemID) != nil
+        playableDownloadRecord(for: itemID) != nil
     }
 
     func latestDownloadFailure(for itemID: String) -> String? {

@@ -13,7 +13,7 @@ struct SteamWorkshopItemDetailSheet: View {
     }
 
     private var downloadRecord: SteamWorkshopDownloadRecord? {
-        service.downloadRecord(for: item.id)
+        service.playableDownloadRecord(for: item.id)
     }
 
     private var latestDownloadRecord: SteamWorkshopDownloadRecord? {

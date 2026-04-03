@@ -150,6 +150,10 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
     private var currentPreviewURL: URL?
     private var onSetAsWallpaper: (() -> Void)?
     private var onReveal: (() -> Void)?
+    private var onRetry: (() -> Void)?
+    private var onCancel: (() -> Void)?
+    private var currentRecord: SteamWorkshopDownloadRecord?
+    private var keyboardFocused = false
     private var trackingAreaRef: NSTrackingArea?
     private var isHovering = false
     private var currentCardScale: CGFloat = 1.0
@@ -219,8 +223,11 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
         secondaryMetaLabel.text = ""
         onSetAsWallpaper = nil
         onReveal = nil
+        onRetry = nil
+        onCancel = nil
         isHovering = false
         currentCardScale = 1.0
+        keyboardFocused = false
         cardView.layer?.transform = CATransform3DIdentity
         textContainer.frame = .zero
         buttonsContainer.frame = .zero
@@ -331,19 +338,46 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
 
     func configure(
         record: SteamWorkshopDownloadRecord,
+        isKeyboardFocused: Bool,
         onSetAsWallpaper: @escaping () -> Void,
-        onReveal: @escaping () -> Void
+        onReveal: @escaping () -> Void,
+        onRetry: @escaping () -> Void,
+        onCancel: @escaping () -> Void
     ) {
         self.onSetAsWallpaper = onSetAsWallpaper
         self.onReveal = onReveal
+        self.onRetry = onRetry
+        self.onCancel = onCancel
+        self.currentRecord = record
 
         currentTitleText = record.title
         metaLabel.text = record.id
         secondaryMetaLabel.text = [record.sizeText, record.statusText].joined(separator: "  ·  ")
 
-        setAsWallpaperButton.isEnabled = record.videoURL != nil
+        switch record.status {
+        case .ready:
+            setAsWallpaperButton.title = record.isPlayable ? "设为壁纸" : "已下载"
+            setAsWallpaperButton.isEnabled = record.isPlayable
+            setAsWallpaperButton.setAccessibilityLabel(
+                record.isPlayable
+                ? "设为壁纸：\(record.title)"
+                : "缺少可播放视频：\(record.title)"
+            )
+        case .failed:
+            setAsWallpaperButton.title = "重新下载"
+            setAsWallpaperButton.isEnabled = true
+            setAsWallpaperButton.setAccessibilityLabel("重新下载：\(record.title)")
+        case .downloading:
+            setAsWallpaperButton.title = "取消下载"
+            setAsWallpaperButton.isEnabled = true
+            setAsWallpaperButton.setAccessibilityLabel("取消下载：\(record.title)")
+        }
 
+        let folderExists = FileManager.default.fileExists(atPath: record.folderURL.path)
+        revealButton.isEnabled = folderExists
+        revealButton.setAccessibilityLabel("显示文件：\(record.title)")
         loadPreview(from: record.previewURL)
+        setKeyboardFocus(isKeyboardFocused)
     }
 
     private func buildHierarchy() {
@@ -490,17 +524,33 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
     private func refreshThemeAwareAppearance() {
         guard let layer = cardView.layer else { return }
         layer.backgroundColor = NSColor.controlBackgroundColor.cgColor
-        layer.borderColor = (isHovering
-            ? NSColor.controlAccentColor.withAlphaComponent(0.30)
-            : NSColor.separatorColor.withAlphaComponent(0.22)).cgColor
+        let borderColor: NSColor
+        if keyboardFocused {
+            borderColor = NSColor.controlAccentColor.withAlphaComponent(0.60)
+        } else if isHovering {
+            borderColor = NSColor.controlAccentColor.withAlphaComponent(0.30)
+        } else {
+            borderColor = NSColor.separatorColor.withAlphaComponent(0.22)
+        }
+        layer.borderColor = borderColor.cgColor
         layer.shadowColor = NSColor.black.cgColor
-        layer.shadowOpacity = isHovering ? 0.14 : 0.04
-        layer.shadowRadius = isHovering ? 10 : 6
+        layer.shadowOpacity = keyboardFocused ? 0.18 : (isHovering ? 0.14 : 0.04)
+        layer.shadowRadius = keyboardFocused ? 12 : (isHovering ? 10 : 6)
         layer.shadowOffset = CGSize(width: 0, height: -1)
         previewContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         titleLabel.textColor = .labelColor
         metaLabel.textColor = .secondaryLabelColor
         secondaryMetaLabel.textColor = .secondaryLabelColor
+    }
+
+    func setKeyboardFocus(_ focused: Bool) {
+        guard keyboardFocused != focused else { return }
+        keyboardFocused = focused
+        refreshThemeAwareAppearance()
+    }
+
+    func performPrimaryKeyboardAction() {
+        handleSetAsWallpaper()
     }
 
     private func truncatedText(_ text: String, maxWidth: CGFloat, font: NSFont) -> String {
@@ -582,7 +632,17 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
     }
 
     @objc private func handleSetAsWallpaper() {
-        onSetAsWallpaper?()
+        guard let record = currentRecord else { return }
+        switch record.status {
+        case .ready:
+            if record.isPlayable {
+                onSetAsWallpaper?()
+            }
+        case .failed:
+            onRetry?()
+        case .downloading:
+            onCancel?()
+        }
     }
 
     @objc private func handleReveal() {

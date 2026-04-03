@@ -69,6 +69,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
     private var pendingFooterSnapshotRefresh = false
     private var moduleActivationObserver: NSObjectProtocol?
     private var lastPrioritizedVisibleIDs: [String] = []
+    private var keyboardFocusedID: String?
 
     private let scrollView: NSScrollView = {
         let scrollView = NSScrollView()
@@ -79,11 +80,12 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         return scrollView
     }()
 
-    private lazy var collectionView: NSCollectionView = {
-        let collectionView = NSCollectionView()
+    private lazy var collectionView: SteamWorkshopKeyboardCollectionView = {
+        let collectionView = SteamWorkshopKeyboardCollectionView()
         collectionView.isSelectable = false
         collectionView.backgroundColors = [.clear]
         collectionView.translatesAutoresizingMaskIntoConstraints = false
+        collectionView.keyboardDelegate = self
         return collectionView
     }()
 
@@ -108,20 +110,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             }
             guard let item = self.itemsByID[id] else { return nil }
             let cell = AppKitSteamWorkshopBrowserItem(nibName: nil, bundle: nil)
-            cell.configure(
-                item: item,
-                downloadRecord: self.service.latestDownloadRecord(for: id),
-                downloadProgressText: self.service.downloadProgressLabel(for: id),
-                isDownloading: self.service.isDownloading(itemID: id),
-                isDownloaded: self.service.isDownloaded(itemID: id),
-                onOpen: { [weak self] in self?.onOpen(item) },
-                onDownload: { [weak self] in self?.onDownload(item) },
-                onSetAsWallpaper: { [weak self] in
-                    guard let self, let record = self.service.downloadRecord(for: id) else { return }
-                    self.onSetAsWallpaper(record)
-                },
-                onCancelDownload: { [weak self] in self?.onCancelDownload() }
-            )
+            self.configureCell(cell, for: id)
             return cell
         }
         return dataSource
@@ -303,6 +292,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             self.updateBrowserScrollMetrics()
             self.prioritizeVisibleItemsForHydration()
             self.checkLoadMore()
+            self.ensureKeyboardFocus()
         }
     }
 
@@ -312,20 +302,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             guard let id = dataSource.itemIdentifier(for: indexPath), changedIDs.contains(id) else { continue }
             guard let cell = collectionView.item(at: indexPath) as? AppKitSteamWorkshopBrowserItem else { continue }
             guard let item = itemsByID[id] else { continue }
-            cell.configureMetadataOnly(
-                item: item,
-                downloadRecord: service.latestDownloadRecord(for: id),
-                downloadProgressText: service.downloadProgressLabel(for: id),
-                isDownloading: service.isDownloading(itemID: id),
-                isDownloaded: service.isDownloaded(itemID: id),
-                onOpen: { [weak self] in self?.onOpen(item) },
-                onDownload: { [weak self] in self?.onDownload(item) },
-                onSetAsWallpaper: { [weak self] in
-                    guard let self, let record = self.service.downloadRecord(for: id) else { return }
-                    self.onSetAsWallpaper(record)
-                },
-                onCancelDownload: { [weak self] in self?.onCancelDownload() }
-            )
+            configureMetadataCell(cell, for: id)
         }
     }
 
@@ -342,21 +319,46 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             }
             guard let cell = collectionView.item(at: indexPath) as? AppKitSteamWorkshopBrowserItem else { continue }
             guard let item = itemsByID[id] else { continue }
-            cell.configure(
-                item: item,
-                downloadRecord: service.latestDownloadRecord(for: id),
-                downloadProgressText: service.downloadProgressLabel(for: id),
-                isDownloading: service.isDownloading(itemID: id),
-                isDownloaded: service.isDownloaded(itemID: id),
-                onOpen: { [weak self] in self?.onOpen(item) },
-                onDownload: { [weak self] in self?.onDownload(item) },
-                onSetAsWallpaper: { [weak self] in
-                    guard let self, let record = self.service.downloadRecord(for: id) else { return }
-                    self.onSetAsWallpaper(record)
-                },
-                onCancelDownload: { [weak self] in self?.onCancelDownload() }
-            )
+            configureCell(cell, for: id)
         }
+    }
+
+    private func configureCell(_ cell: AppKitSteamWorkshopBrowserItem, for id: String) {
+        guard let item = itemsByID[id] else { return }
+        cell.configure(
+            item: item,
+            downloadRecord: service.latestDownloadRecord(for: id),
+            downloadProgressText: service.downloadProgressLabel(for: id),
+            isDownloading: service.isDownloading(itemID: id),
+            isDownloaded: service.isDownloaded(itemID: id),
+            isKeyboardFocused: id == keyboardFocusedID,
+            onOpen: { [weak self] in self?.onOpen(item) },
+            onDownload: { [weak self] in self?.onDownload(item) },
+            onSetAsWallpaper: { [weak self] in
+                guard let self, let record = self.service.playableDownloadRecord(for: id) else { return }
+                self.onSetAsWallpaper(record)
+            },
+            onCancelDownload: { [weak self] in self?.onCancelDownload() }
+        )
+    }
+
+    private func configureMetadataCell(_ cell: AppKitSteamWorkshopBrowserItem, for id: String) {
+        guard let item = itemsByID[id] else { return }
+        cell.configureMetadataOnly(
+            item: item,
+            downloadRecord: service.latestDownloadRecord(for: id),
+            downloadProgressText: service.downloadProgressLabel(for: id),
+            isDownloading: service.isDownloading(itemID: id),
+            isDownloaded: service.isDownloaded(itemID: id),
+            isKeyboardFocused: id == keyboardFocusedID,
+            onOpen: { [weak self] in self?.onOpen(item) },
+            onDownload: { [weak self] in self?.onDownload(item) },
+            onSetAsWallpaper: { [weak self] in
+                guard let self, let record = self.service.playableDownloadRecord(for: id) else { return }
+                self.onSetAsWallpaper(record)
+            },
+            onCancelDownload: { [weak self] in self?.onCancelDownload() }
+        )
     }
 
     private func checkLoadMore() {
@@ -373,6 +375,99 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             log("checkLoadMore trigger offsetY=\(offsetY) contentHeight=\(contentHeight) viewportHeight=\(viewportHeight) itemCount=\(orderedIDs.count)")
             service.loadMoreBrowserItemsIfNeeded()
         }
+    }
+
+    private func ensureKeyboardFocus() {
+        guard !orderedIDs.isEmpty else {
+            keyboardFocusedID = nil
+            return
+        }
+        if let focusedID = keyboardFocusedID, orderedIDs.contains(focusedID) {
+            reloadKeyboardFocus(previous: nil, next: focusedID)
+            return
+        }
+        focusItem(at: 0)
+    }
+
+    private func focusItem(at index: Int) {
+        guard index >= 0, index < orderedIDs.count else { return }
+        let nextID = orderedIDs[index]
+        let previousID = keyboardFocusedID
+        guard previousID != nextID else {
+            reloadKeyboardFocus(previous: previousID, next: nextID)
+            scrollToItem(nextID)
+            return
+        }
+        keyboardFocusedID = nextID
+        reloadKeyboardFocus(previous: previousID, next: nextID)
+        scrollToItem(nextID)
+    }
+
+    private func moveFocus(delta: Int) -> Bool {
+        guard !orderedIDs.isEmpty else { return false }
+        let current = focusedIndex ?? 0
+        let next = min(max(0, current + delta), orderedIDs.count - 1)
+        guard next != current || keyboardFocusedID == nil else { return false }
+        focusItem(at: next)
+        return true
+    }
+
+    private var focusedIndex: Int? {
+        guard let id = keyboardFocusedID else { return nil }
+        return orderedIDs.firstIndex(of: id)
+    }
+
+    private func handleReturnKey() -> Bool {
+        guard let id = keyboardFocusedID, let item = itemsByID[id] else { return false }
+        onOpen(item)
+        return true
+    }
+
+    private func performActionKey() -> Bool {
+        guard let id = keyboardFocusedID, let item = itemsByID[id] else { return false }
+        if service.isDownloading(itemID: id) {
+            onCancelDownload()
+            return true
+        }
+        if let record = service.playableDownloadRecord(for: id) {
+            onSetAsWallpaper(record)
+            return true
+        }
+        onDownload(item)
+        return true
+    }
+
+    private func handleEscapeKey() -> Bool {
+        guard service.selectedBrowserItem != nil else { return false }
+        service.dismissItemDetail()
+        return true
+    }
+
+    private func scrollToItem(_ id: String) {
+        guard let indexPath = indexPathForItemID(id) else { return }
+        collectionView.scrollToItems(at: Set([indexPath]), scrollPosition: .centeredVertically)
+    }
+
+    private func reloadKeyboardFocus(previous: String?, next: String?) {
+        var indexPaths = Set<IndexPath>()
+        if let prev = previous, let path = indexPathForItemID(prev) {
+            indexPaths.insert(path)
+        }
+        if let nextID = next, let path = indexPathForItemID(nextID) {
+            indexPaths.insert(path)
+        }
+        guard !indexPaths.isEmpty else { return }
+        collectionView.reloadItems(at: indexPaths)
+    }
+
+    private func indexPathForItemID(_ id: String) -> IndexPath? {
+        guard let index = orderedIDs.firstIndex(of: id) else { return nil }
+        return IndexPath(item: index, section: 0)
+    }
+
+    private func cellForItemID(_ id: String) -> AppKitSteamWorkshopBrowserItem? {
+        guard let indexPath = indexPathForItemID(id) else { return nil }
+        return collectionView.item(at: indexPath) as? AppKitSteamWorkshopBrowserItem
     }
 
     private func prioritizeVisibleItemsForHydration() {
@@ -520,26 +615,38 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         }
 
         guard let cell = item as? AppKitSteamWorkshopBrowserItem else { return }
-        guard let browserItem = itemsByID[id] else { return }
-        cell.configure(
-            item: browserItem,
-            downloadRecord: service.latestDownloadRecord(for: id),
-            downloadProgressText: service.downloadProgressLabel(for: id),
-            isDownloading: service.isDownloading(itemID: id),
-            isDownloaded: service.isDownloaded(itemID: id),
-            onOpen: { [weak self] in self?.onOpen(browserItem) },
-            onDownload: { [weak self] in self?.onDownload(browserItem) },
-            onSetAsWallpaper: { [weak self] in
-                guard let self, let record = self.service.downloadRecord(for: id) else { return }
-                self.onSetAsWallpaper(record)
-            },
-            onCancelDownload: { [weak self] in self?.onCancelDownload() }
-        )
+        configureCell(cell, for: id)
         prioritizeVisibleItemsForHydration()
+    }
+
+    func collectionView(_ collectionView: NSCollectionView, didEndDisplaying item: NSCollectionViewItem, forRepresentedObjectAt indexPath: IndexPath) {
+        guard let id = dataSource.itemIdentifier(for: indexPath), id == keyboardFocusedID else { return }
+        cellForItemID(id)?.setKeyboardFocus(false)
     }
 
     private func log(_ message: String) {
         _ = message
+    }
+}
+
+extension AppKitSteamWorkshopBrowserContainerView: SteamWorkshopKeyboardDelegate {
+    func steamWorkshopCollectionView(_ collectionView: SteamWorkshopKeyboardCollectionView, handleKey event: NSEvent) -> Bool {
+        switch event.keyCode {
+        case 123, 126:
+            return moveFocus(delta: -1)
+        case 124, 125:
+            return moveFocus(delta: 1)
+        case 36, 76:
+            return handleReturnKey()
+        case 53:
+            return handleEscapeKey()
+        default:
+            break
+        }
+        if let char = event.charactersIgnoringModifiers?.lowercased(), char == "d" {
+            return performActionKey()
+        }
+        return false
     }
 }
 

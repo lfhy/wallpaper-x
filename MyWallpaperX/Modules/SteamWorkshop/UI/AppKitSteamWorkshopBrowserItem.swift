@@ -131,6 +131,7 @@ private final class SteamWorkshopCardTextLineView: NSView {
         textLayer.fontSize = font.pointSize
         textLayer.foregroundColor = textColor.cgColor
     }
+
 }
 
 final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
@@ -159,6 +160,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     private var trackingAreaRef: NSTrackingArea?
     private var isHovering = false
     private var currentCardScale: CGFloat = 1.0
+    private var keyboardFocused = false
 
     private enum Layout {
         static let cardCornerRadius: CGFloat = 12
@@ -230,6 +232,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         currentSecondaryMetaColor = .secondaryLabelColor
         isHovering = false
         currentCardScale = 1.0
+        keyboardFocused = false
         cardView.layer?.transform = CATransform3DIdentity
         textContainer.frame = .zero
         buttonsContainer.frame = .zero
@@ -242,6 +245,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         downloadProgressText: String?,
         isDownloading: Bool,
         isDownloaded: Bool,
+        isKeyboardFocused: Bool,
         onOpen: @escaping () -> Void,
         onDownload: @escaping () -> Void,
         onSetAsWallpaper: @escaping () -> Void,
@@ -291,8 +295,23 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             actionButton.pressedBackgroundColor = NSColor.controlAccentColor.blended(withFraction: 0.18, of: .black) ?? NSColor.controlAccentColor
         }
 
+        detailButton.setAccessibilityLabel("查看详情：\(item.title)")
+
+        var actionHint = "执行 \(actionButton.title) 操作"
+        if actionButton.title.contains("下载中") {
+            actionHint = "当前下载正在执行"
+        } else if actionButton.title.contains("取消") {
+            actionHint = "取消 steamcmd 正在进行的下载"
+        } else if actionButton.title.contains("设为壁纸") {
+            actionHint = "将下载完成的视频设为桌面壁纸"
+        } else if actionButton.title.contains("重试") {
+            actionHint = "重新触发该创意工坊项目的下载"
+        }
+        actionButton.setAccessibilityLabel("\(actionButton.title)：\(item.title)")
+
         loadPreview(from: item.previewImageURL)
         applyHoverStyle(animated: false)
+        setKeyboardFocus(isKeyboardFocused)
     }
 
     func configureMetadataOnly(
@@ -301,6 +320,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         downloadProgressText: String?,
         isDownloading: Bool,
         isDownloaded: Bool,
+        isKeyboardFocused: Bool,
         onOpen: @escaping () -> Void,
         onDownload: @escaping () -> Void,
         onSetAsWallpaper: @escaping () -> Void,
@@ -326,6 +346,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             isDownloaded: isDownloaded
         )
         refreshThemeAwareAppearance()
+        setKeyboardFocus(isKeyboardFocused)
     }
 
     override func viewDidLayout() {
@@ -534,17 +555,29 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     private func refreshThemeAwareAppearance() {
         guard let layer = cardView.layer else { return }
         layer.backgroundColor = NSColor.controlBackgroundColor.cgColor
-        layer.borderColor = (isHovering
-            ? NSColor.controlAccentColor.withAlphaComponent(0.30)
-            : NSColor.separatorColor.withAlphaComponent(0.22)).cgColor
+        let borderColor: NSColor
+        if keyboardFocused {
+            borderColor = NSColor.controlAccentColor.withAlphaComponent(0.60)
+        } else if isHovering {
+            borderColor = NSColor.controlAccentColor.withAlphaComponent(0.30)
+        } else {
+            borderColor = NSColor.separatorColor.withAlphaComponent(0.22)
+        }
+        layer.borderColor = borderColor.cgColor
         layer.shadowColor = NSColor.black.cgColor
-        layer.shadowOpacity = isHovering ? 0.14 : 0.04
-        layer.shadowRadius = isHovering ? 10 : 6
+        layer.shadowOpacity = keyboardFocused ? 0.18 : (isHovering ? 0.14 : 0.04)
+        layer.shadowRadius = keyboardFocused ? 12 : (isHovering ? 10 : 6)
         layer.shadowOffset = CGSize(width: 0, height: -1)
         previewContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         titleLabel.textColor = .labelColor
         metaLabel.textColor = .secondaryLabelColor
         secondaryMetaLabel.textColor = currentSecondaryMetaColor
+    }
+
+    func setKeyboardFocus(_ focused: Bool) {
+        guard keyboardFocused != focused else { return }
+        keyboardFocused = focused
+        refreshThemeAwareAppearance()
     }
 
     override func mouseEntered(with event: NSEvent) {

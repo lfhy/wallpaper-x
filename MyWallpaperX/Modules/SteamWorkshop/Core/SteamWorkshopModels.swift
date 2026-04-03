@@ -95,4 +95,8 @@ struct SteamWorkshopDownloadRecord: Identifiable, Equatable {
         guard case let .failed(message) = status else { return nil }
         return message
     }
+
+    var isPlayable: Bool {
+        status == .ready && videoURL != nil
+    }
 }

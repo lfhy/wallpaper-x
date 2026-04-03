@@ -38,6 +38,7 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
     private var cancellables = Set<AnyCancellable>()
     private var orderedIDs: [String] = []
     private var recordsByID: [String: SteamWorkshopDownloadRecord] = [:]
+    private var keyboardFocusedID: String?
     private var moduleActivationObserver: NSObjectProtocol?
 
     private let scrollView: NSScrollView = {
@@ -49,11 +50,12 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
         return s
     }()
 
-    private lazy var collectionView: NSCollectionView = {
-        let cv = NSCollectionView()
+    private lazy var collectionView: SteamWorkshopKeyboardCollectionView = {
+        let cv = SteamWorkshopKeyboardCollectionView()
         cv.isSelectable = false
         cv.backgroundColors = [.clear]
         cv.translatesAutoresizingMaskIntoConstraints = false
+        cv.keyboardDelegate = self
         return cv
     }()
 
@@ -80,11 +82,7 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
             guard let self,
                   let record = self.recordsByID[id] else { return nil }
             let item = AppKitSteamWorkshopDownloadsItem(nibName: nil, bundle: nil)
-            item.configure(
-                record: record,
-                onSetAsWallpaper: { [weak self] in self?.onSetAsWallpaper(record) },
-                onReveal: { [weak self] in self?.onReveal(record) }
-            )
+            self.configureDownloadItem(item, for: record)
             return item
         }
     }()
@@ -180,6 +178,22 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
         snapshot.appendSections([.main])
         snapshot.appendItems(orderedIDs, toSection: .main)
         dataSource.apply(snapshot, animatingDifferences: true)
+        ensureKeyboardFocus()
+    }
+
+    private func configureDownloadItem(_ item: AppKitSteamWorkshopDownloadsItem, for record: SteamWorkshopDownloadRecord) {
+        item.configure(
+            record: record,
+            isKeyboardFocused: record.id == keyboardFocusedID,
+            onSetAsWallpaper: { [weak self] in self?.onSetAsWallpaper(record) },
+            onReveal: { [weak self] in self?.onReveal(record) },
+            onRetry: { [weak self] in
+                self?.service.downloadWorkshopItem(id: record.id, pageTitle: record.title)
+            },
+            onCancel: { [weak self] in
+                self?.service.cancelActiveDownload()
+            }
+        )
     }
 
     private func updateLayoutItemSize() {
@@ -205,5 +219,95 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
         guard flowLayout.itemSize != newSize else { return }
         flowLayout.itemSize = newSize
         collectionView.collectionViewLayout?.invalidateLayout()
+    }
+
+    private func ensureKeyboardFocus() {
+        guard !orderedIDs.isEmpty else {
+            keyboardFocusedID = nil
+            return
+        }
+        if let focusedID = keyboardFocusedID, orderedIDs.contains(focusedID) {
+            reloadKeyboardFocus(previous: nil, next: focusedID)
+            return
+        }
+        focusItem(at: 0)
+    }
+
+    private func focusItem(at index: Int) {
+        guard index >= 0, index < orderedIDs.count else { return }
+        let nextID = orderedIDs[index]
+        let previousID = keyboardFocusedID
+        guard previousID != nextID else {
+            reloadKeyboardFocus(previous: previousID, next: nextID)
+            scrollToItem(nextID)
+            return
+        }
+        keyboardFocusedID = nextID
+        reloadKeyboardFocus(previous: previousID, next: nextID)
+        scrollToItem(nextID)
+    }
+
+    private func moveFocus(delta: Int) -> Bool {
+        guard !orderedIDs.isEmpty else { return false }
+        let current = focusedIndex ?? 0
+        let next = min(max(0, current + delta), orderedIDs.count - 1)
+        guard next != current || keyboardFocusedID == nil else { return false }
+        focusItem(at: next)
+        return true
+    }
+
+    private var focusedIndex: Int? {
+        guard let id = keyboardFocusedID else { return nil }
+        return orderedIDs.firstIndex(of: id)
+    }
+
+    private func handleReturnKey() -> Bool {
+        guard let id = keyboardFocusedID,
+              let cell = cellForItemID(id) else { return false }
+        cell.performPrimaryKeyboardAction()
+        return true
+    }
+
+    private func scrollToItem(_ id: String) {
+        guard let indexPath = indexPathForItemID(id) else { return }
+        collectionView.scrollToItems(at: Set([indexPath]), scrollPosition: .centeredVertically)
+    }
+
+    private func indexPathForItemID(_ id: String) -> IndexPath? {
+        guard let index = orderedIDs.firstIndex(of: id) else { return nil }
+        return IndexPath(item: index, section: 0)
+    }
+
+    private func cellForItemID(_ id: String) -> AppKitSteamWorkshopDownloadsItem? {
+        guard let indexPath = indexPathForItemID(id) else { return nil }
+        return collectionView.item(at: indexPath) as? AppKitSteamWorkshopDownloadsItem
+    }
+
+    private func reloadKeyboardFocus(previous: String?, next: String?) {
+        var indexPaths = Set<IndexPath>()
+        if let prev = previous, let path = indexPathForItemID(prev) {
+            indexPaths.insert(path)
+        }
+        if let nextID = next, let path = indexPathForItemID(nextID) {
+            indexPaths.insert(path)
+        }
+        guard !indexPaths.isEmpty else { return }
+        collectionView.reloadItems(at: indexPaths)
+    }
+}
+
+extension AppKitSteamWorkshopDownloadsContainerView: SteamWorkshopKeyboardDelegate {
+    func steamWorkshopCollectionView(_ collectionView: SteamWorkshopKeyboardCollectionView, handleKey event: NSEvent) -> Bool {
+        switch event.keyCode {
+        case 123, 126:
+            return moveFocus(delta: -1)
+        case 124, 125:
+            return moveFocus(delta: 1)
+        case 36, 76:
+            return handleReturnKey()
+        default:
+            break
+        }
+        return false
     }
 }
