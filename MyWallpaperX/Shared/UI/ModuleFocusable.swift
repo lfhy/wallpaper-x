@@ -36,6 +36,7 @@ extension Notification.Name {
     /// - "subtitle": String，副标题（可选）
     /// - "preferredWidth": CGFloat/Double，宿主建议宽度（可选）
     /// - "focusPolicy": String，见 InspectorHostFocusPolicy.rawValue（可选）
+    /// - "chromeStyle": String，见 InspectorHostChromeStyle.rawValue（可选，默认 standard）
     static let inspectorHostOpenRequested = Notification.Name("com.mywallpaper.inspectorHostOpenRequested")
     /// 请求 Shell 关闭统一 Inspector 宿主。
     /// userInfo 可为空；若提供 "module" / "cardID"，则只关闭匹配中的卡片。

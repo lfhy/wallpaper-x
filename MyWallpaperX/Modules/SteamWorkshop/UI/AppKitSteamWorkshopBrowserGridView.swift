@@ -438,15 +438,8 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
     }
 
     private func handleEscapeKey() -> Bool {
-        guard let selectedItem = service.selectedBrowserItem else { return false }
-        NotificationCenter.default.post(
-            name: .inspectorHostCloseRequested,
-            object: nil,
-            userInfo: [
-                InspectorHostUserInfoKey.module: ModuleIdentifier.steamWorkshop.rawValue,
-                InspectorHostUserInfoKey.cardID: selectedItem.id
-            ]
-        )
+        guard service.selectedBrowserItem != nil else { return false }
+        InspectorHostActions.postClose()
         return true
     }
 

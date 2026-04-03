@@ -16,6 +16,7 @@ enum InspectorHostUserInfoKey {
     static let subtitle = "subtitle"
     static let preferredWidth = "preferredWidth"
     static let focusPolicy = "focusPolicy"
+    static let chromeStyle = "chromeStyle"
     static let hostedView = "hostedView"
 }
 
@@ -24,6 +25,11 @@ enum InspectorHostFocusPolicy: String {
     case preserveCurrentResponder
     /// 模块可在 inspectorDidPresent 后自行把焦点切到 inspector 内部控件。
     case moduleManaged
+}
+
+enum InspectorHostChromeStyle: String {
+    case standard
+    case infoPanel
 }
 
 struct InspectorCardToken: Hashable, Identifiable {
@@ -45,13 +51,15 @@ struct InspectorHostRequest: Equatable {
     let subtitle: String?
     let preferredWidth: CGFloat
     let focusPolicy: InspectorHostFocusPolicy
+    let chromeStyle: InspectorHostChromeStyle
 
     init(
         token: InspectorCardToken,
         title: String,
         subtitle: String? = nil,
         preferredWidth: CGFloat = InspectorHostRequest.defaultPreferredWidth,
-        focusPolicy: InspectorHostFocusPolicy = .preserveCurrentResponder
+        focusPolicy: InspectorHostFocusPolicy = .preserveCurrentResponder,
+        chromeStyle: InspectorHostChromeStyle = .standard
     ) {
         self.token = token
         self.title = title
@@ -61,6 +69,7 @@ struct InspectorHostRequest: Equatable {
             Self.maximumPreferredWidth
         )
         self.focusPolicy = focusPolicy
+        self.chromeStyle = chromeStyle
     }
 
     init?(userInfo: [AnyHashable: Any]?) {
@@ -79,13 +88,17 @@ struct InspectorHostRequest: Equatable {
         let focusPolicyRawValue = userInfo?[InspectorHostUserInfoKey.focusPolicy] as? String
         let focusPolicy = focusPolicyRawValue.flatMap(InspectorHostFocusPolicy.init(rawValue:))
             ?? .preserveCurrentResponder
+        let chromeStyleRawValue = userInfo?[InspectorHostUserInfoKey.chromeStyle] as? String
+        let chromeStyle = chromeStyleRawValue.flatMap(InspectorHostChromeStyle.init(rawValue:))
+            ?? .standard
 
         self.init(
             token: InspectorCardToken(module: module, cardID: cardID),
             title: title,
             subtitle: subtitle,
             preferredWidth: preferredWidth,
-            focusPolicy: focusPolicy
+            focusPolicy: focusPolicy,
+            chromeStyle: chromeStyle
         )
     }
 
@@ -95,7 +108,8 @@ struct InspectorHostRequest: Equatable {
             InspectorHostUserInfoKey.cardID: token.cardID,
             InspectorHostUserInfoKey.title: title,
             InspectorHostUserInfoKey.preferredWidth: preferredWidth,
-            InspectorHostUserInfoKey.focusPolicy: focusPolicy.rawValue
+            InspectorHostUserInfoKey.focusPolicy: focusPolicy.rawValue,
+            InspectorHostUserInfoKey.chromeStyle: chromeStyle.rawValue
         ]
         if let subtitle, !subtitle.isEmpty {
             result[InspectorHostUserInfoKey.subtitle] = subtitle
@@ -214,22 +228,22 @@ private struct InspectorCardView: View {
     let request: InspectorHostRequest
     let hostedContentView: NSView?
 
-    private var isSteamWorkshop: Bool {
-        request.token.module == .steamWorkshop
+    private var isInfoPanel: Bool {
+        request.chromeStyle == .infoPanel
     }
 
     private var headerTitle: String {
-        isSteamWorkshop ? "详情" : request.title
+        isInfoPanel ? "详情" : request.title
     }
 
     private var headerSubtitle: String? {
-        isSteamWorkshop ? nil : request.subtitle
+        isInfoPanel ? nil : request.subtitle
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .center, spacing: 12) {
-                if isSteamWorkshop {
+                if isInfoPanel {
                     HStack(spacing: 10) {
                         Image(systemName: "info.circle.fill")
                             .font(.system(size: 17, weight: .semibold))
@@ -255,16 +269,12 @@ private struct InspectorCardView: View {
                 Spacer(minLength: 8)
 
                 Button {
-                    NotificationCenter.default.post(
-                        name: .inspectorHostCloseRequested,
-                        object: nil,
-                        userInfo: [
-                            InspectorHostUserInfoKey.module: request.token.module.rawValue,
-                            InspectorHostUserInfoKey.cardID: request.token.cardID
-                        ]
+                    InspectorHostActions.postClose(
+                        module: request.token.module,
+                        cardID: request.token.cardID
                     )
                 } label: {
-                    if isSteamWorkshop {
+                    if isInfoPanel {
                         Image(systemName: "xmark")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(.primary)

@@ -377,14 +377,7 @@ struct SteamWorkshopItemDetailSheet: View {
     }
 
     private func requestInspectorClose() {
-        NotificationCenter.default.post(
-            name: .inspectorHostCloseRequested,
-            object: nil,
-            userInfo: [
-                InspectorHostUserInfoKey.module: ModuleIdentifier.steamWorkshop.rawValue,
-                InspectorHostUserInfoKey.cardID: item.id
-            ]
-        )
+        InspectorHostActions.postClose()
     }
 
 }

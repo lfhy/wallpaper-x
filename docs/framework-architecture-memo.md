@@ -47,6 +47,8 @@ MyWallpaperX/
 | `NSViewExtensions.swift` | `isDarkAppearance`、`ensureLayerAnchorCentered` |
 | `ModuleFocusable.swift` | 模块焦点协议、`moduleDidBecomeActive` 通知名、`ModuleIdentifier` 枚举 |
 | `InspectorHost.swift` | 统一 Inspector token、开关通知、焦点恢复规则与 Shell 宿主卡片 |
+| `InspectorHostBridge.swift` | 统一 inspector bridge adapter，负责模块选中态与公共宿主通知链的接线 |
+| `InspectorHostActions.swift` | 统一 open/close/mount helper、presentation preset 与页面退出自动关闭 modifier |
 
 ---
 
@@ -247,6 +249,9 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 - `focusPolicy: String`，可选，当前支持：
   - `preserveCurrentResponder`：默认值，打开时不主动抢焦点
   - `moduleManaged`：模块在收到 `inspectorHostDidPresent` 后自行把焦点切到 inspector 内部控件
+- `chromeStyle: String`，可选，当前支持：
+  - `standard`：默认值，显示请求标题与副标题，使用系统圆形关闭按钮
+  - `infoPanel`：显示左侧信息图标 + 固定“详情”标题，隐藏副标题，使用方形圆角关闭按钮
 
 **`inspectorHostCloseRequested` userInfo 规范：**
 - 可为空；为空时关闭当前展示中的卡片
@@ -269,12 +274,29 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 - Shell 只接受 `inspectorHostMountContentRequested`，并把模块传入的 `NSView` 装入该插槽
 - 宿主透明区域必须允许事件穿透到底层 detail/grid；只有卡片真实命中区域可以截获交互
 - 模块桥接层不得再直接往 `window.contentView` 或其他窗口级容器挂私有 overlay
+- 宿主公共层只负责通用壳体、动画与样式预设；模块若需要特殊头部外观，必须通过 `chromeStyle` 这类公共配置传入，不能在 Shared 内写死模块分支
 
 **模块接入方式：**
 1. 浏览列表项点击、回车或信息按钮不再直接弹自有 sheet，而是 post `inspectorHostOpenRequested`
 2. 模块内部详情 View / AppKit 容器仍保留在各自目录，由桥接适配器在 `inspectorHostDidPresent` 后通过 `inspectorHostMountContentRequested` 挂入宿主
 3. 关闭动作统一 post `inspectorHostCloseRequested`
 4. 禁止模块之间共享详情 Service；跨模块仍然只能走既有通知中转
+
+**推荐接入实现：**
+- 新模块优先复用 `Shared/UI/InspectorHostBridge.swift` 中的通用 bridge adapter
+- 优先直接使用 `View.inspectorHostBridge(...)` 修饰器接入，不再单独创建模块专属 bridge 包装文件，除非模块确实需要额外适配层
+- 模块只提供：
+  - 当前选中项
+  - `cardID/title/subtitle/preferredWidth/focusPolicy/chromeStyle`
+  - 详情内容 View
+  - 关闭后如何清理本模块选中态
+- 不再在模块内重复实现 `DidPresent/DidClose/CloseRequested` 监听、hosting view 挂载与本地可见态同步
+- 通知发送优先复用 `Shared/UI/InspectorHostActions.swift`：
+  - `InspectorHostActions.postOpen`
+  - `InspectorHostActions.postClose`
+  - `InspectorHostActions.postMount`
+  - `inspectorHostAutoClose(module:onDisappear:)`
+- 头部样式优先复用 `InspectorHostPresentation.standard(...)` 与 `InspectorHostPresentation.infoPanel(...)` preset，避免模块各自重复拼配置
 
 ---
 
