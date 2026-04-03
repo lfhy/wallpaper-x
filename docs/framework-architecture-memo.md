@@ -1,6 +1,6 @@
 # MyWallpaperX 框架架构备忘
 
-> 最后更新：2026-04-02
+> 最后更新：2026-04-03
 > 基准 Git 分支：`dev`
 
 本备忘录作为后续构建唯一参考。如有不合理之处可与用户讨论后修正。
@@ -200,7 +200,14 @@ final class XxxCollectionView: NSCollectionView, GridCollectionViewProtocol {
 
 ⚠️ **特例**（已更新）：OnlineLibrary 已于 2026-03-31 从纯 SwiftUI `LazyVGrid` 迁移到 AppKit `NSCollectionView`（`AppKitOLBrowserGridView` / `AppKitOLBrowserContainerView`），并已接入 `ModuleFocusable`。当前在线库浏览页与已下载项页面均通过容器视图监听 `moduleDidBecomeActive` 自动接管焦点。`BoxSelectionState` 和框选功能在线库暂不需要，不视为违规。
 
-⚠️ **Steam 模块当前状态**（2026-04-02）：`SteamWorkshop` 已完成路由、侧边栏、工具栏、菜单与焦点协议接入。浏览页已改为原生网格，不直接呈现网页，而是在后台抓取 Wallpaper Engine 创意工坊视频条目并缓存列表；卡片点击后弹出原生二级详情面板，展示标题、作者、摘要、标签、文件大小、分辨率、更新时间等信息，并支持动态预览。浏览页首次进入支持匿名浏览，只加载 `appid=431960` 且 `requiredtags[]=Video` 的公开列表；若用户需要下载，程序会直接运行 App 内置 `SteamCMDRuntime.bundle` 中的 `steamcmd.sh`，按官方 `login <username> <password>` 流程发起登录，请求到 Steam Guard 时再输入令牌；下载命令使用 `workshop_download_item 431960 <itemID>`。登录工具栏已收敛为单一头像入口，点击后弹出菜单处理登录、匿名浏览、切换账号与退出登录，不再额外暴露独立下载按钮。下载成品统一落地到 `~/Movies/MyWallpaperX/创意工坊`，下载页扫描该目录并保留关键元数据。现阶段不接入多选、QuickLook 与 Return 设为壁纸。
+⚠️ **Steam 模块当前状态**（2026-04-03）：`SteamWorkshop` 已完成路由、侧边栏、工具栏、菜单与焦点协议接入。浏览页为原生 AppKit 网格，不直接呈现网页；后台会抓取 Wallpaper Engine 创意工坊视频条目，并对详情做分阶段补水。卡片点击后进入原生详情面板，展示标题、作者、摘要、标签、文件大小、分辨率、发布时间等信息。浏览页首次进入支持匿名浏览；若用户需要下载，程序会直接运行 App 内置 `SteamCMDRuntime.bundle` 中的 `steamcmd.sh`。登录工具栏已收敛为单一头像入口，点击后弹出菜单处理登录、匿名浏览、切换账号与退出登录。浏览页工具栏当前额外支持：
+- 排序源切换（`SteamWorkshopSource`）
+- 热门时间窗切换（`SteamWorkshopTrendingWindow`）
+- 多维筛选（类型 / 年龄分级 / 分辨率 / 分类）
+- 作者工坊上下文切换与“返回总榜”
+- 浏览页搜索 / 下载页搜索
+
+下载成品统一落地到 `~/Movies/MyWallpaperX/创意工坊`，下载页扫描该目录并保留关键元数据。现阶段仍**不接入**菜单多选、QuickLook 与 Return 设为壁纸；“设为壁纸”仅在下载页卡片内触发，走通知中转到视频库静默导入播放。
 
 ### 3.6 模块焦点管理（AppKit 模块必须实现）
 
@@ -215,13 +222,13 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 }
 ```
 
-`moduleDidBecomeActive` 由 Shell 层在模块切换后 **120ms** 延迟发出（给工具栏重建留时间）。在线库已迁移到 AppKit 容器并实现该协议：浏览页与已下载项均可接管焦点。纯 SwiftUI 页面若未桥接 AppKit 容器，暂无法接入该协议。
+`moduleDidBecomeActive` 由 Shell 层在模块切换后 **120ms** 延迟发出（给工具栏重建留时间）。在线库已迁移到 AppKit 容器并实现该协议：浏览页与已下载项均可接管焦点。Steam 当前的真实实现比示例多一层：除页面级 `FocusHost` 外，浏览页和下载页各自的 AppKit 容器也会直接监听该通知并把 first responder 交给内部 `NSCollectionView`。纯 SwiftUI 页面若未桥接 AppKit 容器，暂无法接入该协议。
 
 ### 3.7 QuickLook
 
 - 视频库：`QuickLookPreviewController.shared`，Space/ESC 由 `MainWindowController.handleQuickLookKeyDown` 处理
 - 图片库：`SILQuickLookController.shared` + `SILKeyboardHandler.shared`，`activeModule == .staticImageLibrary` 时接管
-- 在线库：**不接入 QuickLook**（远程 URL，QLPreviewPanel 无法预览）
+- 在线库：浏览页**不接入 QuickLook**；已下载项页面通过 `OLDownloadsQuickLookController` 接入本地预览
 - Steam：**当前不接入 QuickLook**（下载骨架阶段无稳定本地视频索引）
 
 `beginPreviewPanelControl` / `endPreviewPanelControl` 根据 `activeModule` 挂载对应控制器。
@@ -351,6 +358,13 @@ VideoLibraryToolbarController（主控，NSToolbarDelegate）
 `performZoom(delta:)` 路由链：`MainWindowCoordinator` → `MainWindowController` → `VideoLibraryToolbarController` → 各子控制器。  
 `focusSearch()` 路由链：`MainWindowCoordinator` → `VideoLibraryToolbarController` → 各子控制器。
 
+**Steam 工具栏当前上下文形态：**
+- 浏览发现页：账号、刷新、排序、时间窗、筛选、缩放、搜索
+- 作者工坊页：返回总榜、账号、刷新、缩放、搜索
+- 下载页：标题、打开目录、刷新、缩放、搜索
+
+以上变化由 `SteamWorkshopToolbarController.browserIdentifiers` / `downloadsIdentifiers` 提供，由主控工具栏统一切换。
+
 ---
 
 ## 七、缩放控件语义（重要，新模块必须遵守）
@@ -419,6 +433,15 @@ VideoLibraryToolbarController（主控，NSToolbarDelegate）
 |------|------|------|
 | TD-1 | `VideoLibraryToolbarController.configureZoomItem()` 内联了 `GridLayoutHelper` 等价计算，未复用共享方法 | 仅代码重复，行为正确 |
 | TD-2 | OnlineLibrary 浏览页焦点接管曾缺失 | **已修复（2026-03-31）**：`AppKitOLBrowserContainerView` 迁移到 AppKit 后已接入 `ModuleFocusable`，浏览页和已下载项均可自动接管焦点 |
-| TD-5 | `OnlineLibraryBrowserView.swift` 中 `OLDownloadedView`、`OLVideoCard` 为废弃遗留代码，已被侧边栏「已下载项」子页面替代 | 纯死代码，增加维护负担，待模块负责人确认后删除 |
 | TD-3 | `ContentView.syncManagerSelection` 中 `silTag` 判断用了立即执行尾随闭包，可读性差 | 仅可读性问题，逻辑正确 |
-| TD-4 | ~~`OnlineLibraryService` 直接调用 `NSWorkspace.shared.setDesktopImageURL`~~ | **已修复（2026-03-31）**：改为通知中转 → `processImportedVideos(context: .onlinePlayback)` → `setAsWallpaper(_:userInitiated:true)`，全程无弹窗，模块间零耦合 | 
+| TD-4 | ~~`OnlineLibraryService` 直接调用 `NSWorkspace.shared.setDesktopImageURL`~~ | **已修复（2026-03-31）**：改为通知中转 → `processImportedVideos(context: .onlinePlayback)` → `setAsWallpaper(_:userInitiated:true)`，全程无弹窗，模块间零耦合 |
+| TD-5 | `OnlineLibraryBrowserView.swift` 中 `OLDownloadedView`、`OLVideoCard` 为废弃遗留代码，已被侧边栏「已下载项」子页面替代 | 纯死代码，增加维护负担，待模块负责人确认后删除 |
+
+---
+
+## 十、Steam 数据源现状
+
+- 浏览页基础列表目前仍以 Steam 页面抓取为主。
+- 详情补水已不是纯 HTML 路线；当前代码已接入 Steam 官方 `ISteamRemoteStorage/GetPublishedFileDetails/v1/`，用于补充项目详情字段。
+- 因此，旧文档里“尚未确认到可直接替代 HTML 的官方 JSON 接口”不再适合作为当前框架现状。
+- 预览资源仍主要依赖 `images.steamusercontent.com/ugc/...`，动态图预览目前仍未整理出稳定独立接口协议。
