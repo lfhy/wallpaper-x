@@ -537,7 +537,7 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
             return
         }
 
-        let cacheKey = "steam-preview:\(url.absoluteString)"
+        let cacheKey = steamWorkshopPreviewCacheKey(for: url)
         if let cached = SteamWorkshopPreviewImageCache.shared.cachedImage(forKey: cacheKey) {
             previewImageView.image = cached
             updatePreviewImageFrame()

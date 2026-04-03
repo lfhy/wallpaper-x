@@ -152,19 +152,10 @@ func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
 
 `MyWallpaperApp.swift` 里的 Commands 闭包只负责定义快捷键绑定和调用动作，**不加任何 `.disabled()`**。
 
-**各模块菜单命令支持对照（新模块接入时参考）：**
-
-| 命令方法 | 视频库 | 图片库 | 在线库（浏览页） | 在线库（已下载项） | Steam（浏览页） | Steam（下载页） | 说明 |
-|----------|--------|--------|-----------------|-------------------|-----------------|-----------------|------|
-| `menuImport` | ✅ 导入视频 | ✅ 导入图片 | ✗ break | ✗ break | ✗ break | ✗ break | 在线源与 Steam 模块无本地导入 |
-| `menuCreateTag` | ✅ | ✅ | ✗ break | ✗ break | ✗ break | ✗ break | 在线源与 Steam 模块无标签系统 |
-| `menuAddTag` | ✅ | ✅ | ✗ break | ✗ break | ✗ break | ✗ break | 同上 |
-| `menuShowInfo` | ✅ | ✅ | ✗ break | ✅（单选时可用） | ✗ break | ✗ break | Steam 当前为浏览/下载骨架，不暴露信息弹窗 |
-| `menuRevealInFinder` | ✅ | ✅ | ✅ 刷新在线列表 | ✅ 查看文件 | ✅ 打开 Steam 下载目录 | ✅ 打开 Steam 下载目录 | Steam 当前统一打开下载根目录 |
-| `menuToggleMultiSelect` | ✅ | ✅ | ✗ break | ✅（已接入 Bridge） | ✗ break | ✗ break | |
-| `menuSelectAll` | ✅ | ✅ | ✗ break | ✅（已接入 Bridge） | ✗ break | ✗ break | |
-| `menuDeleteSelected` | ✅ | ✅ | ✗ break | ✅（已接入 Bridge） | ✗ break | ✗ break | |
-| `menuFocusSearch` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | |
+**当前菜单接入原则（新模块接入时参考）：**
+- 视频库与图片库接入完整菜单集。
+- 在线库浏览页只接入搜索与刷新；已下载项页面通过 Bridge 接入信息、多选、全选、删除、查看文件、预览、设为壁纸。
+- Steam 当前只接入搜索、缩放与“查看文件（打开下载目录）”；不接入菜单多选、全选、删除、信息、QuickLook 与 Return 设为壁纸。
 
 **`validateMenuItem` 中导入菜单项处理规范：**
 ```swift
@@ -200,14 +191,7 @@ final class XxxCollectionView: NSCollectionView, GridCollectionViewProtocol {
 
 ⚠️ **特例**（已更新）：OnlineLibrary 已于 2026-03-31 从纯 SwiftUI `LazyVGrid` 迁移到 AppKit `NSCollectionView`（`AppKitOLBrowserGridView` / `AppKitOLBrowserContainerView`），并已接入 `ModuleFocusable`。当前在线库浏览页与已下载项页面均通过容器视图监听 `moduleDidBecomeActive` 自动接管焦点。`BoxSelectionState` 和框选功能在线库暂不需要，不视为违规。
 
-⚠️ **Steam 模块当前状态**（2026-04-03）：`SteamWorkshop` 已完成路由、侧边栏、工具栏、菜单与焦点协议接入。浏览页为原生 AppKit 网格，不直接呈现网页；后台会抓取 Wallpaper Engine 创意工坊视频条目，并对详情做分阶段补水。卡片点击后进入原生详情面板，展示标题、作者、摘要、标签、文件大小、分辨率、发布时间等信息。浏览页首次进入支持匿名浏览；若用户需要下载，程序会直接运行 App 内置 `SteamCMDRuntime.bundle` 中的 `steamcmd.sh`。登录工具栏已收敛为单一头像入口，点击后弹出菜单处理登录、匿名浏览、切换账号与退出登录。浏览页工具栏当前额外支持：
-- 排序源切换（`SteamWorkshopSource`）
-- 热门时间窗切换（`SteamWorkshopTrendingWindow`）
-- 多维筛选（类型 / 年龄分级 / 分辨率 / 分类）
-- 作者工坊上下文切换与“返回总榜”
-- 浏览页搜索 / 下载页搜索
-
-下载成品统一落地到 `~/Movies/MyWallpaperX/创意工坊`，下载页扫描该目录并保留关键元数据。现阶段仍**不接入**菜单多选、QuickLook 与 Return 设为壁纸；“设为壁纸”仅在下载页卡片内触发，走通知中转到视频库静默导入播放。
+⚠️ **Steam 模块当前状态**（2026-04-03）：`SteamWorkshop` 已完成路由、侧边栏、工具栏、菜单与焦点协议接入。浏览页为原生 AppKit 网格，详情采用分阶段补水；登录与下载仍围绕 App 内置 `SteamCMDRuntime.bundle` 中的 `steamcmd.sh`。下载成品统一落地到 `~/Movies/MyWallpaperX/创意工坊`，下载页扫描该目录并保留关键元数据。更细的 Steam 工具栏形态与数据源说明见后文 §六、§十。
 
 ### 3.6 模块焦点管理（AppKit 模块必须实现）
 
@@ -317,29 +301,6 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 
 **新模块若需触发其他模块操作，必须遵循此协议，不得直接引用目标模块类型。**
 
-**菜单命令路由**
-- `MainWindowCoordinator.activeModule` — 当前激活模块，`MainWindowController` 和 `MainWindowCoordinator` 两处同步维护
-- 菜单项可用状态由 `AppDelegate.validateMenuItem` 负责，按 `menuItem.title` 匹配，**不使用** SwiftUI `.disabled()`（见 §3.4）
-
-**各模块快捷键支持情况：**
-
-| 快捷键 | 视频库 | 图片库 | 在线库（浏览页） | 在线库（已下载项） | Steam（浏览页） | Steam（下载页） |
-|--------|--------|--------|-----------------|-------------------|-----------------|-----------------|
-| Cmd+E 多选 | ✅ | ✅ | ✗ | ✅（已接入 Bridge） | ✗ | ✗ |
-| Cmd+A 全选 | ✅ | ✅ | ✗ | ✅（已接入 Bridge） | ✗ | ✗ |
-| Cmd+Delete 删除 | ✅ | ✅ | ✗ | ✅（已接入 Bridge） | ✗ | ✗ |
-| Cmd+F 搜索 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Cmd+I 信息 | ✅ | ✅ | ✗ | ✅（单选时可用） | ✗ | ✗ |
-| Cmd+R 查看文件/刷新 | ✅ 查看文件 | ✅ 查看文件 | ✅ 刷新在线列表 | ✅ 查看文件 | ✅ 打开下载目录 | ✅ 打开下载目录 |
-| Cmd+D 收藏 | ✅ | ✗ | ✗ | ✗ | ✗ | ✗ |
-| Cmd+T 标签 | ✅ | ✅ | ✗ | ✗ | ✗ | ✗ |
-| Return 设为壁纸 | ✅ | ✗ | ✗ | ✅（CollectionView 内已实现） | ✗ | ✗ |
-| Space QuickLook | ✅ | ✅ | ✗ | ✅（OLDownloadsQuickLookController） | ✗ | ✗ |
-| 方向键导航 | ✅ | ✅ | ✗ | ✅（CollectionView 内已实现） | ✗ | ✗ |
-| Cmd+←→ 切换壁纸 | ✅ | ✗ | ✗ | ✗ | ✗ | ✗ |
-
----
-
 ## 六、工具栏控制器协作机制
 
 ```
@@ -432,9 +393,7 @@ VideoLibraryToolbarController（主控，NSToolbarDelegate）
 | 编号 | 问题 | 影响 |
 |------|------|------|
 | TD-1 | `VideoLibraryToolbarController.configureZoomItem()` 内联了 `GridLayoutHelper` 等价计算，未复用共享方法 | 仅代码重复，行为正确 |
-| TD-2 | OnlineLibrary 浏览页焦点接管曾缺失 | **已修复（2026-03-31）**：`AppKitOLBrowserContainerView` 迁移到 AppKit 后已接入 `ModuleFocusable`，浏览页和已下载项均可自动接管焦点 |
 | TD-3 | `ContentView.syncManagerSelection` 中 `silTag` 判断用了立即执行尾随闭包，可读性差 | 仅可读性问题，逻辑正确 |
-| TD-4 | ~~`OnlineLibraryService` 直接调用 `NSWorkspace.shared.setDesktopImageURL`~~ | **已修复（2026-03-31）**：改为通知中转 → `processImportedVideos(context: .onlinePlayback)` → `setAsWallpaper(_:userInitiated:true)`，全程无弹窗，模块间零耦合 |
 | TD-5 | `OnlineLibraryBrowserView.swift` 中 `OLDownloadedView`、`OLVideoCard` 为废弃遗留代码，已被侧边栏「已下载项」子页面替代 | 纯死代码，增加维护负担，待模块负责人确认后删除 |
 
 ---

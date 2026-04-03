@@ -565,8 +565,10 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         previewImageView.animates = true
         imageTask?.cancel()
 
-        guard let url else { return }
-        let cacheKey = "steam-preview:\(url.absoluteString)"
+        guard let url else {
+            return
+        }
+        let cacheKey = steamWorkshopPreviewCacheKey(for: url)
         if let cached = SteamWorkshopPreviewImageCache.shared.cachedImage(forKey: cacheKey) {
             previewImageView.image = cached
             updatePreviewImageFrame()
@@ -576,7 +578,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         previewImageView.image = nil
         updatePreviewImageFrame()
         SteamWorkshopPreviewImageCache.shared.loadImageData(forKey: cacheKey, loader: {
-            try? Data(contentsOf: url)
+            return try? Data(contentsOf: url)
         }) { [weak self] image in
             guard let self else { return }
             guard self.currentPreviewURL == url else { return }

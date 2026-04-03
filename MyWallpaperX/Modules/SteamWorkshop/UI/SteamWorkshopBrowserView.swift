@@ -14,6 +14,26 @@ enum SteamWorkshopPreviewImageCache {
     )
 }
 
+func steamWorkshopPreviewCacheKey(for url: URL) -> String {
+    let host = (url.host ?? "").lowercased()
+    let normalizedPath: String = {
+        let path = url.path.isEmpty ? "/" : url.path
+        if path.count > 1, path.hasSuffix("/") {
+            return String(path.dropLast())
+        }
+        return path
+    }()
+
+    // Steam 预览图常见差异只在 query（如 imw=200 / imw=512），底图 path 相同。
+    // 对 steamusercontent 的 ugc 资源统一按 host + path 建缓存键，避免不同尺寸参数重复下载。
+    if host.hasSuffix("steamusercontent.com"),
+       normalizedPath.contains("/ugc/") {
+        return "steam-preview:\(host)\(normalizedPath)"
+    }
+
+    return "steam-preview:\(url.absoluteString)"
+}
+
 public struct SteamWorkshopEntryView: View {
     public init() {}
 
@@ -322,6 +342,7 @@ private struct SteamWorkshopItemDetailSheet: View {
     private var leftColumn: some View {
         VStack(alignment: .leading, spacing: 8) {
             SteamWorkshopPreviewSurface(
+                itemID: currentItem.id,
                 previewImageURL: currentItem.previewImageURL,
                 previewAssetKind: currentItem.previewAssetKind
             )
@@ -616,6 +637,7 @@ private struct SteamWorkshopInlineErrorNotice: View {
 }
 
 private struct SteamWorkshopPreviewSurface: View {
+    let itemID: String
     let previewImageURL: URL?
     let previewAssetKind: SteamWorkshopPreviewAssetKind
 
@@ -632,6 +654,7 @@ private struct SteamWorkshopPreviewSurface: View {
 
             if let previewImageURL {
                 SteamWorkshopCachedPreviewImage(
+                    itemID: itemID,
                     url: previewImageURL
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -649,6 +672,7 @@ private struct SteamWorkshopPreviewSurface: View {
 }
 
 private struct SteamWorkshopCachedPreviewImage: NSViewRepresentable {
+    let itemID: String
     let url: URL
 
     func makeNSView(context: Context) -> SteamWorkshopPreviewImageContainerView {
@@ -659,14 +683,14 @@ private struct SteamWorkshopCachedPreviewImage: NSViewRepresentable {
         guard context.coordinator.currentURL != url else { return }
         context.coordinator.currentURL = url
 
-        let cacheKey = "steam-preview:\(url.absoluteString)"
+        let cacheKey = steamWorkshopPreviewCacheKey(for: url)
         if let cached = SteamWorkshopPreviewImageCache.shared.cachedOrDiskImage(forKey: cacheKey) {
             nsView.setImage(cached)
             return
         }
 
         SteamWorkshopPreviewImageCache.shared.loadImageData(forKey: cacheKey, loader: {
-            try? Data(contentsOf: url)
+            return try? Data(contentsOf: url)
         }) { image in
             guard context.coordinator.currentURL == url else { return }
             nsView.setImage(image)

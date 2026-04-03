@@ -539,7 +539,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
     }
 
     private func log(_ message: String) {
-        NSLog("[SteamWorkshopGrid] %@", message)
+        _ = message
     }
 }
 
@@ -570,7 +570,6 @@ private final class AppKitSteamWorkshopBrowserFooterView: NSView {
     }
 
     func configure(text: String, showsProgress: Bool) {
-        NSLog("[SteamWorkshopGridFooter] configure text=%@ showsProgress=%@", text, showsProgress ? "true" : "false")
         textField.stringValue = text
         progressIndicator.isHidden = !showsProgress
         statusIconView.isHidden = showsProgress

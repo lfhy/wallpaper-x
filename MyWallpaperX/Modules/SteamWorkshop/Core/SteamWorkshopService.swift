@@ -2167,7 +2167,7 @@ final class SteamWorkshopService: ObservableObject {
     }
 
     private func logBrowserDebug(_ message: String) {
-        NSLog("[SteamWorkshopService] %@", message)
+        _ = message
     }
 
     private func beginInteractiveSteamLogin(username: String, password: String) {
@@ -2406,25 +2406,10 @@ final class SteamWorkshopService: ObservableObject {
         loginBootstrapTimeoutTask = nil
     }
 
-    private func resetSteamAuthDebugLog() {
-        try? FileManager.default.createDirectory(at: cacheDirectoryURL, withIntermediateDirectories: true)
-        try? Data().write(to: steamAuthDebugLogURL, options: [.atomic])
-    }
+    private func resetSteamAuthDebugLog() {}
 
     private func appendSteamAuthDebugLog(_ message: String) {
-        let formatter = ISO8601DateFormatter()
-        let line = "[\(formatter.string(from: Date()))][session:\(loginSessionID.isEmpty ? "n/a" : loginSessionID)] \(message)\n"
-        try? FileManager.default.createDirectory(at: cacheDirectoryURL, withIntermediateDirectories: true)
-        if let data = line.data(using: .utf8) {
-            if FileManager.default.fileExists(atPath: steamAuthDebugLogURL.path),
-               let handle = try? FileHandle(forWritingTo: steamAuthDebugLogURL) {
-                defer { try? handle.close() }
-                _ = try? handle.seekToEnd()
-                try? handle.write(contentsOf: data)
-            } else {
-                try? data.write(to: steamAuthDebugLogURL, options: [.atomic])
-            }
-        }
+        _ = message
     }
 
     private func redactedLoginCommand(username: String, password: String) -> String {
