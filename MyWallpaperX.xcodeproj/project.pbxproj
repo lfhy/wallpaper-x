@@ -42,6 +42,10 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				Modules/OnlineLibrary/AGENTS.md,
+				Modules/StaticImageLibrary/AGENTS.md,
+				Modules/SteamWorkshop/AGENTS.md,
+				Modules/VideoLibrary/AGENTS.md,
 			);
 			target = 98CED6382F6AF877005688A8 /* MyWallpaperX */;
 		};
