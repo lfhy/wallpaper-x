@@ -92,6 +92,9 @@ private struct SteamWorkshopBrowserContentView: View {
                         onDownload: { item in
                             service.downloadWorkshopItem(id: item.id, pageTitle: item.title)
                         },
+                        onSetAsWallpaper: { record in
+                            service.setAsWallpaper(record)
+                        },
                         onCancelDownload: {
                             service.cancelActiveDownload()
                         }
@@ -648,31 +651,25 @@ private struct SteamWorkshopPreviewSurface: View {
 private struct SteamWorkshopCachedPreviewImage: NSViewRepresentable {
     let url: URL
 
-    func makeNSView(context: Context) -> NSImageView {
-        let imageView = NSImageView()
-        imageView.animates = true
-        imageView.imageScaling = .scaleAxesIndependently
-        imageView.imageAlignment = .alignCenter
-        return imageView
+    func makeNSView(context: Context) -> SteamWorkshopPreviewImageContainerView {
+        SteamWorkshopPreviewImageContainerView()
     }
 
-    func updateNSView(_ nsView: NSImageView, context: Context) {
+    func updateNSView(_ nsView: SteamWorkshopPreviewImageContainerView, context: Context) {
         guard context.coordinator.currentURL != url else { return }
         context.coordinator.currentURL = url
-        nsView.animates = true
 
         let cacheKey = "steam-preview:\(url.absoluteString)"
-        if let cached = SteamWorkshopPreviewImageCache.shared.cachedImage(forKey: cacheKey) {
-            nsView.image = cached
+        if let cached = SteamWorkshopPreviewImageCache.shared.cachedOrDiskImage(forKey: cacheKey) {
+            nsView.setImage(cached)
             return
         }
 
-        nsView.image = nil
         SteamWorkshopPreviewImageCache.shared.loadImageData(forKey: cacheKey, loader: {
             try? Data(contentsOf: url)
         }) { image in
             guard context.coordinator.currentURL == url else { return }
-            nsView.image = image
+            nsView.setImage(image)
         }
     }
 
@@ -682,6 +679,68 @@ private struct SteamWorkshopCachedPreviewImage: NSViewRepresentable {
 
     final class Coordinator {
         var currentURL: URL?
+    }
+}
+
+private final class SteamWorkshopPreviewImageContainerView: NSView {
+    private let imageView = NSImageView()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        commonInit()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        commonInit()
+    }
+
+    private func commonInit() {
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        imageView.animates = true
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.imageAlignment = .alignCenter
+        addSubview(imageView)
+    }
+
+    override func layout() {
+        super.layout()
+        updateImageFrame()
+    }
+
+    func setImage(_ image: NSImage?) {
+        imageView.image = image
+        updateImageFrame()
+    }
+
+    private func updateImageFrame() {
+        let containerBounds = bounds
+        guard containerBounds.width > 0, containerBounds.height > 0 else {
+            imageView.frame = .zero
+            return
+        }
+        guard let image = imageView.image, image.size.width > 0, image.size.height > 0 else {
+            imageView.frame = containerBounds
+            return
+        }
+
+        let widthScale = containerBounds.width / image.size.width
+        let heightScale = containerBounds.height / image.size.height
+        let scale: CGFloat
+        if image.size.width < containerBounds.width || image.size.height < containerBounds.height {
+            scale = max(widthScale, heightScale)
+        } else {
+            scale = min(widthScale, heightScale)
+        }
+        let fittedWidth = image.size.width * scale
+        let fittedHeight = image.size.height * scale
+        imageView.frame = CGRect(
+            x: floor((containerBounds.width - fittedWidth) * 0.5),
+            y: floor((containerBounds.height - fittedHeight) * 0.5),
+            width: ceil(fittedWidth),
+            height: ceil(fittedHeight)
+        )
     }
 }
 

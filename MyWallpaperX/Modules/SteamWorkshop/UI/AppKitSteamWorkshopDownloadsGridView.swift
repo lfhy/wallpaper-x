@@ -183,6 +183,7 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
     }
 
     private func updateLayoutItemSize() {
+        let referenceAspectRatio: CGFloat = 354.0 / 250.0
         let inset = flowLayout.sectionInset
         let availableWidth = max(0, bounds.width - inset.left - inset.right)
         let columns = GridLayoutHelper.columnCount(
@@ -194,12 +195,12 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
         let estimatedWidth = max(100, (availableWidth - baseSpacing * CGFloat(max(0, columns - 1))) / CGFloat(columns))
         let minSpacing = estimatedWidth * (hoverScale - 1.0)
         let spacing = max(baseSpacing, minSpacing)
+        let verticalSpacing = spacing + 2
         flowLayout.minimumInteritemSpacing = spacing
-        flowLayout.minimumLineSpacing = spacing
+        flowLayout.minimumLineSpacing = verticalSpacing
         let totalSpacing = CGFloat(max(0, columns - 1)) * spacing
         let cardWidth = max(100, (availableWidth - totalSpacing) / CGFloat(columns))
-        let previewHeight = floor(cardWidth - 28)
-        let cardHeight = previewHeight + 132
+        let cardHeight = cardWidth * referenceAspectRatio
         let newSize = NSSize(width: floor(cardWidth), height: floor(cardHeight))
         guard flowLayout.itemSize != newSize else { return }
         flowLayout.itemSize = newSize

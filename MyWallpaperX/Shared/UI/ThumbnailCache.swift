@@ -169,6 +169,22 @@ final class ThumbnailCache {
         imageCache.object(forKey: key as NSString)
     }
 
+    /// 同步读取缓存，优先内存，其次磁盘。
+    /// 适合需要避免首次占位闪烁的场景。
+    func cachedOrDiskImage(forKey key: String) -> NSImage? {
+        let cacheKey = key as NSString
+        if let cached = imageCache.object(forKey: cacheKey) {
+            return cached
+        }
+        let diskURL = Self.diskCacheURL(for: key)
+        guard let data = try? Data(contentsOf: diskURL),
+              let image = NSImage(data: data) else {
+            return nil
+        }
+        imageCache.setObject(image, forKey: cacheKey)
+        return image
+    }
+
     /// 清空磁盘缓存
     static func clearDiskCache() {
         try? FileManager.default.removeItem(at: diskCacheDir)

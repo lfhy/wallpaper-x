@@ -11,6 +11,7 @@ struct AppKitSteamWorkshopBrowserGridView: NSViewRepresentable {
     @ObservedObject var service: SteamWorkshopService
     let onOpen: (SteamWorkshopBrowserItem) -> Void
     let onDownload: (SteamWorkshopBrowserItem) -> Void
+    let onSetAsWallpaper: (SteamWorkshopDownloadRecord) -> Void
     let onCancelDownload: () -> Void
 
     func makeNSView(context: Context) -> AppKitSteamWorkshopBrowserContainerView {
@@ -18,6 +19,7 @@ struct AppKitSteamWorkshopBrowserGridView: NSViewRepresentable {
             service: service,
             onOpen: onOpen,
             onDownload: onDownload,
+            onSetAsWallpaper: onSetAsWallpaper,
             onCancelDownload: onCancelDownload
         )
     }
@@ -25,6 +27,7 @@ struct AppKitSteamWorkshopBrowserGridView: NSViewRepresentable {
     func updateNSView(_ nsView: AppKitSteamWorkshopBrowserContainerView, context: Context) {
         nsView.onOpen = onOpen
         nsView.onDownload = onDownload
+        nsView.onSetAsWallpaper = onSetAsWallpaper
         nsView.onCancelDownload = onCancelDownload
     }
 }
@@ -54,6 +57,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
     private let service: SteamWorkshopService
     var onOpen: (SteamWorkshopBrowserItem) -> Void
     var onDownload: (SteamWorkshopBrowserItem) -> Void
+    var onSetAsWallpaper: (SteamWorkshopDownloadRecord) -> Void
     var onCancelDownload: () -> Void
 
     private var cancellables = Set<AnyCancellable>()
@@ -112,6 +116,10 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
                 isDownloaded: self.service.isDownloaded(itemID: id),
                 onOpen: { [weak self] in self?.onOpen(item) },
                 onDownload: { [weak self] in self?.onDownload(item) },
+                onSetAsWallpaper: { [weak self] in
+                    guard let self, let record = self.service.downloadRecord(for: id) else { return }
+                    self.onSetAsWallpaper(record)
+                },
                 onCancelDownload: { [weak self] in self?.onCancelDownload() }
             )
             return cell
@@ -123,11 +131,13 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         service: SteamWorkshopService,
         onOpen: @escaping (SteamWorkshopBrowserItem) -> Void,
         onDownload: @escaping (SteamWorkshopBrowserItem) -> Void,
+        onSetAsWallpaper: @escaping (SteamWorkshopDownloadRecord) -> Void,
         onCancelDownload: @escaping () -> Void
     ) {
         self.service = service
         self.onOpen = onOpen
         self.onDownload = onDownload
+        self.onSetAsWallpaper = onSetAsWallpaper
         self.onCancelDownload = onCancelDownload
         super.init(frame: .zero)
         setup()
@@ -310,6 +320,10 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
                 isDownloaded: service.isDownloaded(itemID: id),
                 onOpen: { [weak self] in self?.onOpen(item) },
                 onDownload: { [weak self] in self?.onDownload(item) },
+                onSetAsWallpaper: { [weak self] in
+                    guard let self, let record = self.service.downloadRecord(for: id) else { return }
+                    self.onSetAsWallpaper(record)
+                },
                 onCancelDownload: { [weak self] in self?.onCancelDownload() }
             )
         }
@@ -336,6 +350,10 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
                 isDownloaded: service.isDownloaded(itemID: id),
                 onOpen: { [weak self] in self?.onOpen(item) },
                 onDownload: { [weak self] in self?.onDownload(item) },
+                onSetAsWallpaper: { [weak self] in
+                    guard let self, let record = self.service.downloadRecord(for: id) else { return }
+                    self.onSetAsWallpaper(record)
+                },
                 onCancelDownload: { [weak self] in self?.onCancelDownload() }
             )
         }
@@ -372,6 +390,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
     }
 
     private func updateLayoutItemSize() {
+        let referenceAspectRatio: CGFloat = 354.0 / 250.0
         let inset = flowLayout.sectionInset
         let availableWidth = max(0, bounds.width - inset.left - inset.right)
         let columns = GridLayoutHelper.columnCount(
@@ -383,12 +402,12 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         let estimatedWidth = max(100, (availableWidth - baseSpacing * CGFloat(max(0, columns - 1))) / CGFloat(columns))
         let minSpacing = estimatedWidth * (hoverScale - 1.0)
         let spacing = max(baseSpacing, minSpacing)
+        let verticalSpacing = spacing + 2
         flowLayout.minimumInteritemSpacing = spacing
-        flowLayout.minimumLineSpacing = spacing
+        flowLayout.minimumLineSpacing = verticalSpacing
         let totalSpacing = CGFloat(max(0, columns - 1)) * spacing
         let cardWidth = max(100, (availableWidth - totalSpacing) / CGFloat(columns))
-        let previewHeight = floor(cardWidth - 28)
-        let cardHeight = previewHeight + 132
+        let cardHeight = cardWidth * referenceAspectRatio
         let newSize = NSSize(width: floor(cardWidth), height: floor(cardHeight))
 
         guard flowLayout.itemSize != newSize else { return }
@@ -510,6 +529,10 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             isDownloaded: service.isDownloaded(itemID: id),
             onOpen: { [weak self] in self?.onOpen(browserItem) },
             onDownload: { [weak self] in self?.onDownload(browserItem) },
+            onSetAsWallpaper: { [weak self] in
+                guard let self, let record = self.service.downloadRecord(for: id) else { return }
+                self.onSetAsWallpaper(record)
+            },
             onCancelDownload: { [weak self] in self?.onCancelDownload() }
         )
         prioritizeVisibleItemsForHydration()
