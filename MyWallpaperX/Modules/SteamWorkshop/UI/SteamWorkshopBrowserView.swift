@@ -50,14 +50,19 @@ private struct SteamWorkshopBrowserContentView: View {
         .task {
             service.prepareForBrowserEntry()
         }
+        .background(
+            SteamWorkshopInspectorBridge(service: service)
+        )
         .sheet(isPresented: $service.isLoginSheetPresented) {
             SteamWorkshopLoginSheet()
         }
-        .sheet(item: Binding(
-            get: { service.selectedBrowserItem },
-            set: { if $0 == nil { service.dismissItemDetail() } }
-        )) { item in
-            SteamWorkshopItemDetailSheet(item: item)
+        .onDisappear {
+            NotificationCenter.default.post(
+                name: .inspectorHostCloseRequested,
+                object: nil,
+                userInfo: [InspectorHostUserInfoKey.module: ModuleIdentifier.steamWorkshop.rawValue]
+            )
+            service.dismissItemDetail()
         }
         .alert("下载失败", isPresented: Binding(
             get: { service.downloadError != nil },

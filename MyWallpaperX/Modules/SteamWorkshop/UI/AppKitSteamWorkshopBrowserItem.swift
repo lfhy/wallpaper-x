@@ -135,8 +135,8 @@ private final class SteamWorkshopCardTextLineView: NSView {
 }
 
 final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
-    static let hoverScale: CGFloat = 1.03
-    private static let downloadedButtonGreen = NSColor.systemGreen.blended(withFraction: 0.26, of: .black) ?? .systemGreen
+    static let hoverScale: CGFloat = 1.02
+    private static let downloadedButtonGreen = NSColor.systemGreen.blended(withFraction: 0.34, of: .windowBackgroundColor) ?? .systemGreen
     private let cardView = AppearanceAwareContainerView()
     private let previewContainer = NSView()
     private let textContainer = NSView()
@@ -145,7 +145,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     private let titleLabel = SteamWorkshopCardTextLineView()
     private let metaLabel = SteamWorkshopCardTextLineView()
     private let secondaryMetaLabel = SteamWorkshopCardTextLineView()
-    private let detailButton = SteamWorkshopCardButton(title: "查看详情", target: nil, action: nil)
+    private let detailButton = SteamWorkshopCardButton(title: "详情", target: nil, action: nil)
     private let actionButton = SteamWorkshopCardButton(title: "下载", target: nil, action: nil)
 
     private var imageTask: Task<Void, Never>?
@@ -163,21 +163,21 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     private var keyboardFocused = false
 
     private enum Layout {
-        static let cardCornerRadius: CGFloat = 12
+        static let cardCornerRadius: CGFloat = 14
         static let referenceCardWidth: CGFloat = 250
         static let referenceCardHeight: CGFloat = 354
         static let outerInset: CGFloat = 0
-        static let contentInset: CGFloat = 10
-        static let buttonBottomInset: CGFloat = 14
+        static let contentInset: CGFloat = 12
+        static let buttonBottomInset: CGFloat = 12
         static let previewInset: CGFloat = 0
         static let previewTopInset: CGFloat = 0
-        static let buttonHeight: CGFloat = 30
-        static let buttonWidth: CGFloat = 100
-        static let buttonGap: CGFloat = 8
-        static let interSectionSpacing: CGFloat = 8
-        static let textLineGap: CGFloat = 3
-        static let textToButtonsGap: CGFloat = 8
-        static let titleLineHeight: CGFloat = 20
+        static let buttonHeight: CGFloat = 28
+        static let buttonWidth: CGFloat = 88
+        static let buttonGap: CGFloat = 6
+        static let interSectionSpacing: CGFloat = 6
+        static let textLineGap: CGFloat = 2
+        static let textToButtonsGap: CGFloat = 6
+        static let titleLineHeight: CGFloat = 18
         static let metaLineHeight: CGFloat = 14
     }
 
@@ -296,7 +296,6 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         }
 
         detailButton.setAccessibilityLabel("查看详情：\(item.title)")
-
         var actionHint = "执行 \(actionButton.title) 操作"
         if actionButton.title.contains("下载中") {
             actionHint = "当前下载正在执行"
@@ -308,6 +307,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             actionHint = "重新触发该创意工坊项目的下载"
         }
         actionButton.setAccessibilityLabel("\(actionButton.title)：\(item.title)")
+        actionButton.setAccessibilityHelp(actionHint)
 
         loadPreview(from: item.previewImageURL)
         applyHoverStyle(animated: false)
@@ -379,8 +379,22 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             height: buttonHeight
         )
 
+        let previewSide = cardView.bounds.width
+        let previewY = max(0, cardView.bounds.height - previewSide)
+        let previewOverlap: CGFloat = 1
+        previewContainer.frame = CGRect(
+            x: Layout.previewInset - previewOverlap,
+            y: previewY - previewOverlap,
+            width: cardView.bounds.width - Layout.previewInset * 2 + previewOverlap * 2,
+            height: previewSide + previewOverlap
+        )
+
         let textBottom = buttonsY + buttonHeight + metrics.textToButtonsGap
-        let textContainerHeight = metrics.titleLineHeight + metrics.metaLineHeight * 2 + metrics.textLineGap * 2
+        let textTop = max(textBottom, previewY - metrics.interSectionSpacing)
+        let textContainerHeight = max(
+            metrics.metaLineHeight * 2 + metrics.textLineGap * 2 + metrics.titleLineHeight,
+            textTop - textBottom
+        )
         textContainer.frame = CGRect(
             x: centeredTextInset,
             y: textBottom,
@@ -396,21 +410,11 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         )
         titleLabel.frame = CGRect(
             x: 0,
-            y: metaLabel.frame.maxY + metrics.textLineGap,
+            y: min(textContainerHeight - metrics.titleLineHeight, metaLabel.frame.maxY + metrics.textLineGap),
             width: contentWidth,
             height: metrics.titleLineHeight
         )
         titleLabel.text = truncatedText(currentTitleText, maxWidth: contentWidth, font: metrics.titleFont)
-
-        let previewY = textContainer.frame.maxY + metrics.interSectionSpacing
-        let previewHeight = max(0, cardView.bounds.height - Layout.previewInset - Layout.previewTopInset - previewY)
-        let previewOverlap: CGFloat = 1
-        previewContainer.frame = CGRect(
-            x: Layout.previewInset - previewOverlap,
-            y: previewY - previewOverlap,
-            width: cardView.bounds.width - Layout.previewInset * 2 + previewOverlap * 2,
-            height: previewHeight + previewOverlap
-        )
         updatePreviewImageFrame()
 
         refreshThemeAwareAppearance()
@@ -433,11 +437,11 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             textToButtonsGap: round(Layout.textToButtonsGap * scale),
             titleLineHeight: round(Layout.titleLineHeight * scale),
             metaLineHeight: round(Layout.metaLineHeight * scale),
-            titleFont: .systemFont(ofSize: 14 * scale, weight: .semibold),
-            metaFont: .monospacedSystemFont(ofSize: 11 * scale, weight: .medium),
-            secondaryMetaFont: .systemFont(ofSize: 11 * scale, weight: .medium),
-            buttonFont: .systemFont(ofSize: 13 * scale, weight: .medium),
-            buttonCornerRadius: max(8, min(14, 10 * scale))
+            titleFont: .systemFont(ofSize: 13.5 * scale, weight: .semibold),
+            metaFont: .monospacedSystemFont(ofSize: 10.5 * scale, weight: .medium),
+            secondaryMetaFont: .systemFont(ofSize: 10.5 * scale, weight: .medium),
+            buttonFont: .systemFont(ofSize: 12 * scale, weight: .medium),
+            buttonCornerRadius: max(9, min(14, 11 * scale))
         )
     }
 
@@ -488,14 +492,14 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
 
         cardView.wantsLayer = true
         cardView.canDrawSubviewsIntoLayer = true
-        cardView.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        cardView.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.84).cgColor
         cardView.layer?.cornerRadius = Layout.cardCornerRadius
         cardView.layer?.borderWidth = 1
-        cardView.layer?.borderColor = NSColor.white.withAlphaComponent(0.10).cgColor
+        cardView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.16).cgColor
         cardView.layer?.shadowColor = NSColor.black.cgColor
         cardView.layer?.shadowOpacity = 0
-        cardView.layer?.shadowRadius = 16
-        cardView.layer?.shadowOffset = CGSize(width: 0, height: -1)
+        cardView.layer?.shadowRadius = 12
+        cardView.layer?.shadowOffset = CGSize(width: 0, height: -2)
         cardView.translatesAutoresizingMaskIntoConstraints = false
         cardView.appearanceDidChangeHandler = { [weak self] in
             self?.refreshThemeAwareAppearance()
@@ -505,7 +509,6 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
 
         previewContainer.wantsLayer = true
         previewContainer.layer?.cornerRadius = Layout.cardCornerRadius
-        previewContainer.layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
         previewContainer.layer?.masksToBounds = true
         cardView.addSubview(previewContainer)
 
@@ -537,13 +540,13 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         secondaryMetaLabel.textColor = .secondaryLabelColor
         textContainer.addSubview(secondaryMetaLabel)
 
-        detailButton.normalBackgroundColor = NSColor.controlColor
-        detailButton.pressedBackgroundColor = NSColor.controlColor.blended(withFraction: 0.18, of: .black) ?? NSColor.controlColor
+        detailButton.normalBackgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.72)
+        detailButton.pressedBackgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.92)
         detailButton.target = self
         detailButton.action = #selector(handleOpen)
         buttonsContainer.addSubview(detailButton)
 
-        actionButton.normalBackgroundColor = NSColor.controlAccentColor
+        actionButton.normalBackgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.92)
         actionButton.pressedBackgroundColor = NSColor.controlAccentColor.blended(withFraction: 0.18, of: .black) ?? NSColor.controlAccentColor
         actionButton.target = self
         actionButton.action = #selector(handleAction)
@@ -554,21 +557,21 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
 
     private func refreshThemeAwareAppearance() {
         guard let layer = cardView.layer else { return }
-        layer.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        layer.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.84).cgColor
         let borderColor: NSColor
         if keyboardFocused {
-            borderColor = NSColor.controlAccentColor.withAlphaComponent(0.60)
+            borderColor = NSColor.controlAccentColor.withAlphaComponent(0.54)
         } else if isHovering {
-            borderColor = NSColor.controlAccentColor.withAlphaComponent(0.30)
+            borderColor = NSColor.controlAccentColor.withAlphaComponent(0.24)
         } else {
-            borderColor = NSColor.separatorColor.withAlphaComponent(0.22)
+            borderColor = NSColor.separatorColor.withAlphaComponent(0.16)
         }
         layer.borderColor = borderColor.cgColor
         layer.shadowColor = NSColor.black.cgColor
-        layer.shadowOpacity = keyboardFocused ? 0.18 : (isHovering ? 0.14 : 0.04)
-        layer.shadowRadius = keyboardFocused ? 12 : (isHovering ? 10 : 6)
-        layer.shadowOffset = CGSize(width: 0, height: -1)
-        previewContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        layer.shadowOpacity = keyboardFocused ? 0.14 : (isHovering ? 0.10 : 0.03)
+        layer.shadowRadius = keyboardFocused ? 10 : (isHovering ? 8 : 5)
+        layer.shadowOffset = CGSize(width: 0, height: -2)
+        previewContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.88).cgColor
         titleLabel.textColor = .labelColor
         metaLabel.textColor = .secondaryLabelColor
         secondaryMetaLabel.textColor = currentSecondaryMetaColor
@@ -712,7 +715,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             return .systemRed
         }
         if isDownloaded {
-            return .systemGreen
+            return NSColor.systemGreen.blended(withFraction: 0.26, of: .labelColor) ?? .systemGreen
         }
         return .secondaryLabelColor
     }

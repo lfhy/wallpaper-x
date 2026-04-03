@@ -50,29 +50,11 @@ struct SteamWorkshopItemDetailSheet: View {
         return trimmed.isEmpty ? "暂无更多描述" : trimmed
     }
 
-    private var topFacts: [(String, String?)] {
-        [
-            ("类型", currentItem.workshopTypeText),
-            ("年龄分级", currentItem.ageRatingText),
-            ("题材", currentItem.genreText)
-        ]
-    }
-
-    private var bottomFacts: [(String, String?)] {
-        [
-            ("分辨率", currentItem.resolutionText),
-            ("文件大小", currentItem.fileSizeText),
-            ("分类", currentItem.categoryText)
-        ]
-    }
-
     private var secondaryFactText: String? {
         let values = [
             currentItem.scoreText,
             currentItem.subscriptionsText.map { "订阅 \($0)" },
-            currentItem.favoritesText.map { "收藏 \($0)" },
-            currentItem.lifetimeSubscriptionsText.map { "总订阅 \($0)" },
-            currentItem.lifetimeFavoritesText.map { "总收藏 \($0)" }
+            currentItem.favoritesText.map { "收藏 \($0)" }
         ]
         .compactMap { $0 }
 
@@ -90,109 +72,167 @@ struct SteamWorkshopItemDetailSheet: View {
         .nilIfEmpty
     }
 
+    private var heroBadges: [String] {
+        [
+            currentItem.workshopTypeText,
+            currentItem.ageRatingText,
+            currentItem.genreText
+        ]
+        .compactMap { value in
+            guard let value else { return nil }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+    }
+
+    private var statFacts: [(String, String)] {
+        [
+            ("分辨率", currentItem.resolutionText),
+            ("文件大小", currentItem.fileSizeText),
+            ("发布时间", currentItem.postedText),
+            ("分类", currentItem.categoryText)
+        ]
+        .compactMap { label, value in
+            guard let value, !value.isEmpty else { return nil }
+            return (label, value)
+        }
+    }
+
+    private let topScrollFadeHeight: CGFloat = 12
+    private let bottomScrollFadeHeight: CGFloat = 20
+
     var body: some View {
-        ZStack {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .top, spacing: 20) {
-                    leftColumn
-                        .frame(width: 220, alignment: .topLeading)
-
-                    rightColumn
-                        .frame(width: 480, alignment: .topLeading)
-                }
-
-                HStack(alignment: .bottom, spacing: 20) {
-                    leftFooter
-                        .frame(width: 220, alignment: .leading)
-
-                    rightFooter
-                        .frame(width: 480, alignment: .leading)
-                }
-            }
-            .frame(width: 720, alignment: .center)
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 18)
-        .frame(width: 760, height: 365, alignment: .center)
-        .background(Color(nsColor: .windowBackgroundColor))
-    }
-
-    private var leftColumn: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SteamWorkshopPreviewSurface(
-                itemID: currentItem.id,
-                previewImageURL: currentItem.previewImageURL,
-                previewAssetKind: currentItem.previewAssetKind
-            )
-            .frame(width: 220, height: 220)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-            if !currentItem.author.isEmpty {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("作者")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                    Text(currentItem.author)
-                        .font(.system(size: 15, weight: .semibold))
-                }
-            }
-        }
-    }
-
-    private var rightColumn: some View {
         VStack(alignment: .leading, spacing: 12) {
-            header
-
-            SteamWorkshopInfoRow(items: topFacts)
-
-            SteamWorkshopInfoRow(items: bottomFacts)
-                .overlay(alignment: .topLeading) {
-                    if isRefreshingDetail {
-                        SteamWorkshopInlineNotice(
-                            icon: "arrow.triangle.2.circlepath",
-                            text: "正在补全该项目的详情信息…"
-                        )
-                        .lineLimit(1)
-                        .frame(width: 220, alignment: .leading)
-                        .offset(x: 150, y: 62)
-                    }
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 16) {
+                    previewSection
+                    metaSection
+                    contentSection
+                    noticeSection
                 }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(.horizontal, 2)
+                .padding(.top, 10)
+            }
+            .mask {
+                SteamWorkshopScrollFadeMask(
+                    topFadeHeight: topScrollFadeHeight,
+                    bottomFadeHeight: bottomScrollFadeHeight
+                )
+            }
 
-            if let postedText = currentItem.postedText, !postedText.isEmpty {
-                SteamWorkshopSingleFactCard(label: "发布时间", value: postedText)
+            footerActions
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var metaSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !heroBadges.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(heroBadges, id: \.self) { badge in
+                            Text(badge)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .padding(.horizontal, 15)
+                                .padding(.vertical, 7)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(Color.black.opacity(0.12))
+                                )
+                                .overlay {
+                                    Capsule(style: .continuous)
+                                        .stroke(Color.white.opacity(0.12), lineWidth: 0.6)
+                                }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             if let statusFactText {
                 Text(statusFactText)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+    }
+
+    private var previewSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SteamWorkshopPreviewSurface(
+                itemID: currentItem.id,
+                previewImageURL: currentItem.previewImageURL,
+                previewAssetKind: currentItem.previewAssetKind
+            )
+            .frame(maxWidth: .infinity)
+            .frame(height: 156)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.white.opacity(0.09), lineWidth: 0.45)
+            }
+
+            Text(currentItem.title)
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if !currentItem.author.isEmpty {
+                Text(currentItem.author)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             if let secondaryFactText {
                 Text(secondaryFactText)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
         }
-        .padding(.top, 6)
     }
 
-    private var leftFooter: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("描述")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-            Text(detailDescriptionLine)
-                .font(.system(size: 13))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
+    private var contentSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if !statFacts.isEmpty {
+                Divider()
+                    .overlay(Color.white.opacity(0.035))
+
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 2), spacing: 12) {
+                    ForEach(Array(statFacts.enumerated()), id: \.offset) { _, fact in
+                        SteamWorkshopSingleFactCard(label: fact.0, value: fact.1)
+                    }
+                }
+            }
+
+            Divider()
+                .overlay(Color.white.opacity(0.035))
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("描述")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+
+                Text(detailDescriptionLine)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.primary)
+                    .lineLimit(3)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
+        .padding(.horizontal, 2)
     }
 
-    private var rightFooter: some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private var noticeSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
             if let currentDetailError {
                 SteamWorkshopInlineErrorNotice(message: currentDetailError) {
                     service.retrySelectedBrowserItemDetailRefresh()
@@ -207,94 +247,146 @@ struct SteamWorkshopItemDetailSheet: View {
                 }
             }
 
-            footerActions
-                .overlay(alignment: .top) {
-                    if currentItem.hasAdultContent {
-                        SteamWorkshopInlineNotice(
-                            icon: "exclamationmark.triangle.fill",
-                            text: "此项目被 Steam 标记为成人内容"
-                        )
-                        .frame(width: 492, alignment: .center)
-                        .offset(y: -34)
-                    }
-                }
-        }
-    }
+            if isRefreshingDetail {
+                SteamWorkshopInlineNotice(
+                    icon: "arrow.triangle.2.circlepath",
+                    text: "正在补全该项目的详情信息…"
+                )
+            }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text(currentItem.title)
-                .font(.system(size: 19, weight: .bold))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(width: 456, alignment: .leading)
-            Text("项目详情")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
+            if currentItem.hasAdultContent {
+                SteamWorkshopInlineNotice(
+                    icon: "exclamationmark.triangle.fill",
+                    text: "此项目被 Steam 标记为成人内容"
+                )
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var footerActions: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 6) {
             detailPrimaryActionButton(downloadRecord: downloadRecord)
-                .frame(width: 92)
+                .frame(maxWidth: .infinity)
 
-            Button("网页浏览") {
-                service.openWorkshopDetailPage(for: currentItem)
-            }
-            .buttonStyle(.bordered)
-            .frame(width: 88)
-
-            Button("作者工坊") {
+            Button {
+                requestInspectorClose()
                 service.showAuthorWorkshop(for: currentItem)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "person.crop.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("作者工坊")
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 38)
             }
-            .buttonStyle(.bordered)
+            .frame(maxWidth: .infinity)
+            .buttonStyle(SteamWorkshopFooterButtonStyle(kind: .secondary))
             .disabled(currentItem.authorProfileURL == nil && currentItem.authorWorkshopURL == nil)
-            .frame(width: 88)
 
-            Button("刷新详情") {
+            Button {
+                service.openWorkshopDetailPage(for: currentItem)
+            } label: {
+                Image(systemName: "safari")
+                    .frame(width: 18, height: 18)
+                    .frame(width: 46, height: 38)
+            }
+            .buttonStyle(SteamWorkshopFooterButtonStyle(kind: .secondary))
+            .help("网页浏览")
+            .accessibilityLabel("网页浏览")
+
+            Button {
                 service.retrySelectedBrowserItemDetailRefresh()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .frame(width: 18, height: 18)
+                    .frame(width: 46, height: 38)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(SteamWorkshopFooterButtonStyle(kind: .secondary))
+            .help("刷新详情")
+            .accessibilityLabel("刷新详情")
             .disabled(isRefreshingDetail)
-            .frame(width: 88)
-
-            Button("关闭窗口") {
-                service.dismissItemDetail()
-            }
-            .buttonStyle(.bordered)
-            .frame(width: 88)
         }
-        .frame(width: 456, alignment: .leading)
-        .controlSize(.large)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 2)
     }
 
     @ViewBuilder
     private func detailPrimaryActionButton(downloadRecord: SteamWorkshopDownloadRecord?) -> some View {
         if service.isDownloading(itemID: item.id) {
-            Button("取消下载") {
+            Button {
                 service.cancelActiveDownload()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "hourglass.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("取消下载")
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 38)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(SteamWorkshopFooterButtonStyle(kind: .danger))
         } else if let downloadRecord {
-            Button("设为壁纸") {
+            Button {
                 service.setAsWallpaper(downloadRecord)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "photo.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("设为壁纸")
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 38)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(SteamWorkshopFooterButtonStyle(kind: .primary))
         } else if latestDownloadFailure != nil {
-            Button("重新下载") {
+            Button {
                 service.downloadWorkshopItem(id: item.id, pageTitle: currentItem.title)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.clockwise.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("重新下载")
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 38)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(SteamWorkshopFooterButtonStyle(kind: .primary))
             .disabled(service.activeDownloadItemID != nil)
         } else {
-            Button("下载视频") {
+            Button {
                 service.downloadWorkshopItem(id: item.id, pageTitle: currentItem.title)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("下载视频")
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 38)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(SteamWorkshopFooterButtonStyle(kind: .primary))
             .disabled(service.activeDownloadItemID != nil)
         }
     }
+
+    private func requestInspectorClose() {
+        NotificationCenter.default.post(
+            name: .inspectorHostCloseRequested,
+            object: nil,
+            userInfo: [
+                InspectorHostUserInfoKey.module: ModuleIdentifier.steamWorkshop.rawValue,
+                InspectorHostUserInfoKey.cardID: item.id
+            ]
+        )
+    }
+
 }
 
 private extension String {
@@ -327,6 +419,31 @@ private struct SteamWorkshopFactList: View {
     }
 }
 
+private struct SteamWorkshopScrollFadeMask: View {
+    let topFadeHeight: CGFloat
+    let bottomFadeHeight: CGFloat
+
+    var body: some View {
+        GeometryReader { proxy in
+            let height = max(proxy.size.height, topFadeHeight + bottomFadeHeight + 1)
+            let topFadeRatio = min(max(topFadeHeight / height, 0.01), 0.18)
+            let bottomFadeRatio = min(max(bottomFadeHeight / height, 0.01), 0.24)
+
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black, location: topFadeRatio),
+                    .init(color: .black, location: 1 - bottomFadeRatio),
+                    .init(color: .clear, location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 private struct SteamWorkshopInfoRow: View {
     let items: [(String, String?)]
 
@@ -336,7 +453,7 @@ private struct SteamWorkshopInfoRow: View {
             return (label, value)
         }
 
-        HStack(alignment: .top, spacing: 28) {
+        HStack(alignment: .top, spacing: 18) {
             ForEach(Array(visibleItems.enumerated()), id: \.offset) { _, item in
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.0)
@@ -347,10 +464,10 @@ private struct SteamWorkshopInfoRow: View {
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .frame(width: 146, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .frame(width: 478, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -367,7 +484,22 @@ private struct SteamWorkshopSingleFactCard: View {
                 .font(.system(size: 13, weight: .semibold))
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(width: 146, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct SteamWorkshopMetricPanel<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        content
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.white.opacity(0.018))
+            )
     }
 }
 
@@ -383,8 +515,7 @@ private struct SteamWorkshopInlineNotice: View {
             Text(text)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .center)
     }
@@ -414,6 +545,69 @@ private struct SteamWorkshopInlineErrorNotice: View {
     }
 }
 
+private enum SteamWorkshopFooterButtonKind {
+    case primary
+    case secondary
+    case danger
+}
+
+private struct SteamWorkshopFooterButtonStyle: ButtonStyle {
+    var kind: SteamWorkshopFooterButtonKind = .secondary
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(foregroundColor)
+            .background(backgroundFill(isPressed: configuration.isPressed))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(borderColor.opacity(isEnabled ? 1 : 0.55), lineWidth: 0.7)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .opacity(isEnabled ? 1 : 0.45)
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+
+    private var foregroundColor: Color {
+        switch kind {
+        case .primary:
+            return .white
+        case .secondary:
+            return Color(nsColor: .labelColor)
+        case .danger:
+            return .white
+        }
+    }
+
+    private var borderColor: Color {
+        switch kind {
+        case .primary:
+            return Color(nsColor: .systemBlue).opacity(0.42)
+        case .secondary:
+            return Color.white.opacity(0.16)
+        case .danger:
+            return Color.red.opacity(0.24)
+        }
+    }
+
+    @ViewBuilder
+    private func backgroundFill(isPressed: Bool) -> some View {
+        let opacity = isPressed ? 0.9 : 1.0
+        let pressed = isPressed ? 1.0 : 0.0
+
+        switch kind {
+        case .primary:
+            Color(nsColor: isPressed ? .systemBlue.withSystemEffect(.pressed) : .systemBlue)
+        case .secondary:
+            Color.black.opacity(0.14 * opacity)
+        case .danger:
+            Color.red.opacity(0.68 - (0.12 * pressed))
+        }
+    }
+}
+
 private struct SteamWorkshopPreviewSurface: View {
     let itemID: String
     let previewImageURL: URL?
@@ -424,7 +618,7 @@ private struct SteamWorkshopPreviewSurface: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: [Color(red: 0.11, green: 0.17, blue: 0.29), Color(red: 0.09, green: 0.31, blue: 0.44)],
+                        colors: [Color.white.opacity(0.22), Color(red: 0.84, green: 0.91, blue: 1.0).opacity(0.20)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
@@ -439,7 +633,7 @@ private struct SteamWorkshopPreviewSurface: View {
             }
 
             LinearGradient(
-                colors: [.clear, .black.opacity(0.36)],
+                colors: [.clear, .white.opacity(0.02)],
                 startPoint: .center,
                 endPoint: .bottom
             )

@@ -11,6 +11,8 @@
 
 这个团队里的每个 Agent 都不是自由发挥的个体，而是我为了维护 `MyWallpaperX` 这套中型项目而划分出来的岗位。
 
+review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执行手册。
+
 我的目标不是让它们各自聪明，而是让它们：
 
 - 各司其职

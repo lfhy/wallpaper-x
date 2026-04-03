@@ -301,7 +301,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         for indexPath in collectionView.indexPathsForVisibleItems() {
             guard let id = dataSource.itemIdentifier(for: indexPath), changedIDs.contains(id) else { continue }
             guard let cell = collectionView.item(at: indexPath) as? AppKitSteamWorkshopBrowserItem else { continue }
-            guard let item = itemsByID[id] else { continue }
+            guard itemsByID[id] != nil else { continue }
             configureMetadataCell(cell, for: id)
         }
     }
@@ -318,7 +318,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
                 continue
             }
             guard let cell = collectionView.item(at: indexPath) as? AppKitSteamWorkshopBrowserItem else { continue }
-            guard let item = itemsByID[id] else { continue }
+            guard itemsByID[id] != nil else { continue }
             configureCell(cell, for: id)
         }
     }
@@ -438,8 +438,15 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
     }
 
     private func handleEscapeKey() -> Bool {
-        guard service.selectedBrowserItem != nil else { return false }
-        service.dismissItemDetail()
+        guard let selectedItem = service.selectedBrowserItem else { return false }
+        NotificationCenter.default.post(
+            name: .inspectorHostCloseRequested,
+            object: nil,
+            userInfo: [
+                InspectorHostUserInfoKey.module: ModuleIdentifier.steamWorkshop.rawValue,
+                InspectorHostUserInfoKey.cardID: selectedItem.id
+            ]
+        )
         return true
     }
 

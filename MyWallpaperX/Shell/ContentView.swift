@@ -43,6 +43,7 @@ struct ContentView: View {
                 selectedItem = .category(.myWallpapers)
                 lastPostedModuleID = .videoLibrary
                 contentReloadToken = UUID()
+                NotificationCenter.default.post(name: .inspectorHostCloseRequested, object: nil)
                 syncQuickLookPreviewIfNeeded()
             }
             .simultaneousGesture(
@@ -115,6 +116,7 @@ struct ContentView: View {
         }
         // 只在模块真正切换时才发工具栏模式通知，减少无效工具栏重建
         if lastPostedModuleID != newModule {
+            NotificationCenter.default.post(name: .inspectorHostCloseRequested, object: nil)
             lastPostedModuleID = newModule
             // silTag 上下文附加到通知中，供 SILToolbarController 更新工具栏标题
             var silUserInfo: [String: Any] = ["enabled": isSIL]

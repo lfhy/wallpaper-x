@@ -46,6 +46,7 @@ MyWallpaperX/
 | `AppearanceAwareContainerView.swift` | 监听深色/浅色模式切换的容器基类 |
 | `NSViewExtensions.swift` | `isDarkAppearance`、`ensureLayerAnchorCentered` |
 | `ModuleFocusable.swift` | 模块焦点协议、`moduleDidBecomeActive` 通知名、`ModuleIdentifier` 枚举 |
+| `InspectorHost.swift` | 统一 Inspector token、开关通知、焦点恢复规则与 Shell 宿主卡片 |
 
 ---
 
@@ -217,6 +218,64 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 
 `beginPreviewPanelControl` / `endPreviewPanelControl` 根据 `activeModule` 挂载对应控制器。
 
+### 3.8 InspectorHost（统一浏览详情宿主）
+
+为替代模块各自散落的 `.sheet(item:)` / 自定义详情入口，框架层新增统一 `InspectorHost`。该宿主只负责承载卡片外壳、开关时序与焦点恢复，不持有任何模块业务状态。
+
+**宿主位置：**
+- 宿主由 `AppKitMainSplitViewController` 挂在 detail 区根视图上层
+- 呈现形态为 detail 区右侧的上下文内浮层卡片，不新增独立窗口，不接管工具栏主控
+- 宿主必须是 **pure overlay**：只覆盖在 detail 内容上方，**不能**通过右侧留白、缩窄主内容区或常驻分隔线模拟“详情栏”
+- hidden 状态下宿主必须零残留：不留下背景、描边、命中区域、safe-area 占位或未卸载的 hosted content
+
+**公共通知协议：**
+
+| 通知名 | 定义位置 | 发出方 | 用途 |
+|--------|----------|--------|------|
+| `inspectorHostOpenRequested` | `Shared/UI/ModuleFocusable.swift` | 模块浏览桥接层 | 请求 Shell 打开统一详情宿主 |
+| `inspectorHostCloseRequested` | `Shared/UI/ModuleFocusable.swift` | 模块桥接层 / Shell | 请求关闭当前详情宿主 |
+| `inspectorHostDidPresent` | `Shared/UI/ModuleFocusable.swift` | Shell | 宿主展示完成，供模块桥接内容与内部焦点 |
+| `inspectorHostDidClose` | `Shared/UI/ModuleFocusable.swift` | Shell | 宿主关闭完成，供模块清理瞬时态 |
+| `inspectorHostMountContentRequested` | `Shared/UI/ModuleFocusable.swift` | 模块浏览桥接层 | 请求把模块详情视图挂入 Shell 已持有的宿主插槽 |
+
+**`inspectorHostOpenRequested` userInfo 最小字段规范：**
+- `module: String`，必填，值必须来自 `ModuleIdentifier.rawValue`
+- `cardID: String`，必填，模块内稳定详情 token；关闭匹配与状态回填都依赖它
+- `title: String`，必填，宿主头部标题
+- `subtitle: String`，可选，摘要或作者信息
+- `preferredWidth: CGFloat/Double`，可选，建议宽度；Shell 会夹在 `300...460`
+- `focusPolicy: String`，可选，当前支持：
+  - `preserveCurrentResponder`：默认值，打开时不主动抢焦点
+  - `moduleManaged`：模块在收到 `inspectorHostDidPresent` 后自行把焦点切到 inspector 内部控件
+
+**`inspectorHostCloseRequested` userInfo 规范：**
+- 可为空；为空时关闭当前展示中的卡片
+- 若提供 `module` 或 `cardID`，则只关闭与之匹配的当前卡片
+
+**`inspectorHostMountContentRequested` userInfo 最小字段规范：**
+- `module: String`，必填，值必须来自 `ModuleIdentifier.rawValue`
+- `cardID: String`，必填，必须与当前已打开卡片 token 一致
+- `hostedView: NSView`，必填，模块详情承载视图；Shell 负责把它装入统一宿主插槽
+
+**焦点规则：**
+1. Shell 在首次打开 Inspector 时缓存当前窗口 `firstResponder`
+2. `focusPolicy = preserveCurrentResponder` 时，打开详情不改变浏览网格当前焦点，避免破坏方向键与上下文选择
+3. `focusPolicy = moduleManaged` 时，Shell 只负责发出 `inspectorHostDidPresent`，由模块桥接层在内容挂入宿主后自行把焦点交给 inspector 内部搜索框、按钮组或可滚动内容
+4. 关闭详情时，Shell 优先恢复打开前缓存的 `firstResponder`
+5. 若缓存 responder 已失效或已脱离当前窗口，Shell 退回到 `moduleDidBecomeActive`，由来源模块按既有 `ModuleFocusable` 规则重新接管焦点
+
+**真实承载机制：**
+- `InspectorHost` 自身持有右侧卡片壳与内容插槽
+- Shell 只接受 `inspectorHostMountContentRequested`，并把模块传入的 `NSView` 装入该插槽
+- 宿主透明区域必须允许事件穿透到底层 detail/grid；只有卡片真实命中区域可以截获交互
+- 模块桥接层不得再直接往 `window.contentView` 或其他窗口级容器挂私有 overlay
+
+**模块接入方式：**
+1. 浏览列表项点击、回车或信息按钮不再直接弹自有 sheet，而是 post `inspectorHostOpenRequested`
+2. 模块内部详情 View / AppKit 容器仍保留在各自目录，由桥接适配器在 `inspectorHostDidPresent` 后通过 `inspectorHostMountContentRequested` 挂入宿主
+3. 关闭动作统一 post `inspectorHostCloseRequested`
+4. 禁止模块之间共享详情 Service；跨模块仍然只能走既有通知中转
+
 ---
 
 ## 四、Shared 层维护规范
@@ -361,6 +420,7 @@ VideoLibraryToolbarController（主控，NSToolbarDelegate）
    - 模块容器遵循 `ModuleFocusable`
    - 模块激活后响应 `moduleDidBecomeActive` 并执行 `requestFocus()`
    - 焦点通知时序与工具栏重建时序保持兼容（当前延迟 120ms）
+   - Inspector 关闭后 first responder 能恢复；恢复失败时必须回退到 `moduleDidBecomeActive`
 
 4. **跨模块协作巡检**
    - 跨模块请求仅走通知中转：通知定义在 Shell，执行在 Coordinator
@@ -373,6 +433,7 @@ VideoLibraryToolbarController（主控，NSToolbarDelegate）
 - [ ] 工具栏模式通知已接入（含子页面 `isDownloads` 等上下文）
 - [ ] 菜单分发与可用性验证已接入（Coordinator + AppDelegate）
 - [ ] 焦点协议已接入（`ModuleFocusable` + 激活通知）
+- [ ] InspectorHost 开关通知与 `cardID` token 已接入
 - [ ] 跨模块调用遵循“通知 + 中转”零耦合规范
 
 ### 8.3 文档维护制度
@@ -383,6 +444,7 @@ VideoLibraryToolbarController（主控，NSToolbarDelegate）
 - 通知协议（名称、payload、中转路径）变化
 - 菜单命令分发或 `validateMenuItem` 规则变化
 - 焦点接管机制变化
+- InspectorHost 通知、token 或焦点恢复规则变化
 
 若发生真实框架缺陷修复（非纯文档改写），同时在 `docs/framework-fix-archive.md` 追加 FIX 记录。
 
