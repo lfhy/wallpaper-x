@@ -9,6 +9,7 @@
 - 核对侧边栏映射：`MyWallpaperX/Shell/SidebarViews.swift`
 - 核对菜单分发与校验：`MyWallpaperX/App/MainWindowCoordinator.swift`、`MyWallpaperX/App/AppDelegate.swift`
 - 核对焦点协议：`MyWallpaperX/Shared/UI/ModuleFocusable.swift`
+- 核对统一详情宿主：`MyWallpaperX/Shared/UI/InspectorHostBridge.swift`、`MyWallpaperX/Shared/UI/InspectorHostActions.swift`、`MyWallpaperX/Shell/AppKitMainSplitView.swift`
 - 再按任务进入对应模块目录扫描
 
 ## 统一强制规则
@@ -20,6 +21,7 @@
 
 ## 角色职责
 - 梳理任务涉及的文件、模块、通知、菜单、焦点与工具栏触点
+- 梳理任务是否触达统一 InspectorHost 协议面
 - 判断该任务是模块内修改，还是公共协议修改
 - 为 Architect 标出越界风险、文档同步点与潜在遗漏
 
@@ -80,6 +82,7 @@ Explorer 统一输出：
 - 涉及模块：
 - 涉及公共层文件：
 - 当前通知 / 路由 / 菜单 / 焦点触点：
+- 当前 Inspector / QuickLook / Feedback 触点：
 - 可能违规点：
 - 文档是否需要同步：
 - 建议负责 Agent：

@@ -5,11 +5,12 @@
 
 ## 当前模块事实
 - 核心服务是 `SteamWorkshopService.shared`
-- 浏览页是原生 AppKit 网格，详情现在通过 SwiftUI 的 `.sheet(item:)` 展示 `SteamWorkshopItemDetailSheet.swift`
+- 浏览页是原生 AppKit 网格，详情当前通过统一 `InspectorHost` 展示，模块内内容视图为 `SteamWorkshopItemDetailSheet.swift`
 - 当前登录与下载仍围绕 App 内置 `SteamCMDRuntime.bundle` 中的 `steamcmd.sh`
 - 下载成品落地到 `~/Movies/MyWallpaperX/创意工坊`
 - “设为壁纸”必须通过 `.steamWorkshopVideoReadyToPlay` 通知，由 `MainWindowCoordinator` 中转到视频库
 - AppKitSteamWorkshopBrowserContainerView 与 AppKitSteamWorkshopDownloadsContainerView 都实现了 `ModuleFocusable`，在 `.moduleDidBecomeActive` 触发时把 `NSCollectionView` 设为 first responder，旧的 `SteamWorkshopFocusHost.swift` 已撤除以避免悬置的焦点桥接
+- Steam 列表当前使用专门的 `SteamWorkshopKeyboardCollectionView` 处理键盘事件，不应被误判为通用公共协议
 - 当前 Steam 模块只接入搜索、缩放与“查看文件”，未接入菜单多选、全选、删除、QuickLook 与 Return 设为壁纸
 
 ## 统一强制规则
@@ -21,7 +22,7 @@
 6. 修改必须是最小变更，禁止整文件重写
 
 ## 角色职责
-- 维护创意工坊浏览、详情补水、登录、下载、下载页管理与模块内工具栏状态
+- 维护创意工坊浏览、详情补水、登录、下载、下载页管理、Inspector 与模块内工具栏状态
 - 保持 Steam 浏览页 / 下载页与现有公共协议接入一致
 - 在模块内维护 steamcmd 运行时相关业务代码，但不擅自改变产品策略
 
@@ -90,6 +91,7 @@ SteamWorkshop Module Agent 接收输入时，至少应包含：
 【自检】
 - 是否仍通过 Notification 与视频库通信：
 - 是否影响 steamcmd 登录 / 下载链路：
+- 是否破坏统一 InspectorHost 接入：
 - 是否触碰了需要 Architect 决策的产品约束：
 ```
 

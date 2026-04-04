@@ -15,12 +15,13 @@
 - 主窗口结构由 `App/`、`Shell/` 与各模块 UI 组成
 - 工具栏主控当前由 `MyWallpaperX/Modules/VideoLibrary/Toolbar/VideoLibraryToolbarController.swift` 统一协调
 - 侧边栏与内容路由主要在 `MyWallpaperX/Shell/` 下
+- 当前详情展示默认走统一 Inspector 宿主，而不是各模块随意使用 `.sheet(item:)`
 - 模块 UI 主要分布于：
   - `MyWallpaperX/Modules/VideoLibrary/UI/`
   - `MyWallpaperX/Modules/StaticImageLibrary/UI/`
   - `MyWallpaperX/Modules/OnlineLibrary/UI/`
   - `MyWallpaperX/Modules/SteamWorkshop/UI/`
-- 设计变更如果触达菜单、路由、工具栏、焦点、通知协作，必须上抛给 `Architect` 或 `Protocol Steward`
+- 设计变更如果触达菜单、路由、工具栏、焦点、通知协作或 InspectorHost 接入，必须上抛给 `Architect` 或 `Protocol Steward`
 
 ## 统一强制规则
 1. 禁止跨模块调用
@@ -77,7 +78,7 @@
 - 工具栏像工具栏
 - 侧边栏像侧边栏
 - 设置页像设置页
-- Sheet、Popover、Alert、QuickLook、搜索焦点都应符合系统预期
+- Inspector、Sheet、Popover、Alert、QuickLook、搜索焦点都应符合系统预期
 
 ### 5. 不破坏现有协作协议
 - 只要设计调整触达路由、通知、菜单、焦点、工具栏切换逻辑，就必须显式上抛
@@ -178,7 +179,7 @@ macOS26 System UI Designer 接收输入时，至少应包含：
 - 设置页表单布局优化
 - 搜索栏、空态、错误态、加载态视觉优化
 - 模块网格页面的信息密度与间距优化
-- 详情面板的排版与层级优化
+- 模块 inspector 内容区的排版与层级优化
 
 ### 需要上抛后再处理
 - 新增工具栏模式切换
@@ -186,6 +187,7 @@ macOS26 System UI Designer 接收输入时，至少应包含：
 - 新增路由或子页面
 - 改变焦点接管机制
 - 改变通知协作链路
+- 改变统一 Inspector 宿主的接入方式或详情呈现语义
 
 ## 违规处理机制
 - 如果任务实际上是业务实现：转对应 `Module Agent`
@@ -198,6 +200,7 @@ macOS26 System UI Designer 接收输入时，至少应包含：
 - 字体、尺寸、间距、分隔应服务于信息扫描，不做无意义装饰
 - 状态表达应一眼可区分：默认、悬停、按下、禁用、选中、加载、错误、成功
 - 弹窗、Sheet、Popover 的使用必须有明确语义，不能把所有交互都堆进同一种容器
+- 详情默认优先服从统一 InspectorHost 语义，不为了局部方便退回各模块各自开 sheet
 - 对于专业工具型界面，优先“稳、准、清楚”，而不是“花、满、炫”
 
 ## 成功标准

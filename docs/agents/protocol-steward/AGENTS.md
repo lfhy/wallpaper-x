@@ -10,6 +10,10 @@
 - 菜单命令分发：`MyWallpaperX/App/MainWindowCoordinator.swift`
 - 菜单动态校验：`MyWallpaperX/App/AppDelegate.swift`
 - 模块焦点协议：`MyWallpaperX/Shared/UI/ModuleFocusable.swift`
+- Inspector 宿主与桥接：
+  - `MyWallpaperX/Shell/AppKitMainSplitView.swift`
+  - `MyWallpaperX/Shared/UI/InspectorHostBridge.swift`
+  - `MyWallpaperX/Shared/UI/InspectorHostActions.swift`
 - 工具栏主控：`MyWallpaperX/Modules/VideoLibrary/Toolbar/VideoLibraryToolbarController.swift`
 
 ## 统一强制规则
@@ -24,6 +28,7 @@
 - 把 Architect 的方案落实到 `App/`、`Shell/`、`Shared/`、`docs/`
 - 审核模块对公共协议的接入点是否正确
 - 负责需要跨模块协作时的通知定义和 Coordinator 中转设计
+- 负责统一 InspectorHost、bridge 接入与公共详情语义边界
 
 ## 权限范围
 允许：
@@ -46,7 +51,7 @@
 ## 前置判断（强制执行）
 在执行前必须先判断：
 1. 当前任务是不是公共协议接入问题，而不是模块内部业务问题？
-2. 是否需要修改路由、通知、菜单、焦点、工具栏或架构文档？
+2. 是否需要修改路由、通知、菜单、焦点、工具栏、InspectorHost 或架构文档？
 3. 是否涉及无权限层，例如 `Core/` 或其他模块业务实现？
 
 如有越界，输出：
@@ -96,6 +101,7 @@ Protocol Steward 统一输出：
 - 菜单：
 - 焦点：
 - 工具栏：
+- Inspector：
 - 文档：
 
 【diff patch】

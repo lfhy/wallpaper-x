@@ -488,26 +488,25 @@ final class AppKitSidebarContainerView: NSView {
         )
         sections.append(imagesSection)
 
-        // 在线图库独立分区（只作为浏览入口，不参与本地库任何逻辑）
+        // Pixabay 独立分区（只作为浏览入口，不参与本地库任何逻辑）
         let onlineSection = SidebarNode(
             kind: .section(.online),
             title: SidebarSectionID.online.title,
             children: [
                 SidebarNode(
                     kind: .onlineLibrary,
-                    title: "在线图库",
+                    title: "Pixabay 素材库",
                     symbolName: "globe",
                     count: nil
                 ),
                 SidebarNode(
                     kind: .onlineDownloads,
-                    title: "已下载项",
+                    title: "Pixabay 下载",
                     symbolName: "arrow.down.circle",
                     count: OnlineLibraryService.shared.downloadedIDs.count
                 )
             ]
         )
-        sections.append(onlineSection)
         let steamSection = SidebarNode(
             kind: .section(.steam),
             title: SidebarSectionID.steam.title,
@@ -520,13 +519,14 @@ final class AppKitSidebarContainerView: NSView {
                 ),
                 SidebarNode(
                     kind: .steamDownloads,
-                    title: "Steam 下载页",
+                    title: "Steam 下载",
                     symbolName: "arrow.down.doc",
                     count: signature.steamDownloadsCount
                 )
             ]
         )
         sections.append(steamSection)
+        sections.append(onlineSection)
         sections.append(othersSection)
 
         rootNodes = sections

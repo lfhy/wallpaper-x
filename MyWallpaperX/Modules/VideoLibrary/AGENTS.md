@@ -8,6 +8,7 @@
 - 视频库是当前唯一允许真正发出壁纸播放 / 切换指令的模块
 - 对外入口是 `UI/VideoLibraryEntryView.swift`
 - 在线库与 Steam 的“设为壁纸”最终都通过通知中转到这里，对应 `ImportContext.onlinePlayback` 与 `ImportContext.steamPlayback`
+- 视频库详情当前已通过统一 `InspectorHost` 接入，模块内负责提供 `VideoLibraryInspectorView`
 
 ## 统一强制规则
 1. 禁止跨模块调用
@@ -19,6 +20,7 @@
 
 ## 角色职责
 - 维护视频库内部的导入、选择、删除、排序、QuickLook、播放与持久化逻辑
+- 维护视频库内部 inspector 内容与选中态同步
 - 保持 `WallpaperManager`、网格 UI、工具栏状态之间的一致性
 - 在模块内实现已明确的公共协议接入，不自行设计跨模块协议
 
@@ -87,6 +89,7 @@ VideoLibrary Module Agent 接收输入时，至少应包含：
 【自检】
 - 是否新增跨模块直连：
 - 是否影响播放链路：
+- 是否破坏统一 InspectorHost 接入：
 - 是否需要 Protocol Steward 同步公共层：
 ```
 

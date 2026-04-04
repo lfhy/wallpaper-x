@@ -79,6 +79,7 @@ struct SteamWorkshopDownloadRecord: Identifiable, Equatable {
     let updatedAt: Date
     let sizeText: String
     let status: Status
+    let browserItem: SteamWorkshopBrowserItem?
 
     var statusText: String {
         switch status {
@@ -98,5 +99,40 @@ struct SteamWorkshopDownloadRecord: Identifiable, Equatable {
 
     var isPlayable: Bool {
         status == .ready && videoURL != nil
+    }
+
+    var displayItem: SteamWorkshopBrowserItem? {
+        guard let browserItem else { return nil }
+        return SteamWorkshopBrowserItem(
+            id: browserItem.id,
+            title: browserItem.title,
+            author: browserItem.author,
+            authorProfileURL: browserItem.authorProfileURL,
+            authorWorkshopURL: browserItem.authorWorkshopURL,
+            hasAdultContent: browserItem.hasAdultContent,
+            summary: browserItem.summary,
+            descriptionText: browserItem.descriptionText,
+            tags: browserItem.tags,
+            workshopTypeText: browserItem.workshopTypeText,
+            ageRatingText: browserItem.ageRatingText,
+            genreText: browserItem.genreText,
+            categoryText: browserItem.categoryText,
+            previewImageURL: previewURL ?? browserItem.previewImageURL,
+            previewVideoURL: browserItem.previewVideoURL,
+            previewAssetKind: browserItem.previewAssetKind,
+            fileSizeText: sizeText.isEmpty ? browserItem.fileSizeText : sizeText,
+            resolutionText: browserItem.resolutionText,
+            postedText: browserItem.postedText,
+            updatedText: browserItem.updatedText,
+            favoritesText: browserItem.favoritesText,
+            subscriptionsText: browserItem.subscriptionsText,
+            scoreText: browserItem.scoreText,
+            lifetimeFavoritesText: browserItem.lifetimeFavoritesText,
+            lifetimeSubscriptionsText: browserItem.lifetimeSubscriptionsText,
+            visibilityText: browserItem.visibilityText,
+            moderationText: browserItem.moderationText,
+            detailFields: browserItem.detailFields,
+            detailURL: browserItem.detailURL
+        )
     }
 }

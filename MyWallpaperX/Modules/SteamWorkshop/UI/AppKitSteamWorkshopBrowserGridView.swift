@@ -89,6 +89,11 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         collectionView.backgroundColors = [.clear]
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         collectionView.keyboardDelegate = self
+        collectionView.cardPressStateHandler = { [weak self] indexPath, pressed in
+            guard let self,
+                  let item = self.collectionView.item(at: indexPath) as? AppKitSteamWorkshopBrowserItem else { return }
+            item.applyPressedState(pressed)
+        }
         return collectionView
     }()
 

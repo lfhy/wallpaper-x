@@ -23,6 +23,7 @@
 - 不允许随意修改 `Core/`、`Shared/`
 - 所有修改必须使用 diff patch 输出
 - 如果存在越界或错误方案，必须先输出 `【越界风险】` 或 `【方案纠偏】`
+- 如果涉及统一详情宿主、详情 bridge、详情关闭时序，默认按公共协议任务处理
 
 ---
 
@@ -82,6 +83,7 @@
 - 新增通知中转
 - 新增工具栏模式切换
 - 新增焦点接管
+- 新增或调整 InspectorHost / InspectorHostBridge / inspector 内容挂载
 
 ```text
 这是公共协议接入任务。
@@ -102,6 +104,33 @@
 
 ---
 
+## 4.1 Inspector 详情宿主模板
+
+适用场景：
+
+- 详情从模块内局部容器改为统一 inspector
+- 新模块 / 新页面接入 `InspectorHost`
+- Inspector 开关、挂载、关闭、焦点恢复异常
+
+```text
+这是统一 InspectorHost 接入任务。
+
+要求：
+1. 先由 Explorer 扫描 Inspector 相关触点
+2. Architect 判断公共层与模块层的分工
+3. Protocol Steward 负责宿主、通知、bridge、关闭时序
+4. 对应 Module Agent 只负责自己的 inspector 内容视图与选中态同步
+5. Gatekeeper 最后检查 Inspector / QuickLook / Feedback 语义是否混淆
+
+任务目标：
+涉及模块：
+当前详情行为：
+目标详情行为：
+验收标准：
+```
+
+---
+
 ## 5. 排障模板
 
 适用场景：
@@ -117,6 +146,7 @@
 - 涉及文件
 - 涉及模块
 - 涉及通知 / 路由 / 菜单 / 焦点 / 工具栏触点
+- 涉及 Inspector / QuickLook / Feedback 触点
 - 初步判断问题归属
 - 可能违规点
 
@@ -149,7 +179,7 @@
 1. 不要直接实现
 2. 先由 Explorer 建立上下文
 3. 再由 Architect 判断职责拆分
-4. 如果触达路由、通知、菜单、工具栏、焦点、文档，必须先走 Protocol Steward
+4. 如果触达路由、通知、菜单、工具栏、焦点、InspectorHost、文档，必须先走 Protocol Steward
 5. 所有补丁必须拆成公共层补丁与模块补丁
 6. 最后由 Gatekeeper 严格审查
 
@@ -178,7 +208,7 @@
 - 是否误改 Core / Shared
 - 是否把业务逻辑写进 Shell
 - 是否漏了 framework-architecture-memo.md 同步
-- 是否漏了菜单 / 路由 / 焦点 / 工具栏一致性
+- 是否漏了菜单 / 路由 / 焦点 / 工具栏 / InspectorHost 一致性
 
 输出：
 1. Gatekeeper Verdict
@@ -242,7 +272,7 @@
 ### 9.4 先走公共层
 
 ```text
-如果涉及路由、通知、菜单、工具栏、焦点或文档，先转 Protocol Steward。
+如果涉及路由、通知、菜单、工具栏、焦点、InspectorHost 或文档，先转 Protocol Steward。
 ```
 
 ### 9.5 先拦截风险
@@ -260,7 +290,7 @@
 ```text
 先按 AGENTS 流程执行，不要直接改代码。
 先做 Explorer 扫描和 Architect 判责。
-如果涉及公共层，转 Protocol Steward。
+如果涉及公共层或统一 InspectorHost，转 Protocol Steward。
 如果只是模块内问题，只允许对应 Module Agent 修改。
 最后必须由 Gatekeeper 审查。
 
@@ -289,6 +319,7 @@
 这次任务优先保证架构正确，不优先保证速度。
 先做职责判断和风险拦截。
 如果方案不合理，先纠偏，不要为了完成任务硬做。
+如果触达统一 InspectorHost，必须单独说明是公共层改动还是模块内容改动。
 补丁出来后进入 Gatekeeper 审查。
 
 任务目标：

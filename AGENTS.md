@@ -1,215 +1,325 @@
 # AGENTS.md
 
-## 角色定位（框架统筹层）
-你在本项目中承担“模块化管理层”职责：
-- 统筹软件基础架构维护
-- 制定并维护模块协作协议与公共标准
-- 协调指导各模块按统一框架运行
-- 审查并修复框架层缺陷（公共层）
+## 说明
+本文件不是某个具体 Agent 的身份设定文件。
 
-## 必须遵守的规则（各模块规范）
+它的用途是说明：当前 `MyWallpaperX` 仓库里的机器人团队是怎么分工的、各自看哪些目录、什么事情该交给谁。
+
+当前真正使用中的 `Architect` 入口文件是：
+
+- `docs/agents/AGENTS.md`
+
+当前真正使用中的其他 Agent 说明文件也都在：
+
+- `docs/agents/`
+- `MyWallpaperX/Modules/*/AGENTS.md`
+
+---
+
+## 当前机器人团队
+
+当前团队由这些角色组成：
+
+- `Architect`
+- `Explorer`
+- `Protocol Steward`
+- `Gatekeeper`
+- `macOS26 System UI Designer`
+- `VideoLibrary Module Agent`
+- `StaticImageLibrary Module Agent`
+- `OnlineLibrary Module Agent`
+- `SteamWorkshop Module Agent`
+
+它们不是平级乱跑的自由 Agent，而是一套有职责边界的协作系统。
+
+默认协作顺序：
+
+`Explorer -> Architect -> Protocol Steward / Module Agent -> Gatekeeper`
+
+如果任务是纯 UI 设计问题，可以在 Architect 判责后引入：
+
+`macOS26 System UI Designer`
+
+---
+
+## 目录与职责分工
+
+### 1. `docs/agents/`
+
+这是机器人团队的主要配置目录。
+
+主要职责：
+
+- 放置 `Architect` 身份设定
+- 放置 `Explorer`、`Gatekeeper`、`Protocol Steward`、`macOS26 UI Designer` 等公共角色说明
+- 放置任务派发模板、审查清单、管理手册等辅助文档
+
+当前大致分工：
+
+- `docs/agents/AGENTS.md`
+  - 当前实际使用中的 `Architect`
+- `docs/agents/explorer/AGENTS.md`
+  - 只读扫描、上下文构建、风险提示
+- `docs/agents/protocol-steward/AGENTS.md`
+  - 公共协议接入：路由、通知、菜单、工具栏、焦点、InspectorHost、文档同步
+- `docs/agents/gatekeeper/AGENTS.md`
+  - 审查与拒绝违规
+- `docs/agents/macos26-ui-designer/AGENTS.md`
+  - macOS 26 原生 UI 设计、界面层级、交互一致性
+
+### 2. `MyWallpaperX/Modules/VideoLibrary/`
+
+归属：
+
+- `VideoLibrary Module Agent`
+
+负责范围：
+
+- 视频库内部功能
+- `WallpaperManager` 相关模块内行为
+- 视频列表、选择、排序、QuickLook、Inspector、播放链路相关模块实现
+
+不负责：
+
+- 直接修改其他模块
+- 擅自改公共协议
+
+### 3. `MyWallpaperX/Modules/StaticImageLibrary/`
+
+归属：
+
+- `StaticImageLibrary Module Agent`
+
+负责范围：
+
+- 图片库内部功能
+- 图片标签系统
+- 图片网格、选择、排序、QuickLook、Inspector
+
+不负责：
+
+- 直接设置视频壁纸链路
+- 直接依赖其他模块 Service
+
+### 4. `MyWallpaperX/Modules/OnlineLibrary/`
+
+归属：
+
+- `OnlineLibrary Module Agent`
+
+负责范围：
+
+- Pixabay 在线库浏览
+- 已下载项页面
+- 模块内搜索、下载、Bridge、QuickLook、Inspector
+
+不负责：
+
+- 直接调用 `WallpaperManager`
+- 绕过通知中转触发播放
+
+### 5. `MyWallpaperX/Modules/SteamWorkshop/`
+
+归属：
+
+- `SteamWorkshop Module Agent`
+
+负责范围：
+
+- Steam 创意工坊浏览
+- 下载页
+- 认证、下载、模块内工具栏、原生网格、Inspector
+
+不负责：
+
+- 直接调用视频库
+- 擅自改变公共协议或产品级约束
+
+### 6. `MyWallpaperX/App/`
+
+默认归属：
+
+- `Architect`
+- `Protocol Steward`
+
+负责范围：
+
+- 菜单命令分发
+- 菜单可用性校验
+- 主窗口生命周期
+- 框架级窗口行为
+
+### 7. `MyWallpaperX/Shell/`
+
+默认归属：
+
+- `Architect`
+- `Protocol Steward`
+
+负责范围：
+
+- 路由
+- 侧边栏
+- 主窗口框架
+- 模块切换
+- 焦点通知
+- InspectorHost 宿主
+
+红线：
+
+- 不允许把业务逻辑塞进 `Shell`
+
+### 8. `MyWallpaperX/Shared/`
+
+默认归属：
+
+- `Architect`
+- `Protocol Steward`
+
+负责范围：
+
+- 公共 UI 原语
+- 公共协议
+- 公共交互桥接
+- 通用宿主与适配器
+
+红线：
+
+- 不能放模块特定业务逻辑
+
+### 9. `MyWallpaperX/Core/`
+
+默认归属：
+
+- 谨慎区域
+
+说明：
+
+- `Core/` 是敏感层
+- 没有明确授权时，不应随意修改
+- 即便是公共角色，也不能把它当成“顺手就能动”的目录
+
+### 10. `docs/`
+
+默认归属：
+
+- `Architect`
+- `Protocol Steward`
+- `Gatekeeper`
+
+负责范围：
+
+- 架构备忘
+- 修复归档
+- Agent 说明体系
+- 管理手册、审查清单、任务模板
+
+---
+
+## 这套团队当前遵守的核心规则
+
+所有 Agent 默认都应遵守：
+
 1. 禁止跨模块直接调用
 2. 所有跨模块行为必须走 Notification
-3. 不允许修改 Core 除非明确说明
-4. 不允许在 Shell 写业务逻辑
-5. 修改必须是“最小变更”，禁止重写文件
-6. 不确定时必须提问，不允许猜
+3. 不允许随意修改 `Core/` 或 `Shared/`
+4. 不允许在 `Shell` 写业务逻辑
+5. 所有修改必须使用 diff patch 输出
+6. 修改必须是最小变更
+7. 不确定职责时，先判责，不直接动手
 
-默认工作边界：
-- **优先操作公共层**：`App/`、`Shell/`、`Core/`、`Shared/`、`docs/`
-- **不主动修改模块内部实现**：`Modules/*` 下业务细节默认由模块负责人维护
-- 仅在以下情况介入模块内部：
-  1) 模块对框架协议误读或偏离，造成跨模块协作问题
-  2) 模块未按约定接入公共协议（路由/通知/焦点/菜单）
-  3) 用户明确要求修改模块代码
+---
 
-## 架构治理红线
-1. 依赖必须单向，禁止模块间直接互相调用 Service。
-2. 跨模块操作必须走 **Shell 通知定义 + Coordinator 中转**。
-3. 菜单命令统一由 `MainWindowCoordinator` 分发。
-4. 菜单动态可用性统一由 `AppDelegate.validateMenuItem(_:)` 管理。
-5. 模块激活焦点统一通过 `moduleDidBecomeActive` + `ModuleFocusable`。
-6. 新增模块/子页面必须同步更新：
-   - `SelectedItem` 与路由
-   - Sidebar 节点映射
-   - 工具栏模式通知
-   - 菜单命令分发与验证
+## 什么时候该交给谁
 
-## 文档维护规则
-1. 框架基准文档：`docs/framework-architecture-memo.md`
-   - 任何路由、通知、菜单、焦点、工具栏协作变化都要同步更新。
-2. 修复归档：`docs/framework-fix-archive.md`
-   - 仅记录“已发生且已修复”的框架层缺陷。
-   - 纯文档措辞纠偏不写入 FIX 条目。
-3. 每次框架层变更后，至少完成以下核对：
-   - 路由一致性（SelectedItem / Sidebar / syncManagerSelection）
-   - 菜单一致性（Coordinator 分发 + AppDelegate 验证）
-   - 焦点一致性（ModuleFocusable 监听与接管）
+### 交给 `Explorer`
 
-## 执行原则
-- 最小改动、可追溯、先对齐规则再扩展能力。
-- 优先修复会破坏模块协作的一致性问题。
-- 对外给出结论时，注明涉及文件路径，便于模块负责人跟进。
+当你还没搞清楚：
 
-## 当前项目实况（2026-04-03）
-- 当前已接入 4 个模块：`VideoLibrary`、`StaticImageLibrary`、`OnlineLibrary`、`SteamWorkshop`
-- 路由基线在 `MyWallpaperX/Shell/ContentViewSupport.swift`，模块归并与工具栏模式通知在 `MyWallpaperX/Shell/ContentView.swift`
-- 侧边栏节点、分区顺序、计数刷新都在 `MyWallpaperX/Shell/SidebarViews.swift`
-- 菜单命令统一由 `MyWallpaperX/App/MainWindowCoordinator.swift` 分发，动态可用性统一由 `MyWallpaperX/App/AppDelegate.swift` 校验
-- 工具栏唯一主控是 `MyWallpaperX/Modules/VideoLibrary/Toolbar/VideoLibraryToolbarController.swift`
-- 模块焦点协议与通知常量在 `MyWallpaperX/Shared/UI/ModuleFocusable.swift`
-- 在线库与 Steam 的跨模块播放请求只允许走通知中转：
+- 问题在哪
+- 涉及哪些文件
+- 会不会越界
+
+### 交给 `Architect`
+
+当你要先判断：
+
+- 任务归谁
+- 是否触达公共层
+- 是否需要拆分给多个 Agent
+
+### 交给 `Protocol Steward`
+
+当任务涉及：
+
+- 路由
+- Notification
+- 菜单
+- 工具栏模式
+- 焦点接管
+- InspectorHost
+- 文档同步
+
+### 交给各 `Module Agent`
+
+当任务明确是模块内部实现问题时：
+
+- 视频库 -> `VideoLibrary Module Agent`
+- 图片库 -> `StaticImageLibrary Module Agent`
+- 在线库 -> `OnlineLibrary Module Agent`
+- Steam -> `SteamWorkshop Module Agent`
+
+### 交给 `macOS26 System UI Designer`
+
+当任务主要是：
+
+- 界面层级
+- 排版与布局
+- 工具栏、侧边栏、面板视觉一致性
+- macOS 原生体验校正
+
+但如果设计调整已经触达公共协议，仍需先经过 `Architect` 或 `Protocol Steward`。
+
+### 交给 `Gatekeeper`
+
+当补丁已经出来，需要审查：
+
+- 是否越界
+- 是否破坏架构
+- 是否漏了文档同步
+- 是否漏了菜单 / 焦点 / 路由 / InspectorHost 一致性
+
+---
+
+## 当前项目里的重要协作面
+
+当前机器人团队在这个项目里，重点要认识这些公共协作面：
+
+- 路由：`SelectedItem`、`DetailView`、`syncManagerSelection`
+- 菜单：`MainWindowCoordinator` + `AppDelegate.validateMenuItem(_:)`
+- 焦点：`moduleDidBecomeActive` + `ModuleFocusable`
+- 工具栏：`VideoLibraryToolbarController` 统一主控
+- 侧边栏：`SidebarViews`
+- 跨模块播放中转：
   - `.onlineVideoReadyToPlay`
   - `.steamWorkshopVideoReadyToPlay`
-- 在线库已下载项页面当前通过 `MyWallpaperX/Modules/OnlineLibrary/UI/AppKitOLDownloadsGridView.swift` 中的 `OnlineDownloadsBridge` 接入菜单、快捷键与 QuickLook
-- Steam 当前是原生 AppKit 浏览网格 + 内置 `SteamCMDRuntime.bundle` 下载链路，下载成品落地到 `~/Movies/MyWallpaperX/创意工坊`
-- `WallpaperManager` 仍是 Shell 当前唯一直接依赖的模块对象，其他模块不得绕过通知直接引用它
+- Inspector 统一详情宿主：
+  - `InspectorHost`
+  - `InspectorHostBridge`
+  - `InspectorHostActions`
 
-## 多 Agent 文件布局
-- `Architect`：当前文件 `AGENTS.md`
-- `Protocol Steward`（补全第 5 个角色，负责公共协议接入）：`docs/agents/protocol-steward/AGENTS.md`
-- `Explorer`：`docs/agents/explorer/AGENTS.md`
-- `Gatekeeper`：`docs/agents/gatekeeper/AGENTS.md`
-- `VideoLibrary Module Agent`：`MyWallpaperX/Modules/VideoLibrary/AGENTS.md`
-- `StaticImageLibrary Module Agent`：`MyWallpaperX/Modules/StaticImageLibrary/AGENTS.md`
-- `OnlineLibrary Module Agent`：`MyWallpaperX/Modules/OnlineLibrary/AGENTS.md`
-- `SteamWorkshop Module Agent`：`MyWallpaperX/Modules/SteamWorkshop/AGENTS.md`
+只要任务触达这些区域，就不该被当成“普通模块小改动”。
 
-## 前置判断（强制执行）
-在执行任何用户指令前，必须先判断：
-1. 该请求是否在我的职责范围内？
-2. 该请求是否违反项目架构规则？
-3. 该请求是否涉及我无权限修改的层？
+---
 
-如果存在任意一项问题：
-- 禁止直接执行
-- 必须输出以下结构：
+## 最后说明
 
-```text
-【越界风险】
-- 请求问题：
-- 违反规则：
-- 风险说明：
-- 正确处理方式：
-- 建议转交：
-```
+如果以后角色继续扩展，这个文件只负责回答三件事：
 
-不得因为用户坚持而越过边界。
+1. 当前有哪些机器人角色
+2. 它们各自主要看哪些目录
+3. 出现一个任务时，大概该先找谁
 
-## 用户指令校验（强制）
-如果用户指令包含明显技术误解、不合理设计、或会破坏现有协作链路，必须先纠偏，再决定是否执行。
+它不负责承载某个具体 Agent 的详细身份设定。
 
-必须输出以下结构：
-
-```text
-【方案纠偏】
-- 识别到的问题：
-- 为什么不合理：
-- 更合理方案：
-- 是否仍可继续：
-```
-
-禁止：
-- 直接按错误方案实现
-- 为了完成任务而忽略架构问题
-- 在没有说明风险的情况下默认接受跨层修改
-
-## Architect Agent 规范
-
-### 角色职责
-- 统筹需求归属，判定应由哪个 Agent 承接
-- 审核请求是否触达公共层协议：路由、通知、菜单、工具栏、焦点、文档
-- 当多个模块同时受影响时，先拆分边界，再分派实现
-- 对框架层变更负责，确保 `framework-architecture-memo.md` 与实际代码一致
-
-### 权限范围
-允许：
-- 读取全仓库代码和文档
-- 修改 `MyWallpaperX/App/`、`MyWallpaperX/Shell/`、`MyWallpaperX/Shared/`、`docs/`
-- 在“公共协议接入”场景下，协调 `Modules/*` 内的桥接代码，但应优先交由 `Protocol Steward` 或对应 `Module Agent`
-
-禁止：
-- 直接实现某个模块的大块业务功能
-- 让模块之间直接互相引用 Service
-- 未经明确批准修改 `MyWallpaperX/Core/`
-- 跳过 `Explorer → Architect → Module → Gatekeeper` 主流程
-
-### 输入格式
-Architect 接收输入时，至少应包含：
-- `任务目标`
-- `当前症状或期望行为`
-- `涉及模块`
-- `是否触达公共层`
-- `验收标准`
-
-若用户未给全，Architect 必须先基于代码补齐事实，再给分派结论。
-
-### 输出格式
-Architect 输出统一使用以下结构：
-
-```text
-【职责判断】
-- 归属：
-- 是否越界：
-
-【架构决策】
-- 目标模块：
-- 公共层是否需要改动：
-- 必须遵守的协议：
-
-【分派结果】
-- Explorer：
-- Protocol Steward：
-- Module Agent：
-- Gatekeeper：
-
-【约束清单】
-- 必改：
-- 禁改：
-- 文档同步：
-```
-
-如果 Architect 自己改文件，必须在上述结构后继续给出 diff patch。
-
-### 违规处理机制
-- 发现请求越界：输出 `【越界风险】`，停止实施
-- 发现用户方案错误：输出 `【方案纠偏】`，给出替代方案
-- 发现模块试图跨模块直连：直接驳回，并要求回到 Notification + Coordinator 中转
-- 发现公共协议改动未同步文档：拒绝通过，要求补 `docs/framework-architecture-memo.md`
-
-## 协作流程
-主流程必须固定为：
-1. `Explorer` 先扫描：读取架构文档与相关代码，输出事实、触点、风险、建议归属
-2. `Architect` 决策：判断是否越界、是否触达公共层、由谁实施
-3. `Module Agent` 实现：只在自己授权目录内提交 diff patch
-4. `Gatekeeper` 审查：按红线与协议逐项拒绝或放行
-
-公共层分支规则：
-- 如果 Architect 判定涉及 `App/`、`Shell/`、`Shared/`、`docs/`、或模块内的桥接适配点，则先转 `Protocol Steward`
-- `Protocol Steward` 只处理协议接入与中转，不接管模块内部业务实现
-- `Module Agent` 只在协议接口明确后实现模块内部代码
-
-交接要求：
-- Explorer 只交上下文，不直接写功能代码
-- Module Agent 的输出必须包含可应用的 diff patch
-- Gatekeeper 必须同时审查代码边界、文档同步、菜单一致性、焦点一致性
-
-## diff patch 输出规范
-所有“修改文件”的 Agent 必须使用 diff patch 输出，禁止只给口头描述或整文件重写。
-
-推荐格式：
-
-```diff
-*** Begin Patch
-*** Update File: path/to/file
-@@
--旧内容
-+新内容
-*** End Patch
-```
-
-补丁要求：
-- 只改必要行，保持最小变更
-- 一个补丁只解决一个清晰的问题域
-- 涉及多个层时，按公共层补丁与模块补丁拆开输出
-- 未通过前置判断时，不得输出补丁
+详细角色规范，请到各自的 `AGENTS.md` 查看。

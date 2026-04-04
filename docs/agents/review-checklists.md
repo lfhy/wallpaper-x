@@ -30,6 +30,7 @@
 - 明明是公共协议任务，却让模块 Agent 直接扩散修改
 - 没有 diff patch，只有口头说明
 - 改了公共协议，却没同步 `docs/framework-architecture-memo.md`
+- 改了统一 Inspector 宿主接入，却没同时检查宿主 / bridge / 模块内容三者关系
 
 ---
 
@@ -43,6 +44,7 @@
 - 是否明确列出涉及文件
 - 是否明确列出涉及模块
 - 是否列出通知 / 路由 / 菜单 / 焦点 / 工具栏触点
+- 是否列出 Inspector / QuickLook / Feedback 触点
 - 是否指出了可能越界点
 
 拒绝信号：
@@ -72,7 +74,7 @@
 检查：
 
 - 是否只处理协议接入，而不是替模块写业务
-- 是否覆盖了路由 / 通知 / 菜单 / 焦点 / 工具栏 / 文档
+- 是否覆盖了路由 / 通知 / 菜单 / 焦点 / 工具栏 / Inspector / 文档
 - 是否把公共层变更写得最小
 - 是否说明还需要哪个 Module Agent 对接
 
@@ -90,6 +92,7 @@
 - 是否没有顺手扩散到别的模块
 - 是否没有直接依赖其他模块 Service
 - 是否保持现有 Notification 中转边界
+- 是否没有擅自改统一 InspectorHost 宿主协议
 - 是否输出最小 diff patch
 
 拒绝信号：
@@ -105,7 +108,7 @@
 - 是否逐项检查架构红线
 - 是否指出具体拒绝理由
 - 是否要求补文档同步
-- 是否检查菜单 / 路由 / 焦点 / 工具栏一致性
+- 是否检查菜单 / 路由 / 焦点 / 工具栏 / InspectorHost 一致性
 
 拒绝信号：
 
@@ -185,7 +188,24 @@
 - `MyWallpaperX/Modules/VideoLibrary/Toolbar/VideoLibraryToolbarController.swift`
 - 各模块 toolbar controller
 
-### 4.6 文档一致性
+### 4.6 Inspector 一致性
+
+检查：
+
+- 是否仍通过统一 `InspectorHost` 承载详情
+- `InspectorHostBridge` 是否接在正确的模块入口视图上
+- 模块是否只提供自己的 inspector 内容视图，不擅自改宿主协议
+- `Inspector` / `QuickLook` / `Feedback` 三者语义是否仍分离
+- 页面切换、选中清空、关闭详情时是否走统一关闭时序
+
+重点文件：
+
+- `MyWallpaperX/Shell/AppKitMainSplitView.swift`
+- `MyWallpaperX/Shared/UI/InspectorHostBridge.swift`
+- `MyWallpaperX/Shared/UI/InspectorHostActions.swift`
+- 各模块对应 `*InspectorView.swift` / 入口视图
+
+### 4.7 文档一致性
 
 检查：
 
@@ -210,6 +230,7 @@
 - 是否让视频库直接依赖其他模块
 - 是否影响导入上下文 `onlinePlayback` / `steamPlayback`
 - 是否影响播放链路
+- 是否破坏视频库 inspector 内容与选中态同步
 
 ### 5.2 StaticImageLibrary
 
@@ -218,6 +239,7 @@
 - 是否保持图片标签系统独立
 - 是否错误加入“设置动态壁纸”的旁路能力
 - 是否影响 SIL 工具栏上下文
+- 是否破坏图片库 inspector 内容与标签上下文关系
 
 ### 5.3 OnlineLibrary
 
@@ -227,6 +249,7 @@
 - 是否错误直接依赖 `WallpaperManager`
 - 浏览页 / 已下载项页切换是否仍正确
 - `OnlineDownloadsBridge` 是否仍只承担桥接职责
+- 是否误把浏览页和已下载项页的 inspector 语义混在一起
 
 ### 5.4 SteamWorkshop
 
@@ -236,6 +259,7 @@
 - 是否错误直接依赖 `WallpaperManager`
 - 是否擅自改变 steamcmd 运行策略
 - 是否擅自扩展当前未接入的菜单能力
+- 是否破坏 Steam inspector 内容与统一宿主的接入关系
 
 ---
 

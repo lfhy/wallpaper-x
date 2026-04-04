@@ -298,7 +298,7 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
     }
 
     private let emptyLabel: NSTextField = {
-        let l = NSTextField(labelWithString: "暂无已下载视频壁纸")
+        let l = NSTextField(labelWithString: "暂无已下载 Pixabay 视频")
         l.alignment = .center
         l.textColor = .secondaryLabelColor
         l.font = .systemFont(ofSize: 16, weight: .regular)
@@ -309,7 +309,7 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
 
     private lazy var searchField: NSSearchField = {
         let f = NSSearchField()
-        f.placeholderString = "搜索已下载项"
+        f.placeholderString = "搜索 Pixabay 下载"
         f.sendsSearchStringImmediately = true
         f.translatesAutoresizingMaskIntoConstraints = false
         f.target = self
@@ -605,7 +605,7 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
         syncInspectorSelectionIfNeeded()
 
         let isEmpty = orderedIDs.isEmpty
-        emptyLabel.stringValue = searchQuery.isEmpty ? "暂无已下载视频壁纸" : "无匹配结果"
+        emptyLabel.stringValue = searchQuery.isEmpty ? "暂无已下载 Pixabay 视频" : "无匹配结果"
         emptyLabel.isHidden = !isEmpty
         applySnapshot(ids: orderedIDs)
         DispatchQueue.main.async {

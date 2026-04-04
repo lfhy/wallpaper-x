@@ -119,11 +119,14 @@ private final class SteamWorkshopOverlayIconButton: NSButton {
     }
 }
 
-private final class SteamWorkshopMarqueeTextView: NSView {
+final class SteamWorkshopMarqueeTextView: NSView {
     private let clippingView = NSView()
-    private let textField = NSTextField(labelWithString: "")
+    private let containerLayer = CALayer()
+    private let leadingTextLayer = CATextLayer()
+    private let trailingTextLayer = CATextLayer()
     private let fadeMaskLayer = CAGradientLayer()
     private var displayText = ""
+    private var marqueeSegmentWidth: CGFloat = 0
     private var isActive = false
     private var isPerformingLayout = false
     private let repeatedGap = "     "
@@ -137,14 +140,14 @@ private final class SteamWorkshopMarqueeTextView: NSView {
 
     var font: NSFont = .systemFont(ofSize: 13, weight: .semibold) {
         didSet {
-            textField.font = font
+            updateTextLayerAppearance()
             updateDisplayedText()
         }
     }
 
     var textColor: NSColor = .labelColor {
         didSet {
-            textField.textColor = textColor
+            updateTextLayerAppearance()
         }
     }
 
@@ -164,18 +167,29 @@ private final class SteamWorkshopMarqueeTextView: NSView {
         defer { isPerformingLayout = false }
         guard bounds.width.isFinite, bounds.height.isFinite, bounds.width > 0, bounds.height > 0 else {
             clippingView.frame = .zero
-            textField.frame = .zero
-            textField.layer?.removeAnimation(forKey: "steam.marquee")
+            containerLayer.frame = .zero
+            containerLayer.removeAnimation(forKey: "steam.marquee")
             return
         }
         clippingView.frame = bounds
         updateFadeMask()
-        layoutTextField()
+        layoutTextLayers()
         updateAnimation()
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+    }
+
     func setActive(_ active: Bool) {
-        guard isActive != active else { return }
+        if isActive == active {
+            if active {
+                updateAnimation()
+            }
+            return
+        }
         isActive = active
         updateAnimation()
     }
@@ -190,39 +204,67 @@ private final class SteamWorkshopMarqueeTextView: NSView {
         clippingView.layer?.masksToBounds = true
         addSubview(clippingView)
 
-        textField.lineBreakMode = .byClipping
-        textField.maximumNumberOfLines = 1
-        textField.font = font
-        textField.textColor = textColor
-        textField.wantsLayer = true
-        clippingView.addSubview(textField)
+        clippingView.layer?.addSublayer(containerLayer)
+        [leadingTextLayer, trailingTextLayer].forEach { layer in
+            layer.alignmentMode = .left
+            layer.isWrapped = false
+            layer.truncationMode = .none
+            layer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+            containerLayer.addSublayer(layer)
+        }
+        updateTextLayerAppearance()
     }
 
     private func updateDisplayedText() {
         displayText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        textField.stringValue = displayText
+        marqueeSegmentWidth = 0
+        leadingTextLayer.string = displayText
+        trailingTextLayer.string = displayText
         if !isPerformingLayout {
             needsLayout = true
         }
     }
 
-    private func layoutTextField() {
+    private func updateTextLayerAppearance() {
+        let cgColor = textColor.cgColor
+        let fontRef = font as CTFont
+        [leadingTextLayer, trailingTextLayer].forEach { layer in
+            layer.font = fontRef
+            layer.fontSize = font.pointSize
+            layer.foregroundColor = cgColor
+        }
+    }
+
+    private func layoutTextLayers() {
         let height = max(0, bounds.height.isFinite ? bounds.height : 0)
         let textHeight = ceil(font.pointSize + 4)
         let y = floor((height - textHeight) * 0.5)
         let baseWidth = measuredWidth(for: displayText)
         if shouldScroll(baseWidth: baseWidth) {
-            textField.stringValue = displayText + repeatedGap + displayText
-            let fullWidth = measuredWidth(for: textField.stringValue)
-            textField.frame = CGRect(x: 0, y: y.isFinite ? y : 0, width: max(0, fullWidth), height: textHeight)
-        } else {
-            textField.stringValue = displayText
-            textField.frame = CGRect(
+            marqueeSegmentWidth = baseWidth + measuredWidth(for: repeatedGap)
+            containerLayer.frame = CGRect(
                 x: 0,
                 y: y.isFinite ? y : 0,
-                width: max(0, bounds.width.isFinite ? bounds.width : 0, baseWidth),
+                width: max(0, marqueeSegmentWidth + baseWidth),
                 height: textHeight
             )
+            leadingTextLayer.isHidden = false
+            trailingTextLayer.isHidden = false
+            leadingTextLayer.frame = CGRect(x: 0, y: 0, width: max(0, baseWidth), height: textHeight)
+            trailingTextLayer.frame = CGRect(x: marqueeSegmentWidth, y: 0, width: max(0, baseWidth), height: textHeight)
+        } else {
+            marqueeSegmentWidth = 0
+            let centeredX = floor((bounds.width - baseWidth) * 0.5)
+            containerLayer.frame = CGRect(
+                x: centeredX.isFinite ? centeredX : 0,
+                y: y.isFinite ? y : 0,
+                width: max(0, baseWidth),
+                height: textHeight
+            )
+            leadingTextLayer.isHidden = false
+            trailingTextLayer.isHidden = true
+            leadingTextLayer.frame = CGRect(x: 0, y: 0, width: max(0, baseWidth), height: textHeight)
+            trailingTextLayer.frame = .zero
         }
     }
 
@@ -240,30 +282,35 @@ private final class SteamWorkshopMarqueeTextView: NSView {
     }
 
     private func updateAnimation() {
-        textField.layer?.removeAnimation(forKey: "steam.marquee")
+        containerLayer.removeAnimation(forKey: "steam.marquee")
         guard !displayText.isEmpty else { return }
         guard bounds.width.isFinite, bounds.height.isFinite else { return }
 
         let baseWidth = measuredWidth(for: displayText)
         guard shouldScroll(baseWidth: baseWidth), isActive else {
-            var frame = textField.frame
-            frame.origin.x = 0
-            frame.origin.y = frame.origin.y.isFinite ? frame.origin.y : 0
-            textField.frame = frame
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            containerLayer.transform = CATransform3DIdentity
+            CATransaction.commit()
             return
         }
 
-        let travel = baseWidth + measuredWidth(for: repeatedGap)
-        let startX = textField.layer?.position.x ?? (textField.frame.width * 0.5)
-        guard travel.isFinite, startX.isFinite, travel > 8 else { return }
+        let travel = marqueeSegmentWidth > 0 ? marqueeSegmentWidth : (baseWidth + measuredWidth(for: repeatedGap))
+        guard travel.isFinite, travel > 8 else { return }
 
-        let animation = CABasicAnimation(keyPath: "position.x")
-        animation.fromValue = startX
-        animation.toValue = startX - travel
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        containerLayer.transform = CATransform3DIdentity
+        CATransaction.commit()
+
+        let animation = CABasicAnimation(keyPath: "transform.translation.x")
+        animation.fromValue = 0
+        animation.toValue = -travel
         animation.duration = max(7, Double(travel / 22))
         animation.repeatCount = .infinity
+        animation.isRemovedOnCompletion = false
         animation.timingFunction = CAMediaTimingFunction(name: .linear)
-        textField.layer?.add(animation, forKey: "steam.marquee")
+        containerLayer.add(animation, forKey: "steam.marquee")
     }
 
     private func shouldScroll(baseWidth: CGFloat) -> Bool {
@@ -294,7 +341,7 @@ private final class SteamWorkshopGlassBarView: NSGlassEffectView {
 
     private func commonInit() {
         wantsLayer = true
-        layer?.masksToBounds = true
+        layer?.masksToBounds = false
         layer?.borderWidth = 1
         layer?.backgroundColor = NSColor.clear.cgColor
         glossLayer.colors = [
@@ -339,9 +386,13 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     private static let pressedScale: CGFloat = 0.98
 
     private let cardView = AppearanceAwareContainerView()
+    private let hoverOutlineView = NSView()
     private let previewContainer = NSView()
     private let previewImageView = NSImageView()
+    private let overlayBarShadowView = NSView()
     private let overlayBar = SteamWorkshopGlassBarView()
+    private let downloadProgressTrackView = NSView()
+    private let downloadProgressFillView = NSView()
     private let detailButton = SteamWorkshopOverlayIconButton()
     private let titleMarqueeView = SteamWorkshopMarqueeTextView()
     private let statusBadgeButton = SteamWorkshopOverlayIconButton()
@@ -355,11 +406,14 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     private var onSetAsWallpaper: (() -> Void)?
     private var onCancelDownload: (() -> Void)?
     private var currentActionKind: ActionKind = .download
+    private var currentDownloadProgressFraction: Double?
+    private var prefersCircularPlayBadge = false
     private var trackingAreaRef: NSTrackingArea?
     private var isHovering = false
     private var isPressingCard = false
     private var currentCardScale: CGFloat = 1.0
     private var currentBarVisibility = false
+    private var isHoverOutlineVisible = false
 
     private enum ActionKind {
         case download
@@ -372,15 +426,18 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         static let cardCornerRadius: CGFloat = 14
         static let referenceCardWidth: CGFloat = 250
         static let cardInset: CGFloat = 2
-        static let barHorizontalInset: CGFloat = 12
+        static let barHorizontalInset: CGFloat = 8
         static let barBottomInset: CGFloat = 11
         static let hoverLift: CGFloat = 2
         static let barHeight: CGFloat = 34
         static let iconButtonSize: CGFloat = 30
         static let statusBadgeSize: CGFloat = 30
-        static let barEdgeInset: CGFloat = 6
-        static let barSpacing: CGFloat = 5
-        static let marqueeSideInset: CGFloat = 4
+        static let barEdgeInset: CGFloat = 8
+        static let barSpacing: CGFloat = 8
+        static let marqueeSideInset: CGFloat = 2
+        static let minBarCornerInset: CGFloat = 4
+        static let progressHeight: CGFloat = 4
+        static let progressBottomSpacing: CGFloat = 8
     }
 
     private struct Metrics {
@@ -418,6 +475,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         currentPreviewURL = nil
         currentTitleText = ""
         titleMarqueeView.text = ""
+        currentDownloadProgressFraction = nil
         previewImageView.image = nil
         onOpen = nil
         onAuthor = nil
@@ -425,12 +483,15 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         onSetAsWallpaper = nil
         onCancelDownload = nil
         currentActionKind = .download
+        prefersCircularPlayBadge = false
         isHovering = false
         isPressingCard = false
         currentCardScale = 1.0
         currentBarVisibility = false
+        isHoverOutlineVisible = false
         cardView.layer?.transform = CATransform3DIdentity
         overlayBar.alphaValue = 0
+        hoverOutlineView.alphaValue = 0
         titleMarqueeView.setActive(false)
         refreshThemeAwareAppearance()
     }
@@ -438,6 +499,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     func configure(
         item: SteamWorkshopBrowserItem,
         downloadRecord: SteamWorkshopDownloadRecord?,
+        downloadProgressFraction: Double? = nil,
         downloadProgressText: String?,
         isDownloading: Bool,
         isDownloaded: Bool,
@@ -453,9 +515,11 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         self.onDownload = onDownload
         self.onSetAsWallpaper = onSetAsWallpaper
         self.onCancelDownload = onCancelDownload
+        prefersCircularPlayBadge = false
         applyContent(
             item: item,
             downloadRecord: downloadRecord,
+            downloadProgressFraction: downloadProgressFraction,
             downloadProgressText: downloadProgressText,
             isDownloading: isDownloading,
             isDownloaded: isDownloaded,
@@ -467,6 +531,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     func configureMetadataOnly(
         item: SteamWorkshopBrowserItem,
         downloadRecord: SteamWorkshopDownloadRecord?,
+        downloadProgressFraction: Double? = nil,
         downloadProgressText: String?,
         isDownloading: Bool,
         isDownloaded: Bool,
@@ -482,9 +547,11 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         self.onDownload = onDownload
         self.onSetAsWallpaper = onSetAsWallpaper
         self.onCancelDownload = onCancelDownload
+        prefersCircularPlayBadge = false
         applyContent(
             item: item,
             downloadRecord: downloadRecord,
+            downloadProgressFraction: downloadProgressFraction,
             downloadProgressText: downloadProgressText,
             isDownloading: isDownloading,
             isDownloaded: isDownloaded,
@@ -504,15 +571,29 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         applyMetrics(metrics)
 
         previewContainer.frame = cardView.bounds
+        hoverOutlineView.frame = cardView.bounds
         updatePreviewImageFrame()
 
         let barWidth = max(0, cardView.bounds.width - metrics.barHorizontalInset * 2)
-        overlayBar.frame = CGRect(
+        let barFrame = CGRect(
             x: metrics.barHorizontalInset,
             y: metrics.barBottomInset,
             width: barWidth,
             height: metrics.barHeight
         )
+        let progressFrame = CGRect(
+            x: metrics.barHorizontalInset,
+            y: max(
+                metrics.barBottomInset + metrics.barHeight + Layout.progressBottomSpacing,
+                metrics.barBottomInset
+            ),
+            width: barWidth,
+            height: Layout.progressHeight
+        )
+        overlayBarShadowView.frame = barFrame
+        overlayBar.frame = barFrame
+        downloadProgressTrackView.frame = progressFrame
+        updateDownloadProgressFrame()
 
         let iconSize = metrics.iconButtonSize
         let barMidY = floor((overlayBar.bounds.height - iconSize) * 0.5)
@@ -560,25 +641,21 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     }
 
     override func mouseDown(with event: NSEvent) {
-        let localPoint = view.convert(event.locationInWindow, from: nil)
-        if view.bounds.contains(localPoint) {
-            isHovering = true
-            applyPressedState(true)
-        }
         super.mouseDown(with: event)
-        applyPressedState(false)
         syncHoverState(with: event, animated: true)
     }
 
     private func applyContent(
         item: SteamWorkshopBrowserItem,
         downloadRecord: SteamWorkshopDownloadRecord?,
+        downloadProgressFraction: Double?,
         downloadProgressText: String?,
         isDownloading: Bool,
         isDownloaded: Bool,
         isKeyboardFocused: Bool
     ) {
         currentTitleText = item.title
+        currentDownloadProgressFraction = isDownloading ? downloadProgressFraction : nil
         titleMarqueeView.text = item.title
         detailButton.setAccessibilityLabel("查看详情：\(item.title)")
 
@@ -593,8 +670,9 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             progressText: downloadProgressText
         )
 
-        titleMarqueeView.setActive(isHovering)
+        titleMarqueeView.setActive(true)
         refreshThemeAwareAppearance()
+        updateDownloadProgressFrame()
         if view.window != nil {
             applyHoverStyle(animated: false)
         }
@@ -628,19 +706,19 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
 
         switch actionKind {
         case .download:
-            symbolName = "arrow.down"
+            symbolName = "archivebox"
             tintColor = .white
             accessibilityLabel = "下载：\(itemTitle)"
         case .cancel:
             symbolName = "hourglass"
-            tintColor = .white
+            tintColor = .systemBlue
             accessibilityLabel = progressText?.isEmpty == false
                 ? "取消下载：\(itemTitle)，当前进度 \(progressText!)"
                 : "取消下载：\(itemTitle)"
         case .setAsWallpaper:
-            symbolName = "checkmark"
+            symbolName = prefersCircularPlayBadge ? "play.fill" : "checkmark"
             tintColor = .white
-            accessibilityLabel = "设为壁纸：\(itemTitle)"
+            accessibilityLabel = prefersCircularPlayBadge ? "播放：\(itemTitle)" : "设为壁纸：\(itemTitle)"
         case .retry:
             symbolName = "exclamationmark"
             tintColor = .white
@@ -673,26 +751,37 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     }
 
     private func applyMetrics(_ metrics: Metrics) {
-        let targetBarRadius = Layout.cardCornerRadius
+        let targetBarRadius = max(
+            8,
+            min(Layout.cardCornerRadius, floor((metrics.barHeight - Layout.minBarCornerInset) * 0.5))
+        )
         if abs((overlayBar.layer?.cornerRadius ?? 0) - targetBarRadius) > 0.001 {
             overlayBar.layer?.cornerRadius = targetBarRadius
         }
+        overlayBarShadowView.layer?.cornerRadius = targetBarRadius
+        overlayBarShadowView.layer?.shadowPath = CGPath(
+            roundedRect: overlayBarShadowView.bounds,
+            cornerWidth: targetBarRadius,
+            cornerHeight: targetBarRadius,
+            transform: nil
+        )
         let targetButtonRadius = max(8, min(12, Layout.cardCornerRadius - 1))
         if abs(detailButton.cornerRadius - targetButtonRadius) > 0.001 {
             detailButton.cornerRadius = targetButtonRadius
         }
-        let targetBadgeRadius = targetButtonRadius
+        let targetBadgeRadius = prefersCircularPlayBadge
+            ? floor(metrics.badgeSize * 0.5)
+            : targetButtonRadius
         if abs(statusBadgeButton.cornerRadius - targetBadgeRadius) > 0.001 {
             statusBadgeButton.cornerRadius = targetBadgeRadius
         }
         if abs(titleMarqueeView.font.pointSize - metrics.titleFont.pointSize) > 0.001 {
             titleMarqueeView.font = metrics.titleFont
         }
-        let overlaySymbolConfig = NSImage.SymbolConfiguration(pointSize: max(15, metrics.iconButtonSize * 0.56), weight: .medium)
+        let overlaySymbolConfig = NSImage.SymbolConfiguration(pointSize: max(11, metrics.iconButtonSize * 0.56), weight: .medium)
         detailButton.contentTintColor = detailButton.iconTintColor
         detailButton.image = detailButton.image?.withSymbolConfiguration(overlaySymbolConfig)
-        let badgeSymbolConfig = NSImage.SymbolConfiguration(pointSize: max(15, metrics.badgeSize * 0.54), weight: .semibold)
-        statusBadgeButton.image = statusBadgeButton.image?.withSymbolConfiguration(badgeSymbolConfig)
+        statusBadgeButton.image = statusBadgeButton.image?.withSymbolConfiguration(overlaySymbolConfig)
     }
 
     private func refreshTrackingArea() {
@@ -731,10 +820,34 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         previewContainer.layer?.masksToBounds = true
         cardView.addSubview(previewContainer)
 
+        hoverOutlineView.wantsLayer = true
+        hoverOutlineView.layer?.cornerRadius = Layout.cardCornerRadius
+        hoverOutlineView.layer?.borderWidth = 1
+        hoverOutlineView.layer?.backgroundColor = NSColor.clear.cgColor
+        hoverOutlineView.layer?.masksToBounds = true
+        hoverOutlineView.alphaValue = 0
+        cardView.addSubview(hoverOutlineView)
+
         previewImageView.imageScaling = .scaleProportionallyUpOrDown
         previewImageView.imageAlignment = .alignCenter
         previewImageView.animates = true
         previewContainer.addSubview(previewImageView)
+
+        downloadProgressTrackView.wantsLayer = true
+        downloadProgressTrackView.layer?.masksToBounds = true
+        cardView.addSubview(downloadProgressTrackView)
+
+        downloadProgressFillView.wantsLayer = true
+        downloadProgressFillView.layer?.masksToBounds = true
+        downloadProgressTrackView.addSubview(downloadProgressFillView)
+
+        overlayBarShadowView.wantsLayer = true
+        overlayBarShadowView.layer?.backgroundColor = NSColor.clear.cgColor
+        overlayBarShadowView.layer?.shadowColor = NSColor.black.cgColor
+        overlayBarShadowView.layer?.shadowOpacity = 0.16
+        overlayBarShadowView.layer?.shadowRadius = 20
+        overlayBarShadowView.layer?.shadowOffset = CGSize(width: 0, height: -1)
+        cardView.addSubview(overlayBarShadowView)
 
         overlayBar.alphaValue = 0
         overlayBar.wantsLayer = true
@@ -763,6 +876,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         let fixedBorder = isDarkMode
             ? NSColor(calibratedWhite: 0.18, alpha: isHovering ? 0.18 : 0.14)
             : NSColor(calibratedWhite: 1.0, alpha: isHovering ? 0.22 : 0.18)
+        let hoverOutlineColor = NSColor.white.withAlphaComponent(isDarkMode ? 0.56 : 0.72)
 
         layer.backgroundColor = NSColor.clear.cgColor
         let ringColor: NSColor
@@ -775,17 +889,32 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         layer.shadowOpacity = isHovering ? 0.05 : 0.025
         layer.shadowRadius = isHovering ? 7 : 6
         layer.shadowOffset = CGSize(width: 0, height: -1)
+        hoverOutlineView.layer?.borderColor = hoverOutlineColor.cgColor
 
         previewContainer.layer?.backgroundColor = NSColor.clear.cgColor
 
         overlayBar.appearance = NSAppearance(named: isDarkMode ? .darkAqua : .aqua)
-        overlayBar.alphaValue = currentBarVisibility ? 0.90 : 0
-        overlayBar.layer?.shadowColor = NSColor.black.cgColor
+        overlayBar.alphaValue = currentBarVisibility ? 0.78 : 0
         overlayBar.layer?.borderColor = fixedBorder.cgColor
         overlayBar.layer?.borderWidth = 0.8
-        overlayBar.layer?.shadowOpacity = 0.015
-        overlayBar.layer?.shadowRadius = 2
-        overlayBar.layer?.shadowOffset = .zero
+        overlayBar.layer?.shadowOpacity = 0
+        overlayBarShadowView.layer?.shadowOpacity = currentBarVisibility ? 0.11 : 0.08
+        overlayBarShadowView.layer?.shadowRadius = 18
+        overlayBarShadowView.layer?.shadowOffset = CGSize(width: 0, height: -1)
+
+        let progressVisible = currentDownloadProgressFraction != nil
+        let progressTrackColor = isDarkMode
+            ? NSColor.white.withAlphaComponent(0.12)
+            : NSColor.black.withAlphaComponent(0.12)
+        let progressFillColor = isDarkMode
+            ? NSColor.systemBlue.withAlphaComponent(0.94)
+            : NSColor.systemBlue.withAlphaComponent(0.84)
+        downloadProgressTrackView.layer?.backgroundColor = progressTrackColor.cgColor
+        downloadProgressTrackView.layer?.cornerRadius = Layout.progressHeight * 0.5
+        downloadProgressFillView.layer?.backgroundColor = progressFillColor.cgColor
+        downloadProgressFillView.layer?.cornerRadius = Layout.progressHeight * 0.5
+        downloadProgressTrackView.alphaValue = progressVisible ? 1 : 0
+        downloadProgressTrackView.isHidden = !progressVisible
 
         detailButton.normalBackgroundColor = .clear
         detailButton.hoverBackgroundColor = .clear
@@ -812,8 +941,28 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         statusBadgeButton.pressedBackgroundColor = .clear
         statusBadgeButton.borderColor = .clear
         statusBadgeButton.borderWidth = 0
-        statusBadgeButton.iconTintColor = fixedForeground
+        switch currentActionKind {
+        case .cancel:
+            statusBadgeButton.iconTintColor = NSColor.systemBlue.withAlphaComponent(isDarkMode ? 0.96 : 0.92)
+        default:
+            statusBadgeButton.iconTintColor = fixedForeground
+        }
         statusBadgeButton.appearance = overlayBar.appearance
+    }
+
+    private func updateDownloadProgressFrame() {
+        let fraction = min(max(currentDownloadProgressFraction ?? 0, 0), 1)
+        let width = downloadProgressTrackView.bounds.width
+        guard width.isFinite, width > 0 else {
+            downloadProgressFillView.frame = .zero
+            return
+        }
+        downloadProgressFillView.frame = CGRect(
+            x: 0,
+            y: 0,
+            width: max(Layout.progressHeight, floor(width * fraction)),
+            height: downloadProgressTrackView.bounds.height
+        )
     }
 
     private func applyHoverStyle(animated: Bool) {
@@ -825,21 +974,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             targetScale = 1.0
         }
 
-        titleMarqueeView.setActive(shouldRevealBar)
         refreshThemeAwareAppearance()
-
-        guard animated else {
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            cardView.layer?.transform = CATransform3DMakeScale(targetScale, targetScale, 1)
-            overlayBar.alphaValue = shouldRevealBar ? 1 : 0
-            overlayBar.layer?.transform = CATransform3DMakeTranslation(0, shouldRevealBar ? 0 : 4, 0)
-            CATransaction.commit()
-            currentCardScale = targetScale
-            currentBarVisibility = shouldRevealBar
-            return
-        }
-
         let duration = shouldRevealBar
             ? UIInteractionAnimation.cardHoverExpandDuration
             : UIInteractionAnimation.cardHoverCollapseDuration
@@ -847,19 +982,35 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             ? UIInteractionAnimation.cardEnterTiming
             : UIInteractionAnimation.cardExitTiming
 
+        guard animated else {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            cardView.layer?.transform = CATransform3DMakeScale(targetScale, targetScale, 1)
+            overlayBar.alphaValue = shouldRevealBar ? 0.82 : 0
+            overlayBar.layer?.transform = CATransform3DMakeTranslation(0, shouldRevealBar ? 0 : 4, 0)
+            CATransaction.commit()
+            hoverOutlineView.alphaValue = shouldRevealBar ? 1 : 0
+            currentCardScale = targetScale
+            currentBarVisibility = shouldRevealBar
+            isHoverOutlineVisible = shouldRevealBar
+            return
+        }
+
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             context.timingFunction = timing
             self.cardView.animator().alphaValue = 1
-            self.overlayBar.animator().alphaValue = shouldRevealBar ? 1 : 0
+            self.overlayBar.animator().alphaValue = shouldRevealBar ? 0.82 : 0
+            self.hoverOutlineView.animator().alphaValue = shouldRevealBar ? 1 : 0
         }
 
         applyCardTransform(targetScale: targetScale, duration: duration, timing: timing)
         applyBarTransform(isVisible: shouldRevealBar, duration: duration, timing: timing)
         currentBarVisibility = shouldRevealBar
+        isHoverOutlineVisible = shouldRevealBar
     }
 
-    private func applyPressedState(_ pressed: Bool) {
+    func applyPressedState(_ pressed: Bool) {
         guard isPressingCard != pressed else { return }
         isPressingCard = pressed
         guard isHovering else { return }
@@ -1007,6 +1158,20 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             onCancelDownload?()
         case .setAsWallpaper:
             onSetAsWallpaper?()
+        }
+    }
+
+    func setPrefersCircularPlayBadge(_ prefersCircularPlayBadge: Bool) {
+        guard self.prefersCircularPlayBadge != prefersCircularPlayBadge else { return }
+        self.prefersCircularPlayBadge = prefersCircularPlayBadge
+        applyStatusBadgeAppearance(
+            actionKind: currentActionKind,
+            itemTitle: currentTitleText,
+            progressText: nil
+        )
+        if view.window != nil {
+            refreshThemeAwareAppearance()
+            view.needsLayout = true
         }
     }
 }

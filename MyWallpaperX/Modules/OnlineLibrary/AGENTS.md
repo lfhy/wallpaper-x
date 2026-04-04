@@ -6,9 +6,10 @@
 ## 当前模块事实
 - 核心服务是 `OnlineLibraryService.shared`
 - 模块包含浏览页与已下载项页两个子页面
-- 已下载项页面通过 `OnlineDownloadsBridge` 接入菜单、快捷键、QuickLook 与多选
+- 已下载项页面通过 `OnlineDownloadsBridge` 接入菜单、快捷键、QuickLook、多选与 Inspector 选中同步
 - 在线库自身不允许直接依赖 `WallpaperManager`
 - “设为壁纸”必须通过 `.onlineVideoReadyToPlay` 通知，由 `MainWindowCoordinator` 中转到视频库
+- 当前统一 Inspector 仅接入已下载项页面，浏览页不承载 QuickLook / Inspector 本地详情
 
 ## 统一强制规则
 1. 禁止跨模块调用
@@ -19,9 +20,9 @@
 6. 修改必须是最小变更，禁止整文件重写
 
 ## 角色职责
-- 维护在线图库搜索、分页、下载、已下载管理、预览与模块内工具栏状态
+- 维护在线图库搜索、分页、下载、已下载管理、预览、Inspector 与模块内工具栏状态
 - 保持浏览页与已下载项页的行为一致，并遵守现有通知中转边界
-- 在模块内处理 `OnlineDownloadsBridge`、下载项 QuickLook 与选择状态
+- 在模块内处理 `OnlineDownloadsBridge`、下载项 QuickLook、Inspector 与选择状态
 
 ## 权限范围
 允许：
@@ -88,6 +89,7 @@ OnlineLibrary Module Agent 接收输入时，至少应包含：
 【自检】
 - 是否仍通过 Notification 与视频库通信：
 - 是否影响浏览页 / 已下载项页切换：
+- 是否破坏已下载项 InspectorHost 接入：
 - 是否需要 Protocol Steward 同步公共层：
 ```
 

@@ -84,7 +84,7 @@ final class SILGridContainerView: NSView, ModuleFocusable {
     }()
 
     // MARK: - 状态
-    private let thumbnailCache = ThumbnailCache(label: "com.mywallpaper.sil.thumbnail", countLimit: 180)
+    private let thumbnailCache = SILThumbnailStore.sharedCache
     var wallpapersByID: [String: SILWallpaper] = [:]
     /// 当前标签上下文；nil 表示「我的图片」全库，由外部 SILBridgeView.updateNSView 写入
     var currentSILTag: String? = nil

@@ -30,6 +30,8 @@ final class SteamWorkshopService: ObservableObject {
         static let detailCacheTTL: TimeInterval = 60 * 60 * 24
         static let defaultsLastUsername = "SteamWorkshop.lastUsername"
         static let defaultsLastAuthenticatedAt = "SteamWorkshop.lastAuthenticatedAt"
+        static let authProbeCacheTTL: TimeInterval = 60 * 15
+        static let authProbeTimeout: TimeInterval = 20
         static let requiredBundledItems = [
             "steamcmd.sh",
             "steamcmd",
@@ -105,6 +107,7 @@ final class SteamWorkshopService: ObservableObject {
     @Published var isPreparingRuntime = false
     @Published var authStatusMessage: String = "首次进入请登录 Steam，软件会使用随 App 打包的 SteamCMD 并保留登录态。"
     @Published var authError: String?
+    @Published var authSessionState: SteamWorkshopAuthSessionState = .unknown
     @Published var steamRuntimeVersion: String = "未检测"
     @Published var steamRuntimeUpdateStatus: String = "当前使用 App 内置 SteamCMD 基线版本。"
     @Published var steamUsername: String = ""
@@ -133,6 +136,7 @@ final class SteamWorkshopService: ObservableObject {
     var loginBootstrapTimeoutTask: Task<Void, Never>?
     var loginSessionID: String = ""
     var pendingDownloadRequest: SteamWorkshopPendingDownloadRequest?
+    var lastSuccessfulSessionValidationAt: Date?
     var activeDownloadProcess: Process?
     var activeDownloadPipe: Pipe?
     var activeDownloadMonitorTask: Task<Void, Never>?
@@ -226,6 +230,14 @@ final class SteamWorkshopService: ObservableObject {
             .appendingPathComponent(Constants.workshopAppID, isDirectory: true)
     }
 
+    var stagingWorkshopDownloadsRootURL: URL {
+        runtimeInstallRootURL
+            .appendingPathComponent("steamapps", isDirectory: true)
+            .appendingPathComponent("workshop", isDirectory: true)
+            .appendingPathComponent("downloads", isDirectory: true)
+            .appendingPathComponent(Constants.workshopAppID, isDirectory: true)
+    }
+
     var libraryRootURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Movies", isDirectory: true)
@@ -259,6 +271,7 @@ final class SteamWorkshopService: ObservableObject {
             || $0.description.localizedLowercase.contains(normalized)
             || $0.tags.contains(where: { $0.localizedLowercase.contains(normalized) })
             || $0.id.localizedLowercase.contains(normalized)
+            || $0.browserItem?.author.localizedLowercase.contains(normalized) == true
         }
     }
 
@@ -863,8 +876,17 @@ final class SteamWorkshopService: ObservableObject {
             || lowered.contains("logged in elsewhere")
             || lowered.contains("please use force_install_dir before logon")
             || lowered.contains("steam guard")
-            || lowered.contains("access denied")
-            || lowered.contains("this account")
+            || lowered.contains("please enter your password")
+    }
+
+    func outputIndicatesAccessRestriction(_ output: String) -> Bool {
+        let lowered = output.localizedLowercase
+        return lowered.contains("access denied")
+            || lowered.contains("private")
+            || lowered.contains("friends only")
+            || lowered.contains("permission")
+            || lowered.contains("not available")
+            || lowered.contains("failed to download item")
     }
 
     private func loadCachedBrowserItemsIfPossible() {
@@ -1275,6 +1297,10 @@ final class SteamWorkshopService: ObservableObject {
         detailCacheDirectoryURL().appendingPathComponent("\(id).json")
     }
 
+    static func downloadMetadataFileURL(for directory: URL) -> URL {
+        directory.appendingPathComponent(".mywallpaperx-steam-metadata.json")
+    }
+
     static func loadDetailCache(id: String) -> SteamWorkshopBrowserItem? {
         let url = detailCacheFileURL(id: id)
         guard let data = try? Data(contentsOf: url),
@@ -1308,6 +1334,7 @@ final class SteamWorkshopService: ObservableObject {
         let tags = project?.tags ?? []
         let sizeText = videoURL.flatMap { fileSizeText(for: $0) } ?? "未知大小"
         let identifier = project?.workshopid ?? directory.lastPathComponent
+        let browserItem = loadDownloadMetadataItem(at: directory, id: identifier)
 
         return SteamWorkshopDownloadRecord(
             id: identifier,
@@ -1319,7 +1346,8 @@ final class SteamWorkshopService: ObservableObject {
             videoURL: videoURL,
             updatedAt: updatedAt,
             sizeText: sizeText,
-            status: .ready
+            status: .ready,
+            browserItem: browserItem
         )
     }
 
@@ -1365,7 +1393,8 @@ final class SteamWorkshopService: ObservableObject {
                 videoURL: previous.videoURL,
                 updatedAt: Date(),
                 sizeText: sizeText ?? previous.sizeText,
-                status: status
+                status: status,
+                browserItem: previous.browserItem
             )
             return
         }
@@ -1382,10 +1411,30 @@ final class SteamWorkshopService: ObservableObject {
                 videoURL: nil,
                 updatedAt: Date(),
                 sizeText: sizeText ?? "等待下载",
-                status: status
+                status: status,
+                browserItem: browserItemForDownload(id: id)
             ),
             at: 0
         )
+    }
+
+    private func loadDownloadMetadataItem(at directory: URL, id: String) -> SteamWorkshopBrowserItem? {
+        let metadataURL = Self.downloadMetadataFileURL(for: directory)
+        if let data = try? Data(contentsOf: metadataURL),
+           let snapshot = try? JSONDecoder().decode(SteamWorkshopDownloadMetadataSnapshot.self, from: data) {
+            return snapshot.item
+        }
+        return browserItemForDownload(id: id)
+    }
+
+    func browserItemForDownload(id: String) -> SteamWorkshopBrowserItem? {
+        if let selectedBrowserItem, selectedBrowserItem.id == id {
+            return selectedBrowserItem
+        }
+        if let browserItem = browserItems.first(where: { $0.id == id }) {
+            return browserItem
+        }
+        return Self.loadDetailCache(id: id)
     }
 
     private static func cachedItemNeedsHydration(for stub: SteamWorkshopBrowseStub) -> Bool {

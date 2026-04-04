@@ -270,13 +270,12 @@ struct SteamWorkshopItemDetailSheet: View {
                 .frame(maxWidth: .infinity)
 
             Button {
-                requestInspectorClose()
-                service.showAuthorWorkshop(for: currentItem)
+                service.openAuthorProfilePage(for: currentItem)
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "person.crop.circle.fill")
                         .font(.system(size: 14, weight: .semibold))
-                    Text("作者工坊")
+                    Text("作者主页")
                         .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity)

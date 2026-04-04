@@ -46,6 +46,11 @@ struct SteamWorkshopProject: Decodable {
     let type: String?
 }
 
+struct SteamWorkshopDownloadMetadataSnapshot: Codable {
+    let fetchedAt: Date
+    let item: SteamWorkshopBrowserItem
+}
+
 struct SteamWorkshopDetailParseResult {
     let title: String
     let author: String

@@ -11,6 +11,13 @@ import Combine
 import Foundation
 import UniformTypeIdentifiers
 
+enum SILThumbnailStore {
+    static let sharedCache = ThumbnailCache(
+        label: "com.mywallpaper.sil.thumbnail",
+        countLimit: 180
+    )
+}
+
 // MARK: - 数据模型
 
 struct SILWallpaper: Identifiable, Codable, Hashable {

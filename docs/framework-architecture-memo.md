@@ -1,6 +1,6 @@
 # MyWallpaperX 框架架构备忘
 
-> 最后更新：2026-04-03
+> 最后更新：2026-04-04
 > 基准 Git 分支：`dev`
 
 本备忘录作为后续构建唯一参考。如有不合理之处可与用户讨论后修正。
@@ -20,7 +20,7 @@ MyWallpaperX/
 │   ├── Modules/
 │   │   ├── VideoLibrary/       ← 已完成，其他模块的实现标准
 │   │   ├── StaticImageLibrary/ ← 已完成
-│   │   ├── OnlineLibrary/      ← 已完成
+│   │   ├── OnlineLibrary/      ← 已完成（Pixabay 在线库，以下可简称“在线库”）
 │   │   └── SteamWorkshop/      ← 已接入（创意工坊浏览/下载模块，内嵌 Workshop + steamcmd）
 │   ├── Resources/Videos/
 │   ├── Shared/
@@ -80,7 +80,7 @@ App    → Shell、Core/System、Shared（不直接引用模块内部类型）
 
 **子页面归并规范：** 若新节点属于某模块的子页面（而非独立模块），不需要新增 `ActiveModule` case。在 `syncManagerSelection` 中将该节点的 `newModule` 归并到父模块，并在 `isXxx` 条件里同时包含父节点和子节点，确保工具栏/菜单/快捷键路由与父模块一致。
 
-示例（在线库已下载项）：
+示例（Pixabay 在线库已下载项）：
 ```swift
 let isOnline = item == .onlineLibrary || item == .onlineDownloads
 case .onlineDownloads: newModule = .onlineLibrary  // 子页面归并到父模块
@@ -100,12 +100,12 @@ case .steamDownloads: newModule = .steamWorkshop
 1. **库**（`.library`）：我的视频 → 特别喜爱 → 最近使用
 2. **标签**（`.tags`）：视频库标签，支持拖拽排序
 3. **图片壁纸**（`.images`）：我的图片（总库）+ 图片库标签，支持拖拽排序
-4. **在线**（`.online`）：在线壁纸、已下载项
-   - `onlineLibrary`：在线图库浏览页
-   - `onlineDownloads`：已下载项管理页（在线库子页面，`activeModule` 归并为 `.onlineLibrary`）
-5. **Steam**（`.steam`）：Steam 创意工坊、Steam 下载页
+4. **Steam**（`.steam`）：Steam 创意工坊、Steam 下载页
    - `steamWorkshop`：Steam 创意工坊浏览页
    - `steamDownloads`：Steam 下载页（Steam 子页面，`activeModule` 归并为 `.steamWorkshop`）
+5. **在线**（`.online`）：Pixabay 在线库、已下载项
+   - `onlineLibrary`：Pixabay 在线库浏览页
+   - `onlineDownloads`：已下载项管理页（Pixabay 在线库子页面，`activeModule` 归并为 `.onlineLibrary`）
 6. **其他**（`.others`）：设置（始终最底部）
 
 **侧边栏节点计数规范：**
@@ -157,7 +157,7 @@ func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
 
 **当前菜单接入原则（新模块接入时参考）：**
 - 视频库与图片库接入完整菜单集。
-- 在线库浏览页只接入搜索与刷新；已下载项页面通过 Bridge 接入信息、多选、全选、删除、查看文件、预览、设为壁纸。
+- Pixabay 在线库浏览页只接入搜索与刷新；已下载项页面通过 Bridge 接入信息、多选、全选、删除、查看文件、预览、设为壁纸。
 - Steam 当前只接入搜索、缩放与“查看文件（打开下载目录）”；不接入菜单多选、全选、删除、信息、QuickLook 与 Return 设为壁纸。
 
 **`validateMenuItem` 中导入菜单项处理规范：**
@@ -192,7 +192,7 @@ final class XxxCollectionView: NSCollectionView, GridCollectionViewProtocol {
 
 框选用 `BoxSelectionState`，缩略图用 `ThumbnailCache(label:)`，外观容器用 `AppearanceAwareContainerView`。
 
-⚠️ **特例**（已更新）：OnlineLibrary 已于 2026-03-31 从纯 SwiftUI `LazyVGrid` 迁移到 AppKit `NSCollectionView`（`AppKitOLBrowserGridView` / `AppKitOLBrowserContainerView`），并已接入 `ModuleFocusable`。当前在线库浏览页与已下载项页面均通过容器视图监听 `moduleDidBecomeActive` 自动接管焦点。`BoxSelectionState` 和框选功能在线库暂不需要，不视为违规。
+⚠️ **特例**（已更新）：OnlineLibrary（Pixabay 在线库）已于 2026-03-31 从纯 SwiftUI `LazyVGrid` 迁移到 AppKit `NSCollectionView`（`AppKitOLBrowserGridView` / `AppKitOLBrowserContainerView`），并已接入 `ModuleFocusable`。当前 Pixabay 在线库浏览页与已下载项页面均通过容器视图监听 `moduleDidBecomeActive` 自动接管焦点。`BoxSelectionState` 和框选功能在线库暂不需要，不视为违规。
 
 ⚠️ **Steam 模块当前状态**（2026-04-03）：`SteamWorkshop` 已完成路由、侧边栏、工具栏、菜单与焦点协议接入。浏览页为原生 AppKit 网格，详情采用分阶段补水；登录与下载仍围绕 App 内置 `SteamCMDRuntime.bundle` 中的 `steamcmd.sh`。下载成品统一落地到 `~/Movies/MyWallpaperX/创意工坊`，下载页扫描该目录并保留关键元数据。更细的 Steam 工具栏形态与数据源说明见后文 §六、§十。
 
@@ -209,13 +209,13 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 }
 ```
 
-`moduleDidBecomeActive` 由 Shell 层在模块切换后 **120ms** 延迟发出（给工具栏重建留时间）。在线库已迁移到 AppKit 容器并实现该协议：浏览页与已下载项均可接管焦点。Steam 当前的真实实现仅由两个 AppKit 容器（浏览页与下载页）直接监听该通知并把 first responder 交给内部 `NSCollectionView`，`SteamWorkshopFocusHost` 已经被移除，避免悬置的焦点桥接。纯 SwiftUI 页面若未桥接 AppKit 容器，暂无法接入该协议。
+`moduleDidBecomeActive` 由 Shell 层在模块切换后 **120ms** 延迟发出（给工具栏重建留时间）。Pixabay 在线库已迁移到 AppKit 容器并实现该协议：浏览页与已下载项均可接管焦点。Steam 当前的真实实现仅由两个 AppKit 容器（浏览页与下载页）直接监听该通知并把 first responder 交给内部 `NSCollectionView`，`SteamWorkshopFocusHost` 已经被移除，避免悬置的焦点桥接。纯 SwiftUI 页面若未桥接 AppKit 容器，暂无法接入该协议。
 
 ### 3.7 QuickLook
 
 - 视频库：`QuickLookPreviewController.shared`，Space/ESC 由 `MainWindowController.handleQuickLookKeyDown` 处理
 - 图片库：`SILQuickLookController.shared` + `SILKeyboardHandler.shared`，`activeModule == .staticImageLibrary` 时接管
-- 在线库：浏览页**不接入 QuickLook**；已下载项页面通过 `OLDownloadsQuickLookController` 接入本地预览
+- Pixabay 在线库：浏览页**不接入 QuickLook**；已下载项页面通过 `OLDownloadsQuickLookController` 接入本地预览
 - Steam：**当前不接入 QuickLook**（下载骨架阶段无稳定本地视频索引）
 
 `beginPreviewPanelControl` / `endPreviewPanelControl` 根据 `activeModule` 挂载对应控制器。
@@ -316,8 +316,8 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 - `SteamWorkshop`：已接入统一 `InspectorHost`
 - `VideoLibrary`：已接入统一 `InspectorHost`
 - `StaticImageLibrary`：已接入统一 `InspectorHost`
-- `OnlineLibrary Downloads`：已接入统一 `InspectorHost`
-- `OnlineLibrary Browser`：**尚未纳入本轮**，当前不作为已完成样板统计
+- `OnlineLibrary Downloads`（Pixabay 在线库已下载项）：已接入统一 `InspectorHost`
+- `OnlineLibrary Browser`（Pixabay 在线库浏览页）：**尚未纳入本轮**，当前不作为已完成样板统计
 
 ---
 
@@ -341,13 +341,13 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 **各模块 setAsWallpaper 边界**
 - VideoLibrary：经过 `WallpaperEngine`，支持视频循环播放，是唯一有权发出播放指令的模块
 - StaticImageLibrary：**纯浏览，不提供设置壁纸功能**，不触发任何壁纸设置调用
-- OnlineLibrary：**纯浏览平台资源，自身不调用任何壁纸设置接口，不直接依赖视频库模块**。"设为壁纸"的正确流程：
+- OnlineLibrary（Pixabay 在线库）：**纯浏览平台资源，自身不调用任何壁纸设置接口，不直接依赖视频库模块**。"设为壁纸"的正确流程：
   1. `OnlineLibraryService` 下载视频到本地
   2. 发送 `Notification.Name.onlineVideoReadyToPlay` 通知（`userInfo["localURL": URL]`），定义在 `Shell/ContentViewSupport.swift`
   3. `MainWindowCoordinator.observeOnlineVideoReadyToPlay()` 接收并中转，调用 `WallpaperManager.processImportedVideos(context: .onlinePlayback)`
   4. 视频库静默导入后通过 `setAsWallpaper(_:userInitiated:true)` 直接触发播放（绕过防抖，确保每次点击立即响应）
 
-  **模块间依赖：** OnlineLibrary 只依赖 Foundation（发通知），对 VideoLibrary 零耦合。
+  **模块间依赖：** OnlineLibrary（Pixabay 在线库）只依赖 Foundation（发通知），对 VideoLibrary 零耦合。
 
   ⚠️ **注意**：播放触发使用 `setAsWallpaper(_:userInitiated:true)` 而非 `requestSetAsWallpaper`，绕过防抖和重复路径跳过逻辑，确保每次点击都立即响应。
 
@@ -358,12 +358,12 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 | `.library` | 用户手动导入到视频库 | ✅ 显示导入结果 | ✗ |
 | `.favorites` | 导入并自动收藏 | ✅ 显示导入结果 | ✗ |
 | `.tag(String)` | 导入并自动打标签 | ✅ 显示导入结果 | ✗ |
-| `.onlinePlayback` | 在线库静默下载后导入 | ✗ 跳过弹窗 | ✅ 立即播放 |
+| `.onlinePlayback` | Pixabay 在线库静默下载后导入 | ✗ 跳过弹窗 | ✅ 立即播放 |
 | `.steamPlayback` | Steam 下载页本地视频静默导入 | ✗ 跳过弹窗 | ✅ 立即播放 |
 
 新增 context case 时，必须同步在 `applyContextMetadataIfNeeded` 和 `applyPreparedImportResult` 两处处理。
 
-**UIActionHelper**（`Shell/UIActionHelper.swift`）仅服务视频库。图片库和在线库各自在模块内实现 ActionHelper，不复用此文件。
+**UIActionHelper**（`Shell/UIActionHelper.swift`）仅服务视频库。图片库和 Pixabay 在线库各自在模块内实现 ActionHelper，不复用此文件。
 
 **通知名定义位置**
 - `staticImageLibraryModeDidChange`、`onlineLibraryModeDidChange`：`Shell/ContentViewSupport.swift`
@@ -383,7 +383,7 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 
 | 通知名 | 发出方 | 接收方 | userInfo | 用途 |
 |--------|--------|--------|----------|------|
-| `onlineVideoReadyToPlay` | OnlineLibraryService | MainWindowCoordinator | `["localURL": URL]` | 在线库视频下载完成后，由视频库静默导入并播放 |
+| `onlineVideoReadyToPlay` | OnlineLibraryService | MainWindowCoordinator | `["localURL": URL]` | Pixabay 在线库视频下载完成后，由视频库静默导入并播放 |
 | `steamWorkshopVideoReadyToPlay` | SteamWorkshopService | MainWindowCoordinator | `["localURL": URL]` | Steam 下载页选中本地视频后，由视频库静默导入并播放 |
 
 **模块内部通知（OnlineLibrary，不外漏到 Shell/Shared）：**

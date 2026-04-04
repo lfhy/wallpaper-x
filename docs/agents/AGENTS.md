@@ -84,6 +84,10 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
 - 菜单动态可用性统一走 `AppDelegate.validateMenuItem(_:)`
 - 模块焦点统一走 `moduleDidBecomeActive + ModuleFocusable`
 - 工具栏布局唯一主控是 `VideoLibraryToolbarController`
+- 详情展示已进入统一宿主阶段，Inspector 默认走：
+  - `InspectorHost`
+  - `InspectorHostBridge`
+  - `InspectorHostActions`
 
 如果机器人给出的方案违背这些事实，我就认为它已经偏航。
 
@@ -138,6 +142,7 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
 - 新增一个模块子页面
 - 新增菜单能力并接入校验
 - 新增路由、侧边栏、工具栏、焦点联动
+- 新增或调整统一 Inspector 详情宿主接入
 
 这类任务我要求：
 
@@ -176,6 +181,7 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
 - 菜单校验
 - 工具栏模式切换
 - 焦点接管
+- InspectorHost / InspectorHostBridge 接入
 - 架构文档同步
 
 因为这些东西一旦写错，影响的不是一个功能，而是整个项目的协作秩序。
@@ -188,6 +194,7 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
 - 模块自己的搜索
 - 模块自己的下载状态
 - 模块自己的选择、多选、预览
+- 模块自己的 inspector 内容视图
 
 那我就让对应 `Module Agent` 处理。
 
@@ -199,6 +206,8 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
 
 - 公共层增加通知
 - 模块层接收通知并更新 UI
+- 公共层维护 Inspector 宿主
+- 模块层提供 inspector 内容视图
 
 我不会让一个 Agent 一次全做完。
 

@@ -203,3 +203,10 @@ enum SteamWorkshopAuthenticationPhase: Equatable {
     case awaitingGuardCode
     case authenticated
 }
+
+enum SteamWorkshopAuthSessionState: Equatable {
+    case unknown
+    case valid
+    case expired
+    case authenticating
+}

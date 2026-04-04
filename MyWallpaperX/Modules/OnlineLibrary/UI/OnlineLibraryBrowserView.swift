@@ -156,7 +156,7 @@ struct OnlineLibraryBrowserView: View {
                     VStack(spacing: 12) {
                         Image(systemName: "play.rectangle.on.rectangle")
                             .font(.system(size: 36)).foregroundColor(.secondary)
-                        Text("探索海量免费视频壁纸").foregroundColor(.secondary).font(.system(size: 13))
+                        Text("探索 Pixabay 海量免费视频").foregroundColor(.secondary).font(.system(size: 13))
                         Button("开始浏览") {
                             service.searchWithCurrentContext(order: .popular)
                         }.buttonStyle(.borderedProminent)
@@ -211,7 +211,7 @@ struct OnlineLibraryBrowserView: View {
         VStack(spacing: 20) {
             Image(systemName: "key.fill").font(.system(size: 44)).foregroundColor(.accentColor)
             Text("需要 API Key").font(.system(size: 16, weight: .semibold))
-            Text("请前往 Pixabay 获取免费 API Key，即可开始浏览在线壁纸。")
+            Text("请前往 Pixabay 获取免费 API Key，即可开始浏览 Pixabay 视频。")
                 .font(.system(size: 13)).foregroundColor(.secondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 360)
             Button("前往 Pixabay 获取 API Key") {
@@ -411,7 +411,7 @@ private struct OLDownloadToast: View {
                 Text("下载完成")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(.primary)
-                Text("已保存到 影片/MyWallpaperX/在线图库")
+                Text("已保存到 影片/MyWallpaperX/Pixabay")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
                     .lineLimit(1)

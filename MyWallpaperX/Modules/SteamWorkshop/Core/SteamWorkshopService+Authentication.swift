@@ -1,5 +1,40 @@
 import Foundation
 
+private final class SteamWorkshopProcessCaptureState: @unchecked Sendable {
+    private let lock = NSLock()
+    nonisolated(unsafe) private var combinedOutput = ""
+    nonisolated(unsafe) private var hasResumed = false
+    nonisolated(unsafe) private var timeoutTask: Task<Void, Never>?
+
+    nonisolated func append(_ text: String) {
+        lock.lock()
+        combinedOutput += text
+        lock.unlock()
+    }
+
+    nonisolated func installTimeoutTask(_ task: Task<Void, Never>) {
+        lock.lock()
+        timeoutTask = task
+        lock.unlock()
+    }
+
+    nonisolated func cancelTimeoutTask() {
+        lock.lock()
+        let task = timeoutTask
+        timeoutTask = nil
+        lock.unlock()
+        task?.cancel()
+    }
+
+    nonisolated func finish() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !hasResumed else { return nil }
+        hasResumed = true
+        return combinedOutput
+    }
+}
+
 extension SteamWorkshopService {
     func authenticateUser() {
         Task { @MainActor [weak self] in
@@ -22,6 +57,7 @@ extension SteamWorkshopService {
         cancelActiveLoginSession()
         isAnonymousBrowsing = false
         authPhase = .credentials
+        authSessionState = .authenticating
         isAuthenticating = true
         authError = nil
         authStatusMessage = "正在启动内置 SteamCMD，并向 Steam 发起登录请求…"
@@ -62,11 +98,13 @@ extension SteamWorkshopService {
         guard let inputHandle = loginInputHandle else {
             authError = "登录会话已失效，请重新输入账号和密码。"
             authPhase = .credentials
+            authSessionState = .expired
             isAuthenticating = false
             return
         }
 
         authError = nil
+        authSessionState = .authenticating
         isAuthenticating = true
         authStatusMessage = "正在验证 Steam Guard 令牌…"
         inputHandle.write(Data("\(guardCode)\r".utf8))
@@ -83,6 +121,7 @@ extension SteamWorkshopService {
         requiresLogin = !hasSavedCredentials
         isAnonymousBrowsing = true
         authPhase = .credentials
+        authSessionState = hasSavedCredentials ? .unknown : .expired
         authError = nil
         isAuthenticating = false
         isLoginSheetPresented = false
@@ -96,9 +135,28 @@ extension SteamWorkshopService {
         }
     }
 
+    func clearPendingDownloadRequest() {
+        pendingDownloadRequest = nil
+        if authPhase == .authenticated, hasSavedCredentials {
+            if let lastAuthenticatedAt = defaults.object(forKey: Constants.defaultsLastAuthenticatedAt) as? Date {
+                authStatusMessage = "已检测到上次使用过的 Steam 凭据。下载前会先验证当前会话；如果远端会话已失效，再提示你继续登录。上次成功登录时间：\(lastAuthenticatedAt.formatted(date: .abbreviated, time: .shortened))。"
+            } else {
+                authStatusMessage = "已检测到已保存的 Steam 凭据。下载前会先验证当前会话；如果远端会话失效，再提示继续登录。"
+            }
+        }
+    }
+
     func presentLoginGateImmediately() {
+        if authPhase == .awaitingGuardCode, loginInputHandle != nil {
+            authError = nil
+            isLoginSheetPresented = true
+            authStatusMessage = "Steam 已要求进行 Steam Guard 验证，请输入刚收到的令牌以继续当前登录。"
+            return
+        }
+
         cancelActiveLoginSession()
         authPhase = .credentials
+        authSessionState = hasSavedCredentials ? .unknown : .expired
         isAuthenticating = false
         steamGuardCode = ""
         authError = nil
@@ -147,6 +205,8 @@ extension SteamWorkshopService {
         requiresLogin = true
         isAnonymousBrowsing = true
         authPhase = .credentials
+        authSessionState = .expired
+        lastSuccessfulSessionValidationAt = nil
         isLoginSheetPresented = false
         authError = nil
         authStatusMessage = "已退出当前 Steam 登录态。"
@@ -160,12 +220,14 @@ extension SteamWorkshopService {
         requiresLogin = storedUsername.isEmpty || storedPassword.isEmpty
         isAnonymousBrowsing = requiresLogin
         authPhase = requiresLogin ? .credentials : .authenticated
+        authSessionState = requiresLogin ? .expired : .unknown
+        lastSuccessfulSessionValidationAt = nil
         if requiresLogin {
             authStatusMessage = "当前还没有可复用的 Steam 登录凭据。可以先匿名浏览，需要下载时再登录。"
         } else if let lastAuthenticatedAt = defaults.object(forKey: Constants.defaultsLastAuthenticatedAt) as? Date {
-            authStatusMessage = "已检测到上次成功登录的 Steam 凭据。下载时会优先直接复用；如果远端会话已失效，再提示你重新登录。上次成功登录时间：\(lastAuthenticatedAt.formatted(date: .abbreviated, time: .shortened))。"
+            authStatusMessage = "已检测到上次使用过的 Steam 凭据。下载前会先验证当前会话；如果远端会话已失效，再提示你继续登录。上次成功登录时间：\(lastAuthenticatedAt.formatted(date: .abbreviated, time: .shortened))。"
         } else {
-            authStatusMessage = "已检测到可复用的 Steam 凭据。下载时会优先直接复用；如果远端会话失效，再提示你重新登录。"
+            authStatusMessage = "已检测到已保存的 Steam 凭据。下载前会先验证当前会话；如果远端会话失效，再提示继续登录。"
         }
     }
 
@@ -176,6 +238,8 @@ extension SteamWorkshopService {
         requiresLogin = false
         isAnonymousBrowsing = false
         authPhase = .authenticated
+        authSessionState = .valid
+        lastSuccessfulSessionValidationAt = Date()
     }
 
     var hasSavedCredentials: Bool {
@@ -202,6 +266,7 @@ extension SteamWorkshopService {
                 self.requiresLogin = true
                 self.isAnonymousBrowsing = true
                 self.authPhase = .credentials
+                self.authSessionState = .expired
                 self.authError = error.localizedDescription
                 self.authStatusMessage = "SteamCMD 环境准备失败。"
             }
@@ -225,7 +290,7 @@ extension SteamWorkshopService {
         steamRuntimeUpdateStatus = "当前直接运行 App 内置 SteamCMD 基线版本。后续 SteamCMD 升级将随应用更新一起分发。"
     }
 
-    func runSteamProcess(arguments: [String], stdinText: String? = nil) async throws -> String {
+    func runSteamProcess(arguments: [String], stdinText: String? = nil, timeout: TimeInterval? = nil) async throws -> String {
         let steamRootURL = try resolvedSteamRuntimeExecutionRootURL()
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
@@ -240,21 +305,41 @@ extension SteamWorkshopService {
 
             let inputPipe = Pipe()
             process.standardInput = inputPipe
+            let captureState = SteamWorkshopProcessCaptureState()
+
+            outputPipe.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                guard !data.isEmpty else { return }
+                captureState.append(String(data: data, encoding: .utf8) ?? "")
+            }
 
             process.terminationHandler = { process in
+                outputPipe.fileHandleForReading.readabilityHandler = nil
+                captureState.cancelTimeoutTask()
                 let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
+                captureState.append(String(data: data, encoding: .utf8) ?? "")
+                guard let combinedOutput = captureState.finish() else { return }
                 if process.terminationStatus == 0 {
-                    continuation.resume(returning: output)
+                    continuation.resume(returning: combinedOutput)
                 } else {
                     continuation.resume(throwing: NSError(domain: "SteamWorkshop", code: Int(process.terminationStatus), userInfo: [
-                        NSLocalizedDescriptionKey: output.isEmpty ? "SteamCMD 执行失败，退出码 \(process.terminationStatus)。" : output
+                        NSLocalizedDescriptionKey: combinedOutput.isEmpty ? "SteamCMD 执行失败，退出码 \(process.terminationStatus)。" : combinedOutput
                     ]))
                 }
             }
 
             do {
                 try process.run()
+                if let timeout, timeout > 0 {
+                    let timeoutTask = Task {
+                        try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                        guard !Task.isCancelled else { return }
+                        if process.isRunning {
+                            process.terminate()
+                        }
+                    }
+                    captureState.installTimeoutTask(timeoutTask)
+                }
                 if let stdinText, !stdinText.isEmpty {
                     inputPipe.fileHandleForWriting.write(Data(stdinText.utf8))
                     try? inputPipe.fileHandleForWriting.close()
@@ -263,6 +348,66 @@ extension SteamWorkshopService {
                 continuation.resume(throwing: error)
             }
         }
+    }
+
+    func shouldReuseValidatedSession() -> Bool {
+        guard authSessionState == .valid,
+              let lastSuccessfulSessionValidationAt else { return false }
+        return Date().timeIntervalSince(lastSuccessfulSessionValidationAt) < Constants.authProbeCacheTTL
+    }
+
+    func validateSavedAuthenticationSessionIfNeeded(force: Bool = false) async -> Bool {
+        guard hasSavedCredentials else {
+            authSessionState = .expired
+            return false
+        }
+        if !force, shouldReuseValidatedSession() {
+            return true
+        }
+
+        authSessionState = .authenticating
+        authStatusMessage = "正在验证当前 Steam 会话…"
+        let username = steamUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        do {
+            let output = try await runSteamProcess(
+                arguments: ["+login", username, "+quit"],
+                timeout: Constants.authProbeTimeout
+            )
+            let lowered = output.localizedLowercase
+            if outputIndicatesLoginSuccess(lowered) {
+                authSessionState = .valid
+                lastSuccessfulSessionValidationAt = Date()
+                requiresLogin = false
+                authPhase = .authenticated
+                authStatusMessage = "已验证当前 Steam 会话，下载时会直接复用。"
+                return true
+            }
+            if outputRequestsGuardCode(lowered) || outputRequestsPassword(lowered) || outputIndicatesAuthenticationFailure(output) {
+                authSessionState = .expired
+                authStatusMessage = "当前 Steam 会话需要重新验证。请继续输入账号密码，若 Steam 要求，再输入 Guard 令牌。"
+                return false
+            }
+            authSessionState = .unknown
+            authStatusMessage = "暂时无法确认 Steam 会话状态，下载时会继续尝试。"
+            return true
+        } catch {
+            let lowered = error.localizedDescription.localizedLowercase
+            if outputRequestsGuardCode(lowered) || outputRequestsPassword(lowered) || outputIndicatesAuthenticationFailure(error.localizedDescription) {
+                authSessionState = .expired
+                authStatusMessage = "当前 Steam 会话需要重新验证。请继续输入账号密码，若 Steam 要求，再输入 Guard 令牌。"
+                return false
+            }
+            authSessionState = .unknown
+            authStatusMessage = "Steam 会话探测未完成，下载时会继续尝试。"
+            return true
+        }
+    }
+
+    func outputRequestsPassword(_ output: String) -> Bool {
+        output.contains("please enter your password")
+            || output.contains("password:")
+            || output.contains("please enter the account password")
     }
 
     func beginInteractiveSteamLogin(username: String, password: String) {
@@ -389,7 +534,9 @@ extension SteamWorkshopService {
 
         if authPhase != .awaitingGuardCode, outputRequestsGuardCode(lowered) {
             authPhase = .awaitingGuardCode
+            authSessionState = .authenticating
             isAuthenticating = false
+            isLoginSheetPresented = true
             authStatusMessage = "Steam 已要求进行 Steam Guard 验证，请输入刚收到的令牌。"
             return
         }
@@ -437,7 +584,7 @@ extension SteamWorkshopService {
         isAuthenticating = false
         isLoginSheetPresented = false
         authError = nil
-        authStatusMessage = "Steam 登录已建立。当前会记住你的凭据，后续下载会优先直接复用；如果远端会话失效，再提示重新登录。"
+        authStatusMessage = "Steam 登录已建立。当前会记住你的凭据，后续下载前会先验证当前会话；如果远端会话失效，再提示继续登录。"
         loginInputHandle?.write(Data("quit\r".utf8))
         fetchBrowserItems()
         let pendingDownload = pendingDownloadRequest
@@ -459,6 +606,8 @@ extension SteamWorkshopService {
         requiresLogin = true
         isAnonymousBrowsing = true
         authPhase = .credentials
+        authSessionState = .expired
+        lastSuccessfulSessionValidationAt = nil
         isAuthenticating = false
         authError = message.trimmingCharacters(in: .whitespacesAndNewlines)
         authStatusMessage = "Steam 登录失败，请重新输入账号密码后再试。"
@@ -501,10 +650,27 @@ extension SteamWorkshopService {
         loginBootstrapTimeoutTask = nil
     }
 
-    func resetSteamAuthDebugLog() {}
+    func resetSteamAuthDebugLog() {
+        let fileManager = FileManager.default
+        try? fileManager.createDirectory(at: cacheDirectoryURL, withIntermediateDirectories: true)
+        try? Data().write(to: steamAuthDebugLogURL, options: [.atomic])
+    }
 
     func appendSteamAuthDebugLog(_ message: String) {
-        _ = message
+        let fileManager = FileManager.default
+        try? fileManager.createDirectory(at: cacheDirectoryURL, withIntermediateDirectories: true)
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(timestamp)] \(message)\n"
+        let data = Data(line.utf8)
+
+        if fileManager.fileExists(atPath: steamAuthDebugLogURL.path),
+           let handle = try? FileHandle(forWritingTo: steamAuthDebugLogURL) {
+            defer { try? handle.close() }
+            try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+        } else {
+            try? data.write(to: steamAuthDebugLogURL, options: [.atomic])
+        }
     }
 
     func redactedLoginCommand(username: String, password: String) -> String {

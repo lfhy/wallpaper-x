@@ -7,6 +7,7 @@
 - 路由是否同步：`SelectedItem`、`SidebarViews`、`ContentView.syncManagerSelection`
 - 菜单是否同步：`MainWindowCoordinator` 分发与 `AppDelegate.validateMenuItem(_:)` 校验
 - 焦点是否同步：`moduleDidBecomeActive` 与 `ModuleFocusable`
+- InspectorHost 是否同步：宿主通知、bridge 接入、模块详情内容与关闭时序
 - 跨模块行为是否仍走 Notification + Coordinator 中转
 - 框架文档是否同步：`docs/framework-architecture-memo.md`
 - 修复归档是否被误写：`docs/framework-fix-archive.md` 只记录真实已修复缺陷
@@ -21,7 +22,7 @@
 ## 角色职责
 - 审查补丁是否越界
 - 审查是否破坏模块协作协议
-- 审查是否遗漏文档同步、菜单同步、焦点同步
+- 审查是否遗漏文档同步、菜单同步、焦点同步、InspectorHost 同步
 - 对不合理变更给出明确拒绝理由
 
 ## 权限范围
@@ -91,5 +92,6 @@ Gatekeeper 统一输出：
 - 命中跨模块直连：直接 `REJECT`
 - 模块 Agent 改了自己无权修改的公共层：`REJECT`，要求转 `Protocol Steward`
 - 改了公共协议却没同步 `framework-architecture-memo.md`：`REJECT`
+- 改了统一详情宿主接入却没补齐宿主 / bridge / 模块内容三者关系：`REJECT`
 - 没有 diff patch 只有说明文：`REJECT`
 - 想改 `Core/`、`Shared/` 但没有明确批准：`REJECT`

@@ -45,6 +45,17 @@ public struct SteamWorkshopEntryView: View {
 private struct SteamWorkshopBrowserContentView: View {
     @ObservedObject private var service = SteamWorkshopService.shared
 
+    private var pendingDownloadTitle: String? {
+        if let pageTitle = service.pendingDownloadRequest?.pageTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !pageTitle.isEmpty {
+            return pageTitle
+        }
+        if let pending = service.pendingDownloadRequest {
+            return "Workshop #\(pending.id)"
+        }
+        return nil
+    }
+
     var body: some View {
         content
         .task {
@@ -59,7 +70,7 @@ private struct SteamWorkshopBrowserContentView: View {
                     cardID: item.id,
                     title: item.title,
                     subtitle: subtitle,
-                    preferredWidth: 372,
+                    preferredWidth: 356,
                     focusPolicy: .preserveCurrentResponder
                 )
             },
@@ -73,8 +84,32 @@ private struct SteamWorkshopBrowserContentView: View {
         .inspectorHostAutoClose(module: .steamWorkshop) {
             service.dismissItemDetail()
         }
-        .sheet(isPresented: $service.isLoginSheetPresented) {
-            SteamWorkshopLoginSheet()
+        .overlay {
+            if shouldShowAuthBanner {
+                VStack {
+                    SteamWorkshopStatusBanner(
+                        title: authBannerTitle,
+                        message: authBannerMessage,
+                        progressFraction: authBannerProgressFraction,
+                        progressText: authBannerProgressText,
+                        primaryActionTitle: authBannerPrimaryActionTitle,
+                        primaryAction: authBannerPrimaryAction,
+                        secondaryActionTitle: authBannerSecondaryActionTitle,
+                        secondaryAction: authBannerSecondaryAction
+                    )
+                    .padding(.top, 12)
+                    .padding(.horizontal, 16)
+
+                    Spacer()
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .overlay {
+            if service.isLoginSheetPresented {
+                SteamWorkshopLoginOverlay()
+                    .transition(.opacity.animation(.easeOut(duration: 0.16)))
+            }
         }
         .alert("下载失败", isPresented: Binding(
             get: { service.downloadError != nil },
@@ -145,6 +180,82 @@ private struct SteamWorkshopBrowserContentView: View {
         }
     }
 
+    private var shouldShowAuthBanner: Bool {
+        service.authPhase == .awaitingGuardCode
+            || service.authSessionState == .authenticating
+            || pendingDownloadTitle != nil
+            || service.activeDownloadItemID != nil
+    }
+
+    private var authBannerTitle: String {
+        if service.authPhase == .awaitingGuardCode {
+            return "等待 Steam Guard 验证"
+        }
+        if service.authSessionState == .authenticating {
+            return "正在验证 Steam 会话"
+        }
+        if service.activeDownloadItemID != nil {
+            return "下载任务进行中"
+        }
+        return "下载任务待继续"
+    }
+
+    private var authBannerMessage: String {
+        if let pendingDownloadTitle {
+            return "\(service.authStatusMessage)\n登录成功后会自动继续下载：\(pendingDownloadTitle)"
+        }
+        return service.activeDownloadItemID != nil ? service.statusMessage : service.authStatusMessage
+    }
+
+    private var authBannerPrimaryActionTitle: String? {
+        if service.authPhase == .awaitingGuardCode {
+            return "输入 Guard 令牌"
+        }
+        if pendingDownloadTitle != nil || service.authSessionState == .authenticating {
+            return "继续登录"
+        }
+        return nil
+    }
+
+    private var authBannerPrimaryAction: (() -> Void)? {
+        guard authBannerPrimaryActionTitle != nil else { return nil }
+        return {
+            service.presentLoginGate()
+        }
+    }
+
+    private var authBannerSecondaryActionTitle: String? {
+        if pendingDownloadTitle != nil {
+            return "取消待续下载"
+        }
+        if service.activeDownloadItemID != nil {
+            return "取消当前下载"
+        }
+        return nil
+    }
+
+    private var authBannerSecondaryAction: (() -> Void)? {
+        if pendingDownloadTitle != nil {
+            return {
+                service.clearPendingDownloadRequest()
+            }
+        }
+        if service.activeDownloadItemID != nil {
+            return {
+                service.cancelActiveDownload()
+            }
+        }
+        return nil
+    }
+
+    private var authBannerProgressFraction: Double? {
+        service.activeDownloadItemID != nil ? service.activeDownloadProgressFraction : nil
+    }
+
+    private var authBannerProgressText: String? {
+        service.activeDownloadItemID != nil ? service.activeDownloadProgressText : nil
+    }
+
     private var emptyStateMessage: String {
         let trimmedQuery = service.browserQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         if service.isBrowsingAuthorWorkshop,
@@ -158,88 +269,536 @@ private struct SteamWorkshopBrowserContentView: View {
     }
 }
 
-private struct SteamWorkshopLoginSheet: View {
+struct SteamWorkshopStatusBanner: View {
+    let title: String
+    let message: String
+    var progressFraction: Double? = nil
+    var progressText: String? = nil
+    var primaryActionTitle: String? = nil
+    var primaryAction: (() -> Void)? = nil
+    var secondaryActionTitle: String? = nil
+    var secondaryAction: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.primary)
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+            if let progressFraction {
+                ProgressView(value: progressFraction)
+                    .progressViewStyle(.linear)
+                    .controlSize(.small)
+                    .padding(.top, 4)
+            }
+            if let progressText,
+               !progressText.isEmpty {
+                Text(progressText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            if primaryAction != nil || secondaryAction != nil {
+                HStack(spacing: 8) {
+                    if let primaryActionTitle,
+                       let primaryAction {
+                        Button(primaryActionTitle, action: primaryAction)
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                    }
+                    if let secondaryActionTitle,
+                       let secondaryAction {
+                        Button(secondaryActionTitle, action: secondaryAction)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                }
+                .padding(.top, 4)
+            }
+        }
+        .frame(maxWidth: 420, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.regularMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.white.opacity(0.14), lineWidth: 0.8)
+                )
+        )
+        .shadow(color: .black.opacity(0.12), radius: 18, x: 0, y: 10)
+    }
+}
+
+struct SteamWorkshopLoginOverlay: View {
     @ObservedObject private var service = SteamWorkshopService.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(spacing: 10) {
-                Image(systemName: "person.crop.circle.badge.plus")
-                    .font(.system(size: 34))
-                    .foregroundStyle(.secondary)
-                Text("登录 Steam 以启用创意工坊下载")
-                    .font(.system(size: 18, weight: .semibold))
-                Text(service.authStatusMessage)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-
-            VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Steam 用户名")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    TextField("请输入用户名", text: $service.steamUsername)
-                        .textFieldStyle(.roundedBorder)
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Steam 密码")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    SecureField("请输入密码", text: $service.steamPassword)
-                        .textFieldStyle(.roundedBorder)
-                }
-
-                if service.authPhase == .awaitingGuardCode {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Steam Guard 令牌")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                        TextField("请输入邮件或手机 App 收到的令牌", text: $service.steamGuardCode)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                }
-            }
-            .frame(maxWidth: 420)
-
-            HStack(spacing: 12) {
-                if service.authPhase == .awaitingGuardCode {
-                    Button(service.isAuthenticating ? "验证中…" : "验证令牌并进入页面") {
-                        service.submitSteamGuardCode()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(service.isAuthenticating)
-                } else {
-                    Button(service.isPreparingRuntime ? "准备中…" : (service.isAuthenticating ? "登录中…" : "发送登录请求")) {
-                        service.authenticateUser()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(service.isAuthenticating || service.isPreparingRuntime)
-
-                    Button("匿名浏览") {
-                        service.browseAnonymously()
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(service.isAuthenticating || service.isPreparingRuntime)
-                }
-
-                Button("关闭") {
-                    service.isLoginSheetPresented = false
-                }
-                .buttonStyle(.bordered)
-            }
-
-            Text(service.authPhase == .awaitingGuardCode
-                 ? "说明：第一步账号密码已提交，当前正在等待 Steam Guard 验证。令牌通过后才会进入浏览页。"
-                 : "说明：软件会先检查 App 内置的 SteamCMD 运行环境。匿名模式只浏览不下载；登录模式会按 `login 用户名 密码` 发起请求，若 Steam 要求，再继续输入 Guard。")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+        ZStack {
+            SteamWorkshopLoginSheet()
+                .padding(28)
+                .offset(x: -95)
         }
-        .frame(minWidth: 460)
-        .padding(24)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .zIndex(1000)
+    }
+}
+
+private struct SteamWorkshopLoginSheet: View {
+    @ObservedObject private var service = SteamWorkshopService.shared
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var pendingDownloadTitle: String? {
+        if let pageTitle = service.pendingDownloadRequest?.pageTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !pageTitle.isEmpty {
+            return pageTitle
+        }
+        if let pending = service.pendingDownloadRequest {
+            return "Workshop #\(pending.id)"
+        }
+        return nil
+    }
+
+    private var isAwaitingGuard: Bool {
+        service.authPhase == .awaitingGuardCode
+    }
+
+    private var titleText: String {
+        isAwaitingGuard ? "继续完成 Steam 验证" : "登录 Steam 以启用创意工坊下载"
+    }
+
+    private var subtitleText: String {
+        if isAwaitingGuard {
+            return "账号密码已经提交成功，继续输入 Steam Guard 令牌即可完成这次登录。"
+        }
+        return service.authStatusMessage
+    }
+
+    private var footnoteText: String {
+        isAwaitingGuard
+        ? "这里是在续接当前登录流程，不会重新提交账号密码。"
+        : "已保存凭据时，下载前会先验证当前会话；只有会话失效时才会要求继续登录或输入 Guard。"
+    }
+
+    private var primaryTextColor: Color {
+        colorScheme == .dark ? .white.opacity(0.94) : Color.black.opacity(0.80)
+    }
+
+    private var secondaryTextColor: Color {
+        colorScheme == .dark ? .white.opacity(0.72) : Color.black.opacity(0.58)
+    }
+
+    private var chromeStrokeColor: Color {
+        colorScheme == .dark ? .white.opacity(0.20) : .white.opacity(0.52)
+    }
+
+    private var panelOverlayColor: Color {
+        colorScheme == .dark ? Color.black.opacity(0.12) : Color.white.opacity(0.12)
+    }
+
+    var body: some View {
+        VStack(spacing: 18) {
+            VStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(.ultraThinMaterial)
+                        .frame(width: 58, height: 58)
+                    Circle()
+                        .stroke(chromeStrokeColor, lineWidth: 0.8)
+                        .frame(width: 58, height: 58)
+                    Image(systemName: isAwaitingGuard ? "shield.lefthalf.filled.badge.checkmark" : "person.crop.circle.badge.plus")
+                        .font(.system(size: 24, weight: .medium))
+                        .foregroundStyle(primaryTextColor)
+                }
+
+                SteamWorkshopLoginModeBadge(
+                    title: isAwaitingGuard ? "Steam Guard 验证" : "Steam 账号登录",
+                    systemImage: isAwaitingGuard ? "lock.shield" : "sparkles.rectangle.stack"
+                )
+
+                Text(titleText)
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(primaryTextColor)
+                    .multilineTextAlignment(.center)
+
+                Text(subtitleText)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(secondaryTextColor)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+
+                if let pendingDownloadTitle {
+                    SteamWorkshopLoginCallout(
+                        icon: "arrow.down.circle.fill",
+                        text: "登录成功后会自动继续下载：\(pendingDownloadTitle)"
+                    )
+                }
+            }
+
+            Group {
+                if isAwaitingGuard {
+                    SteamWorkshopLoginField(
+                        title: "Steam Guard 令牌",
+                        prompt: "请输入邮件或手机 App 收到的令牌",
+                        text: $service.steamGuardCode,
+                        systemImage: "lock.shield"
+                    )
+                } else {
+                    VStack(spacing: 12) {
+                        SteamWorkshopLoginField(
+                            title: "Steam 用户名",
+                            prompt: "请输入用户名",
+                            text: $service.steamUsername,
+                            systemImage: "person"
+                        )
+                        SteamWorkshopSecureLoginField(
+                            title: "Steam 密码",
+                            prompt: "请输入密码",
+                            text: $service.steamPassword,
+                            systemImage: "key"
+                        )
+                    }
+                }
+            }
+            .frame(maxWidth: 320)
+
+            VStack(spacing: 12) {
+                HStack(spacing: 10) {
+                    if isAwaitingGuard {
+                        Button(service.isAuthenticating ? "验证中…" : "验证令牌") {
+                            service.submitSteamGuardCode()
+                        }
+                        .buttonStyle(SteamWorkshopLoginActionButtonStyle(kind: .primary))
+                        .disabled(service.isAuthenticating)
+                    } else {
+                        Button(service.isPreparingRuntime ? "准备中…" : (service.isAuthenticating ? "登录中…" : "发送登录请求")) {
+                            service.authenticateUser()
+                        }
+                        .buttonStyle(SteamWorkshopLoginActionButtonStyle(kind: .primary))
+                        .disabled(service.isAuthenticating || service.isPreparingRuntime)
+                    }
+
+                    Button("关闭") {
+                        service.isLoginSheetPresented = false
+                    }
+                    .buttonStyle(SteamWorkshopLoginActionButtonStyle(kind: .secondary))
+                }
+            }
+            .frame(maxWidth: 320)
+
+            SteamWorkshopLoginFootnote(text: footnoteText)
+                .frame(maxWidth: 360)
+        }
+        .frame(minWidth: 380, minHeight: 500)
+        .padding(.horizontal, 30)
+        .padding(.vertical, 22)
+        .frame(width: 390)
+        .background {
+            SteamWorkshopInspectorGlassPanel(cornerRadius: 22, style: .regular)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(panelOverlayColor)
+                }
+                .overlay(alignment: .top) {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(colorScheme == .dark ? 0.42 : 0.62),
+                                    Color.white.opacity(0.08)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 1
+                        )
+                        .padding(1)
+                }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color.white.opacity(0.1), lineWidth: 0.08)
+        }
+        .shadow(color: Color.black.opacity(0.4), radius: 25, x: 0, y: 16)
+        .background(Color.clear)
+    }
+}
+
+private struct SteamWorkshopLoginModeBadge: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.primary.opacity(0.88))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(.thinMaterial)
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.14), lineWidth: 0.6)
+                    )
+            )
+    }
+}
+
+private struct SteamWorkshopLoginCallout: View {
+    let icon: String
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.primary.opacity(0.88))
+            Text(text)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(.primary.opacity(0.88))
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            Capsule(style: .continuous)
+                .fill(.thinMaterial)
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 0.6)
+                )
+        )
+    }
+}
+
+private struct SteamWorkshopLoginField: View {
+    let title: String
+    let prompt: String
+    @Binding var text: String
+    let systemImage: String
+    @Environment(\.colorScheme) private var colorScheme
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.primary.opacity(0.78))
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            ZStack {
+                if text.isEmpty && !isFocused {
+                    Text(prompt)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.primary.opacity(0.36))
+                        .allowsHitTesting(false)
+                }
+
+                TextField("", text: $text)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, weight: .medium))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.primary.opacity(0.94))
+                    .focused($isFocused)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(fieldFillColor)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Color.white.opacity(0.16), lineWidth: 0.8)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.20),
+                                        Color.clear
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                ),
+                                lineWidth: 0.8
+                            )
+                    )
+            )
+        }
+    }
+
+    private var fieldFillColor: Color {
+        colorScheme == .dark ? Color.black.opacity(0.11) : Color.white.opacity(0.24)
+    }
+}
+
+private struct SteamWorkshopSecureLoginField: View {
+    let title: String
+    let prompt: String
+    @Binding var text: String
+    let systemImage: String
+    @Environment(\.colorScheme) private var colorScheme
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.primary.opacity(0.78))
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            ZStack {
+                if text.isEmpty && !isFocused {
+                    Text(prompt)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.primary.opacity(0.36))
+                        .allowsHitTesting(false)
+                }
+
+                SecureField("", text: $text)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, weight: .medium))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.primary.opacity(0.94))
+                    .focused($isFocused)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(colorScheme == .dark ? Color.black.opacity(0.11) : Color.white.opacity(0.24))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Color.white.opacity(0.16), lineWidth: 0.8)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.20),
+                                        Color.clear
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                ),
+                                lineWidth: 0.8
+                            )
+                    )
+            )
+        }
+    }
+}
+
+private struct SteamWorkshopLoginFootnote: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11.5, weight: .medium))
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 10)
+    }
+}
+
+private enum SteamWorkshopLoginActionKind {
+    case primary
+    case secondary
+}
+
+private struct SteamWorkshopLoginActionButtonStyle: ButtonStyle {
+    let kind: SteamWorkshopLoginActionKind
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorScheme) private var colorScheme
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(foregroundColor.opacity(isEnabled ? 1 : 0.55))
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(background(configuration.isPressed))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(borderColor.opacity(isEnabled ? 1 : 0.45), lineWidth: 0.8)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .opacity(isEnabled ? 1 : 0.72)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+
+    private var foregroundColor: Color {
+        switch kind {
+        case .primary:
+            return .white
+        case .secondary:
+            return Color(nsColor: .labelColor)
+        }
+    }
+
+    private var borderColor: Color {
+        switch kind {
+        case .primary:
+            return Color(nsColor: .systemBlue).opacity(0.42)
+        case .secondary:
+            return Color.white.opacity(0.16)
+        }
+    }
+
+    @ViewBuilder
+    private func background(_ isPressed: Bool) -> some View {
+        switch kind {
+        case .primary:
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: isPressed ? .systemBlue.withSystemEffect(.pressed) : .systemBlue))
+        case .secondary:
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(colorScheme == .dark
+                    ? Color.black.opacity(isPressed ? 0.15 : 0.11)
+                    : Color.white.opacity(isPressed ? 0.28 : 0.36))
+        }
+    }
+}
+
+private struct SteamWorkshopInspectorGlassPanel: NSViewRepresentable {
+    let cornerRadius: CGFloat
+    let style: NSGlassEffectView.Style
+
+    func makeNSView(context: Context) -> NSGlassEffectView {
+        let view = NSGlassEffectView()
+        view.wantsLayer = true
+        return view
+    }
+
+    func updateNSView(_ nsView: NSGlassEffectView, context: Context) {
+        nsView.cornerRadius = cornerRadius
+        nsView.style = style
+        nsView.tintColor = SteamWorkshopInspectorGlassPalette.baseTint(for: nsView)
+        nsView.layer?.backgroundColor = SteamWorkshopInspectorGlassPalette.innerFill(for: nsView).cgColor
+    }
+}
+
+private enum SteamWorkshopInspectorGlassPalette {
+    static func baseTint(for view: NSView) -> NSColor {
+        if view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+            return .windowBackgroundColor.withAlphaComponent(0.18)
+        }
+        return .controlBackgroundColor.withAlphaComponent(0.15)
+    }
+
+    static func innerFill(for view: NSView) -> NSColor {
+        if view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+            return .textBackgroundColor.withAlphaComponent(0.06)
+        }
+        return .windowBackgroundColor.withAlphaComponent(0.05)
     }
 }
 

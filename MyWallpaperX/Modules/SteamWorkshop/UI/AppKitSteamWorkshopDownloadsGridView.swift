@@ -9,18 +9,21 @@ import Combine
 
 struct AppKitSteamWorkshopDownloadsGridView: NSViewRepresentable {
     @ObservedObject var service: SteamWorkshopService
+    let onOpen: (SteamWorkshopBrowserItem) -> Void
     let onSetAsWallpaper: (SteamWorkshopDownloadRecord) -> Void
     let onReveal: (SteamWorkshopDownloadRecord) -> Void
 
     func makeNSView(context: Context) -> AppKitSteamWorkshopDownloadsContainerView {
         AppKitSteamWorkshopDownloadsContainerView(
             service: service,
+            onOpen: onOpen,
             onSetAsWallpaper: onSetAsWallpaper,
             onReveal: onReveal
         )
     }
 
     func updateNSView(_ nsView: AppKitSteamWorkshopDownloadsContainerView, context: Context) {
+        nsView.onOpen = onOpen
         nsView.onSetAsWallpaper = onSetAsWallpaper
         nsView.onReveal = onReveal
     }
@@ -32,6 +35,7 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
     }
 
     private let service: SteamWorkshopService
+    var onOpen: (SteamWorkshopBrowserItem) -> Void
     var onSetAsWallpaper: (SteamWorkshopDownloadRecord) -> Void
     var onReveal: (SteamWorkshopDownloadRecord) -> Void
 
@@ -56,6 +60,11 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
         cv.backgroundColors = [.clear]
         cv.translatesAutoresizingMaskIntoConstraints = false
         cv.keyboardDelegate = self
+        cv.cardPressStateHandler = { [weak self] indexPath, pressed in
+            guard let self,
+                  let item = self.collectionView.item(at: indexPath) as? AppKitSteamWorkshopBrowserItem else { return }
+            item.applyPressedState(pressed)
+        }
         return cv
     }()
 
@@ -81,7 +90,7 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
         NSCollectionViewDiffableDataSource<Section, String>(collectionView: collectionView) { [weak self] _, _, id in
             guard let self,
                   let record = self.recordsByID[id] else { return nil }
-            let item = AppKitSteamWorkshopDownloadsItem(nibName: nil, bundle: nil)
+            let item = AppKitSteamWorkshopBrowserItem(nibName: nil, bundle: nil)
             self.configureDownloadItem(item, for: record)
             return item
         }
@@ -89,10 +98,12 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
 
     init(
         service: SteamWorkshopService,
+        onOpen: @escaping (SteamWorkshopBrowserItem) -> Void,
         onSetAsWallpaper: @escaping (SteamWorkshopDownloadRecord) -> Void,
         onReveal: @escaping (SteamWorkshopDownloadRecord) -> Void
     ) {
         self.service = service
+        self.onOpen = onOpen
         self.onSetAsWallpaper = onSetAsWallpaper
         self.onReveal = onReveal
         super.init(frame: .zero)
@@ -145,6 +156,7 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _, _ in
                 self?.applyRecords(self?.service.filteredDownloads ?? [])
+                self?.refreshVisibleDownloadItems()
             }
             .store(in: &cancellables)
 
@@ -152,6 +164,14 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.updateLayoutItemSize()
+            }
+            .store(in: &cancellables)
+
+        service.$activeDownloadItemID
+            .combineLatest(service.$activeDownloadProgressFraction, service.$activeDownloadProgressText)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _, _, _ in
+                self?.refreshVisibleDownloadItems()
             }
             .store(in: &cancellables)
 
@@ -181,23 +201,87 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
         ensureKeyboardFocus()
     }
 
-    private func configureDownloadItem(_ item: AppKitSteamWorkshopDownloadsItem, for record: SteamWorkshopDownloadRecord) {
+    private func configureDownloadItem(_ item: AppKitSteamWorkshopBrowserItem, for record: SteamWorkshopDownloadRecord) {
+        let displayItem = record.displayItem ?? fallbackDisplayItem(for: record)
         item.configure(
-            record: record,
+            item: displayItem,
+            downloadRecord: record,
+            downloadProgressFraction: record.id == service.activeDownloadItemID ? service.activeDownloadProgressFraction : nil,
+            downloadProgressText: record.status == .downloading ? record.sizeText : nil,
+            isDownloading: record.status == .downloading,
+            isDownloaded: record.status == .ready && record.isPlayable,
             isKeyboardFocused: record.id == keyboardFocusedID,
-            onSetAsWallpaper: { [weak self] in self?.onSetAsWallpaper(record) },
-            onReveal: { [weak self] in self?.onReveal(record) },
-            onRetry: { [weak self] in
-                self?.service.downloadWorkshopItem(id: record.id, pageTitle: record.title)
+            onOpen: { [weak self] in
+                self?.onOpen(displayItem)
             },
-            onCancel: { [weak self] in
-                self?.service.cancelActiveDownload()
-            }
+            onAuthor: { [weak self] in
+                self?.onReveal(record)
+            },
+            onDownload: { [weak self] in
+                guard let self else { return }
+                switch record.status {
+                case .ready:
+                    if record.isPlayable {
+                        self.onSetAsWallpaper(record)
+                    }
+                case .failed:
+                    self.service.downloadWorkshopItem(id: record.id, pageTitle: record.title)
+                case .downloading:
+                    self.service.cancelActiveDownload()
+                }
+            },
+            onSetAsWallpaper: { [weak self] in self?.onSetAsWallpaper(record) },
+            onCancelDownload: { [weak self] in self?.service.cancelActiveDownload() }
+        )
+        item.setPrefersCircularPlayBadge(record.status == .ready && record.isPlayable)
+    }
+
+    private func refreshVisibleDownloadItems() {
+        for visibleItem in collectionView.visibleItems() {
+            guard let item = visibleItem as? AppKitSteamWorkshopBrowserItem,
+                  let indexPath = collectionView.indexPath(for: item),
+                  indexPath.item < orderedIDs.count else { continue }
+            let id = orderedIDs[indexPath.item]
+            guard let record = recordsByID[id] else { continue }
+            configureDownloadItem(item, for: record)
+        }
+    }
+
+    private func fallbackDisplayItem(for record: SteamWorkshopDownloadRecord) -> SteamWorkshopBrowserItem {
+        SteamWorkshopBrowserItem(
+            id: record.id,
+            title: record.title,
+            author: "未知作者",
+            authorProfileURL: nil,
+            authorWorkshopURL: nil,
+            hasAdultContent: false,
+            summary: record.description,
+            descriptionText: record.description,
+            tags: record.tags,
+            workshopTypeText: "Video",
+            ageRatingText: nil,
+            genreText: nil,
+            categoryText: "Wallpaper",
+            previewImageURL: record.previewURL,
+            previewVideoURL: nil,
+            previewAssetKind: .stillImage,
+            fileSizeText: record.sizeText,
+            resolutionText: nil,
+            postedText: nil,
+            updatedText: nil,
+            favoritesText: nil,
+            subscriptionsText: nil,
+            scoreText: nil,
+            lifetimeFavoritesText: nil,
+            lifetimeSubscriptionsText: nil,
+            visibilityText: nil,
+            moderationText: nil,
+            detailFields: [],
+            detailURL: SteamWorkshopService.makeDetailURL(id: record.id)
         )
     }
 
     private func updateLayoutItemSize() {
-        let referenceAspectRatio: CGFloat = 354.0 / 250.0
         let inset = flowLayout.sectionInset
         let availableWidth = max(0, bounds.width - inset.left - inset.right)
         let columns = GridLayoutHelper.columnCount(
@@ -214,8 +298,7 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
         flowLayout.minimumLineSpacing = verticalSpacing
         let totalSpacing = CGFloat(max(0, columns - 1)) * spacing
         let cardWidth = max(100, (availableWidth - totalSpacing) / CGFloat(columns))
-        let cardHeight = cardWidth * referenceAspectRatio
-        let newSize = NSSize(width: floor(cardWidth), height: floor(cardHeight))
+        let newSize = NSSize(width: floor(cardWidth), height: floor(cardWidth))
         guard flowLayout.itemSize != newSize else { return }
         flowLayout.itemSize = newSize
         collectionView.collectionViewLayout?.invalidateLayout()
@@ -263,8 +346,17 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
 
     private func handleReturnKey() -> Bool {
         guard let id = keyboardFocusedID,
-              let cell = cellForItemID(id) else { return false }
-        cell.performPrimaryKeyboardAction()
+              let record = recordsByID[id] else { return false }
+        switch record.status {
+        case .ready:
+            if record.isPlayable {
+                onSetAsWallpaper(record)
+            }
+        case .failed:
+            service.downloadWorkshopItem(id: record.id, pageTitle: record.title)
+        case .downloading:
+            service.cancelActiveDownload()
+        }
         return true
     }
 
@@ -278,9 +370,9 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
         return IndexPath(item: index, section: 0)
     }
 
-    private func cellForItemID(_ id: String) -> AppKitSteamWorkshopDownloadsItem? {
+    private func cellForItemID(_ id: String) -> AppKitSteamWorkshopBrowserItem? {
         guard let indexPath = indexPathForItemID(id) else { return nil }
-        return collectionView.item(at: indexPath) as? AppKitSteamWorkshopDownloadsItem
+        return collectionView.item(at: indexPath) as? AppKitSteamWorkshopBrowserItem
     }
 
     private func reloadKeyboardFocus(previous: String?, next: String?) {

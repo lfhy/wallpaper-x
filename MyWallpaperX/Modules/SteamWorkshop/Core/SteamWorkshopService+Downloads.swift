@@ -1,28 +1,54 @@
 import Foundation
 
+private final class SteamWorkshopDownloadCaptureState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var combinedOutput = ""
+
+    func append(_ text: String) {
+        lock.lock()
+        combinedOutput += text
+        lock.unlock()
+    }
+
+    func snapshot() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return combinedOutput
+    }
+}
+
 extension SteamWorkshopService {
     func downloadWorkshopItem(id: String, pageTitle: String? = nil) {
         guard activeDownloadItemID == nil else {
             statusMessage = "已有下载任务在执行，请稍候。"
-            return
-        }
-
-        guard !requiresLogin && hasSavedCredentials else {
-            pendingDownloadRequest = SteamWorkshopPendingDownloadRequest(id: id, pageTitle: pageTitle)
-            authStatusMessage = "下载需要登录 Steam。请先完成登录，成功后会自动继续刚才的下载。"
-            presentLoginGate()
+            appendSteamAuthDebugLog("DOWNLOAD BLOCKED: active download already exists. requestedID=\(id)")
             return
         }
 
         statusMessage = "正在确认 Steam 下载环境…"
+        appendSteamAuthDebugLog("=== Workshop download requested ===")
+        appendSteamAuthDebugLog("Requested item id=\(id), title=\(pageTitle ?? "Workshop #\(id)")")
 
         Task { [weak self] in
             guard let self else { return }
             do {
+                await MainActor.run {
+                    self.appendSteamAuthDebugLog("DOWNLOAD STEP: ensureManagedSteamRuntime")
+                }
                 try await self.ensureManagedSteamRuntime()
+                await MainActor.run {
+                    self.appendSteamAuthDebugLog("DOWNLOAD STEP OK: ensureManagedSteamRuntime")
+                    self.appendSteamAuthDebugLog("DOWNLOAD STEP: ensureAuthenticatedSessionForDownload")
+                }
+                try await self.ensureAuthenticatedSessionForDownload(id: id, pageTitle: pageTitle)
+                await MainActor.run {
+                    self.appendSteamAuthDebugLog("DOWNLOAD STEP OK: ensureAuthenticatedSessionForDownload")
+                    self.appendSteamAuthDebugLog("DOWNLOAD STEP: performWorkshopDownload")
+                }
                 try await self.performWorkshopDownload(id: id, pageTitle: pageTitle)
             } catch {
                 await MainActor.run {
+                    self.appendSteamAuthDebugLog("DOWNLOAD FAILED: id=\(id), error=\(self.sanitizeSteamOutput(error.localizedDescription))")
                     self.finishActiveDownloadState()
                     let message = error.localizedDescription
                     if error is SteamWorkshopDownloadControlError {
@@ -44,6 +70,36 @@ extension SteamWorkshopService {
                     self.upsertTransientRecord(id: id, title: pageTitle ?? "Workshop #\(id)", status: .failed(message))
                 }
             }
+        }
+    }
+
+    func ensureAuthenticatedSessionForDownload(id: String, pageTitle: String?) async throws {
+        if authPhase == .awaitingGuardCode || isAuthenticating {
+            pendingDownloadRequest = SteamWorkshopPendingDownloadRequest(id: id, pageTitle: pageTitle)
+            authStatusMessage = "当前正在等待完成 Steam 登录验证。验证通过后会自动继续刚才的下载。"
+            isLoginSheetPresented = true
+            throw NSError(domain: "SteamWorkshop", code: 11, userInfo: [
+                NSLocalizedDescriptionKey: "当前正在等待完成 Steam 登录验证。"
+            ])
+        }
+
+        guard hasSavedCredentials else {
+            pendingDownloadRequest = SteamWorkshopPendingDownloadRequest(id: id, pageTitle: pageTitle)
+            authStatusMessage = "下载需要登录 Steam。请先完成登录，成功后会自动继续刚才的下载。"
+            presentLoginGateImmediately()
+            throw NSError(domain: "SteamWorkshop", code: 11, userInfo: [
+                NSLocalizedDescriptionKey: "下载需要登录 Steam。"
+            ])
+        }
+
+        if !(await validateSavedAuthenticationSessionIfNeeded()) {
+            pendingDownloadRequest = SteamWorkshopPendingDownloadRequest(id: id, pageTitle: pageTitle)
+            requiresLogin = false
+            isAnonymousBrowsing = false
+            presentLoginGateImmediately()
+            throw NSError(domain: "SteamWorkshop", code: 11, userInfo: [
+                NSLocalizedDescriptionKey: "当前 Steam 登录态需要重新验证。"
+            ])
         }
     }
 
@@ -91,42 +147,30 @@ extension SteamWorkshopService {
         let title = pageTitle ?? "Workshop #\(id)"
         let expectedBytes = expectedDownloadBytes(for: id)
         statusMessage = "正在通过内置 SteamCMD 下载 \(title)"
+        appendSteamAuthDebugLog("DOWNLOAD BEGIN: id=\(id), title=\(title), expectedBytes=\(expectedBytes.map(String.init) ?? "unknown")")
 
-        let output: String
-        do {
-            output = try await runDownloadProcess(
-                id: id,
-                title: title,
-                expectedBytes: expectedBytes,
-                arguments: [
-                    "+force_install_dir", runtimeInstallRootURL.path,
-                    "+login", steamUsername, steamPassword,
-                    "+workshop_download_item", Constants.workshopAppID, id, "validate",
-                    "+quit"
-                ]
-            )
-        } catch {
-            let processOutput = error.localizedDescription
-            if outputIndicatesAuthenticationFailure(processOutput) {
-                expireAuthenticationAndPromptRelogin(
-                    reason: "Steam 下载认证已失效，请重新输入账号密码并完成 Guard 验证。",
-                    pendingDownload: SteamWorkshopPendingDownloadRequest(id: id, pageTitle: pageTitle)
-                )
-                throw NSError(domain: "SteamWorkshop", code: 11, userInfo: [
-                    NSLocalizedDescriptionKey: "当前 Steam 登录态已失效，请重新登录。登录成功后会自动继续下载。"
-                ])
-            }
-            throw error
-        }
+        let username = steamUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        let output = try await runValidatedWorkshopDownload(
+            id: id,
+            title: title,
+            expectedBytes: expectedBytes,
+            username: username,
+            pageTitle: pageTitle
+        )
 
         guard output.localizedCaseInsensitiveContains("Success. Downloaded item") else {
             if outputIndicatesAuthenticationFailure(output) {
                 expireAuthenticationAndPromptRelogin(
-                    reason: "Steam 下载认证已失效，请重新输入账号密码并完成 Guard 验证。",
+                    reason: "Steam 下载认证已失效，请继续输入账号密码并完成 Guard 验证。",
                     pendingDownload: SteamWorkshopPendingDownloadRequest(id: id, pageTitle: pageTitle)
                 )
                 throw NSError(domain: "SteamWorkshop", code: 11, userInfo: [
-                    NSLocalizedDescriptionKey: "当前 Steam 登录态已失效，请重新登录。登录成功后会自动继续下载。"
+                    NSLocalizedDescriptionKey: "当前 Steam 登录态已失效，请继续登录。登录成功后会自动继续下载。"
+                ])
+            }
+            if outputIndicatesAccessRestriction(output) {
+                throw NSError(domain: "SteamWorkshop", code: 13, userInfo: [
+                    NSLocalizedDescriptionKey: "当前项目可能是私有内容、权限不足，或资源暂不可用，SteamCMD 未能完成下载。"
                 ])
             }
             throw NSError(domain: "SteamWorkshop", code: 2, userInfo: [
@@ -135,14 +179,70 @@ extension SteamWorkshopService {
         }
 
         try syncDownloadedItemToLibrary(id: id)
+        appendSteamAuthDebugLog("DOWNLOAD SYNC OK: copied staged content into library for id=\(id)")
 
         finishActiveDownloadState()
         statusMessage = "已完成 Workshop #\(id) 下载"
         reloadInstalledItems()
+        appendSteamAuthDebugLog("DOWNLOAD COMPLETE: id=\(id)")
+    }
+
+    func runValidatedWorkshopDownload(
+        id: String,
+        title: String,
+        expectedBytes: Int64?,
+        username: String,
+        pageTitle: String?
+    ) async throws -> String {
+        do {
+            return try await runDownloadProcess(
+                id: id,
+                title: title,
+                expectedBytes: expectedBytes,
+                arguments: [
+                    "+force_install_dir", runtimeInstallRootURL.path,
+                    "+login", username,
+                    "+workshop_download_item", Constants.workshopAppID, id, "validate",
+                    "+quit"
+                ]
+            )
+        } catch {
+            let processOutput = error.localizedDescription
+            guard outputIndicatesAuthenticationFailure(processOutput) || outputRequestsPassword(processOutput.localizedLowercase) else {
+                throw error
+            }
+
+            authSessionState = .expired
+            lastSuccessfulSessionValidationAt = nil
+            let sessionRecovered = await validateSavedAuthenticationSessionIfNeeded(force: true)
+            guard sessionRecovered else {
+                expireAuthenticationAndPromptRelogin(
+                    reason: "Steam 下载认证已失效，请继续输入账号密码并完成 Guard 验证。",
+                    pendingDownload: SteamWorkshopPendingDownloadRequest(id: id, pageTitle: pageTitle)
+                )
+                throw NSError(domain: "SteamWorkshop", code: 11, userInfo: [
+                    NSLocalizedDescriptionKey: "当前 Steam 登录态已失效，请继续登录。登录成功后会自动继续下载。"
+                ])
+            }
+
+            return try await runDownloadProcess(
+                id: id,
+                title: title,
+                expectedBytes: expectedBytes,
+                arguments: [
+                    "+force_install_dir", runtimeInstallRootURL.path,
+                    "+login", username,
+                    "+workshop_download_item", Constants.workshopAppID, id, "validate",
+                    "+quit"
+                ]
+            )
+        }
     }
 
     func runDownloadProcess(id: String, title: String, expectedBytes: Int64?, arguments: [String]) async throws -> String {
         let steamRootURL = try resolvedSteamRuntimeExecutionRootURL()
+        appendSteamAuthDebugLog("DOWNLOAD PROCESS: root=\(steamRootURL.path)")
+        appendSteamAuthDebugLog("DOWNLOAD PROCESS: arguments=./steamcmd.sh \(arguments.joined(separator: " "))")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.currentDirectoryURL = steamRootURL
@@ -154,12 +254,14 @@ extension SteamWorkshopService {
         process.standardError = outputPipe
 
         activeDownloadWasCancelled = false
+        let captureState = SteamWorkshopDownloadCaptureState()
 
         return try await withCheckedThrowingContinuation { continuation in
             outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
                 let data = handle.availableData
                 guard !data.isEmpty else { return }
                 let chunk = String(data: data, encoding: .utf8) ?? ""
+                captureState.append(chunk)
                 Task { @MainActor [weak self] in
                     self?.appendSteamAuthDebugLog("DOWNLOAD STDOUT: \(self?.sanitizeSteamOutput(chunk) ?? "")")
                 }
@@ -167,17 +269,24 @@ extension SteamWorkshopService {
 
             process.terminationHandler = { [weak self] process in
                 let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
+                let trailingOutput = String(data: data, encoding: .utf8) ?? ""
+                if !trailingOutput.isEmpty {
+                    captureState.append(trailingOutput)
+                }
+                let output = captureState.snapshot()
                 Task { @MainActor [weak self] in
                     outputPipe.fileHandleForReading.readabilityHandler = nil
                     self?.stopDownloadMonitor()
                     self?.activeDownloadProcess = nil
                     self?.activeDownloadPipe = nil
                     if self?.activeDownloadWasCancelled == true {
+                        self?.appendSteamAuthDebugLog("DOWNLOAD PROCESS TERMINATED: cancelled by user, status=\(process.terminationStatus)")
                         continuation.resume(throwing: SteamWorkshopDownloadControlError.cancelled)
                     } else if process.terminationStatus == 0 {
+                        self?.appendSteamAuthDebugLog("DOWNLOAD PROCESS TERMINATED: success, status=0, aggregatedOutput=\(self?.sanitizeSteamOutput(output) ?? "")")
                         continuation.resume(returning: output)
                     } else {
+                        self?.appendSteamAuthDebugLog("DOWNLOAD PROCESS TERMINATED: nonzero status=\(process.terminationStatus), output=\(self?.sanitizeSteamOutput(output) ?? "")")
                         continuation.resume(throwing: NSError(domain: "SteamWorkshop", code: Int(process.terminationStatus), userInfo: [
                             NSLocalizedDescriptionKey: output.isEmpty ? "SteamCMD 执行失败，退出码 \(process.terminationStatus)。" : output
                         ]))
@@ -188,6 +297,7 @@ extension SteamWorkshopService {
             do {
                 try process.run()
                 Task { @MainActor [weak self] in
+                    self?.appendSteamAuthDebugLog("DOWNLOAD PROCESS STARTED: pid=\(process.processIdentifier)")
                     self?.startActiveDownloadState(
                         id: id,
                         title: title,
@@ -198,6 +308,7 @@ extension SteamWorkshopService {
                 }
             } catch {
                 outputPipe.fileHandleForReading.readabilityHandler = nil
+                appendSteamAuthDebugLog("DOWNLOAD PROCESS START FAILED: \(sanitizeSteamOutput(error.localizedDescription))")
                 continuation.resume(throwing: error)
             }
         }
@@ -255,7 +366,13 @@ extension SteamWorkshopService {
 
     func refreshDownloadProgress(for id: String) {
         guard activeDownloadItemID == id else { return }
-        let downloadedBytes = directorySize(at: stagingWorkshopContentRootURL.appendingPathComponent(id, isDirectory: true))
+        let downloadInProgressBytes = directorySize(
+            at: stagingWorkshopDownloadsRootURL.appendingPathComponent(id, isDirectory: true)
+        )
+        let finalizedBytes = directorySize(
+            at: stagingWorkshopContentRootURL.appendingPathComponent(id, isDirectory: true)
+        )
+        let downloadedBytes = max(downloadInProgressBytes, finalizedBytes)
         let downloadedText = Self.fileSizeText(forBytes: downloadedBytes)
         if let expectedBytes = activeDownloadExpectedBytes, expectedBytes > 0 {
             let fraction = min(max(Double(downloadedBytes) / Double(expectedBytes), 0), 1)
@@ -295,6 +412,7 @@ extension SteamWorkshopService {
     func cleanupStagedDownload(id: String) {
         let stagedURL = stagingWorkshopContentRootURL.appendingPathComponent(id, isDirectory: true)
         if FileManager.default.fileExists(atPath: stagedURL.path) {
+            appendSteamAuthDebugLog("DOWNLOAD CLEANUP: removing staged directory \(stagedURL.path)")
             try? FileManager.default.removeItem(at: stagedURL)
         }
     }
@@ -312,12 +430,12 @@ extension SteamWorkshopService {
     func expireAuthenticationAndPromptRelogin(reason: String, pendingDownload: SteamWorkshopPendingDownloadRequest?) {
         cancelActiveLoginSession()
         defaults.removeObject(forKey: Constants.defaultsLastAuthenticatedAt)
-        SteamWorkshopCredentialStore.deletePassword()
-        steamPassword = ""
         steamGuardCode = ""
-        requiresLogin = true
-        isAnonymousBrowsing = true
+        requiresLogin = false
+        isAnonymousBrowsing = false
         authPhase = .credentials
+        authSessionState = .expired
+        lastSuccessfulSessionValidationAt = nil
         authError = nil
         authStatusMessage = reason
         self.pendingDownloadRequest = pendingDownload
@@ -328,15 +446,32 @@ extension SteamWorkshopService {
         let fileManager = FileManager.default
         let sourceURL = stagingWorkshopContentRootURL.appendingPathComponent(id, isDirectory: true)
         let targetURL = libraryRootURL.appendingPathComponent(id, isDirectory: true)
+        appendSteamAuthDebugLog("DOWNLOAD SYNC: source=\(sourceURL.path)")
+        appendSteamAuthDebugLog("DOWNLOAD SYNC: target=\(targetURL.path)")
         guard fileManager.fileExists(atPath: sourceURL.path) else {
+            appendSteamAuthDebugLog("DOWNLOAD SYNC FAILED: staged source directory missing for id=\(id)")
             throw NSError(domain: "SteamWorkshop", code: 6, userInfo: [
                 NSLocalizedDescriptionKey: "SteamCMD 已完成下载，但没有找到下载结果目录。"
             ])
         }
 
         if fileManager.fileExists(atPath: targetURL.path) {
+            appendSteamAuthDebugLog("DOWNLOAD SYNC: removing existing target directory \(targetURL.path)")
             try? fileManager.removeItem(at: targetURL)
         }
-        try fileManager.copyItem(at: sourceURL, to: targetURL)
+        do {
+            try fileManager.copyItem(at: sourceURL, to: targetURL)
+        } catch {
+            appendSteamAuthDebugLog("DOWNLOAD SYNC FAILED: copyItem error=\(sanitizeSteamOutput(error.localizedDescription))")
+            throw error
+        }
+        persistDownloadMetadataIfPossible(for: id, targetURL: targetURL)
+    }
+
+    private func persistDownloadMetadataIfPossible(for id: String, targetURL: URL) {
+        guard let item = browserItemForDownload(id: id) else { return }
+        let snapshot = SteamWorkshopDownloadMetadataSnapshot(fetchedAt: Date(), item: item)
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        try? data.write(to: Self.downloadMetadataFileURL(for: targetURL), options: [.atomic])
     }
 }

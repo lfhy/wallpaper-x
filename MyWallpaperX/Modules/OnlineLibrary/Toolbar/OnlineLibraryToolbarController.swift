@@ -2,7 +2,7 @@
 //  OnlineLibraryToolbarController.swift
 //  MyWallpaperX — Modules/OnlineLibrary/Toolbar
 //
-//  在线图库专用工具栏控制器。
+//  Pixabay 专用工具栏控制器。
 //  依赖：Shared/UI/GridLayoutHelper、Shared/UI/UIInteractionAnimation
 //  工具栏 zoom 按钮使用自有实现（架构备忘 §五：工具栏 zoom 不强制共享）
 //  通知名 onlineLibraryModeDidChange 定义在 Shell/ContentViewSupport.swift
@@ -49,8 +49,8 @@ extension NSToolbarItem.Identifier {
 final class OnlineLibraryToolbarController: NSObject, NSSearchFieldDelegate {
 
     private enum Title {
-        static let browser = "在线壁纸"
-        static let downloads = "已下载项"
+        static let browser = "Pixabay"
+        static let downloads = "Pixabay 下载"
     }
 
     weak var toolbar: NSToolbar?
@@ -197,7 +197,7 @@ final class OnlineLibraryToolbarController: NSObject, NSSearchFieldDelegate {
     }
 
     lazy var downloadsTitleLabel: NSTextField = {
-        let label = NSTextField(labelWithString: "已下载项")
+        let label = NSTextField(labelWithString: "Pixabay 下载")
         label.font = .systemFont(ofSize: 16, weight: .bold)
         label.textColor = .labelColor
         label.lineBreakMode = .byTruncatingTail
@@ -311,7 +311,7 @@ final class OnlineLibraryToolbarController: NSObject, NSSearchFieldDelegate {
 
     lazy var downloadsSearchItem: NSSearchToolbarItem = {
         let item = NSSearchToolbarItem(itemIdentifier: .olDownloadsSearch)
-        item.searchField.placeholderString = "搜索已下载项"
+        item.searchField.placeholderString = "搜索 Pixabay 下载"
         item.searchField.sendsSearchStringImmediately = true
         item.searchField.target = self
         item.searchField.action = #selector(handleDownloadsSearchChanged(_:))
@@ -333,7 +333,7 @@ final class OnlineLibraryToolbarController: NSObject, NSSearchFieldDelegate {
         c.segmentStyle = .texturedRounded
         c.setWidth(28, forSegment: 0)
         c.setWidth(28, forSegment: 1)
-        c.toolTip = "调整在线图库缩略图大小"
+        c.toolTip = "调整 Pixabay 缩略图大小"
         return c
     }()
 
@@ -341,7 +341,7 @@ final class OnlineLibraryToolbarController: NSObject, NSSearchFieldDelegate {
         let item = NSToolbarItem(itemIdentifier: .olZoom)
         item.label        = "缩放"
         item.paletteLabel = "缩放"
-        item.toolTip      = "调整在线图库缩略图大小"
+        item.toolTip      = "调整 Pixabay 缩略图大小"
         item.autovalidates = false
         item.view = zoomControl
         return item
@@ -424,7 +424,7 @@ final class OnlineLibraryToolbarController: NSObject, NSSearchFieldDelegate {
     lazy var searchToolbarItem: NSSearchToolbarItem = {
         let item = NSSearchToolbarItem(itemIdentifier: .olSearch)
         item.searchField.delegate         = self
-        item.searchField.placeholderString = "搜索视频壁纸..."
+        item.searchField.placeholderString = "探索 Pixabay"
         item.searchField.sendsSearchStringImmediately = true
         item.resignsFirstResponderWithCancel = true
         item.preferredWidthForSearchField    = 165
@@ -440,7 +440,7 @@ final class OnlineLibraryToolbarController: NSObject, NSSearchFieldDelegate {
         let item = NSToolbarItem(itemIdentifier: .olRefresh)
         item.label         = "刷新"
         item.paletteLabel  = "刷新"
-        item.toolTip       = "刷新在线图库"
+        item.toolTip       = "刷新 Pixabay"
         item.autovalidates = false
         item.image         = NSImage.olSymbol("arrow.clockwise", pointSize: 13, weight: .regular, accessibilityDescription: "刷新")
         item.target        = self
