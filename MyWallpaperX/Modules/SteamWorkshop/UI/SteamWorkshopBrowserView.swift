@@ -126,6 +126,9 @@ private struct SteamWorkshopBrowserContentView: View {
                         onOpen: { item in
                             service.presentItemDetail(item)
                         },
+                        onAuthor: { item in
+                            service.showAuthorWorkshop(for: item)
+                        },
                         onDownload: { item in
                             service.downloadWorkshopItem(id: item.id, pageTitle: item.title)
                         },

@@ -10,6 +10,7 @@ import Combine
 struct AppKitSteamWorkshopBrowserGridView: NSViewRepresentable {
     @ObservedObject var service: SteamWorkshopService
     let onOpen: (SteamWorkshopBrowserItem) -> Void
+    let onAuthor: (SteamWorkshopBrowserItem) -> Void
     let onDownload: (SteamWorkshopBrowserItem) -> Void
     let onSetAsWallpaper: (SteamWorkshopDownloadRecord) -> Void
     let onCancelDownload: () -> Void
@@ -18,6 +19,7 @@ struct AppKitSteamWorkshopBrowserGridView: NSViewRepresentable {
         AppKitSteamWorkshopBrowserContainerView(
             service: service,
             onOpen: onOpen,
+            onAuthor: onAuthor,
             onDownload: onDownload,
             onSetAsWallpaper: onSetAsWallpaper,
             onCancelDownload: onCancelDownload
@@ -26,6 +28,7 @@ struct AppKitSteamWorkshopBrowserGridView: NSViewRepresentable {
 
     func updateNSView(_ nsView: AppKitSteamWorkshopBrowserContainerView, context: Context) {
         nsView.onOpen = onOpen
+        nsView.onAuthor = onAuthor
         nsView.onDownload = onDownload
         nsView.onSetAsWallpaper = onSetAsWallpaper
         nsView.onCancelDownload = onCancelDownload
@@ -56,6 +59,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
 
     private let service: SteamWorkshopService
     var onOpen: (SteamWorkshopBrowserItem) -> Void
+    var onAuthor: (SteamWorkshopBrowserItem) -> Void
     var onDownload: (SteamWorkshopBrowserItem) -> Void
     var onSetAsWallpaper: (SteamWorkshopDownloadRecord) -> Void
     var onCancelDownload: () -> Void
@@ -69,7 +73,6 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
     private var pendingFooterSnapshotRefresh = false
     private var moduleActivationObserver: NSObjectProtocol?
     private var lastPrioritizedVisibleIDs: [String] = []
-    private var keyboardFocusedID: String?
 
     private let scrollView: NSScrollView = {
         let scrollView = NSScrollView()
@@ -119,12 +122,14 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
     init(
         service: SteamWorkshopService,
         onOpen: @escaping (SteamWorkshopBrowserItem) -> Void,
+        onAuthor: @escaping (SteamWorkshopBrowserItem) -> Void,
         onDownload: @escaping (SteamWorkshopBrowserItem) -> Void,
         onSetAsWallpaper: @escaping (SteamWorkshopDownloadRecord) -> Void,
         onCancelDownload: @escaping () -> Void
     ) {
         self.service = service
         self.onOpen = onOpen
+        self.onAuthor = onAuthor
         self.onDownload = onDownload
         self.onSetAsWallpaper = onSetAsWallpaper
         self.onCancelDownload = onCancelDownload
@@ -292,7 +297,6 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             self.updateBrowserScrollMetrics()
             self.prioritizeVisibleItemsForHydration()
             self.checkLoadMore()
-            self.ensureKeyboardFocus()
         }
     }
 
@@ -331,8 +335,9 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             downloadProgressText: service.downloadProgressLabel(for: id),
             isDownloading: service.isDownloading(itemID: id),
             isDownloaded: service.isDownloaded(itemID: id),
-            isKeyboardFocused: id == keyboardFocusedID,
+            isKeyboardFocused: false,
             onOpen: { [weak self] in self?.onOpen(item) },
+            onAuthor: { [weak self] in self?.onAuthor(item) },
             onDownload: { [weak self] in self?.onDownload(item) },
             onSetAsWallpaper: { [weak self] in
                 guard let self, let record = self.service.playableDownloadRecord(for: id) else { return }
@@ -350,8 +355,9 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             downloadProgressText: service.downloadProgressLabel(for: id),
             isDownloading: service.isDownloading(itemID: id),
             isDownloaded: service.isDownloaded(itemID: id),
-            isKeyboardFocused: id == keyboardFocusedID,
+            isKeyboardFocused: false,
             onOpen: { [weak self] in self?.onOpen(item) },
+            onAuthor: { [weak self] in self?.onAuthor(item) },
             onDownload: { [weak self] in self?.onDownload(item) },
             onSetAsWallpaper: { [weak self] in
                 guard let self, let record = self.service.playableDownloadRecord(for: id) else { return }
@@ -377,87 +383,10 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         }
     }
 
-    private func ensureKeyboardFocus() {
-        guard !orderedIDs.isEmpty else {
-            keyboardFocusedID = nil
-            return
-        }
-        if let focusedID = keyboardFocusedID, orderedIDs.contains(focusedID) {
-            reloadKeyboardFocus(previous: nil, next: focusedID)
-            return
-        }
-        focusItem(at: 0)
-    }
-
-    private func focusItem(at index: Int) {
-        guard index >= 0, index < orderedIDs.count else { return }
-        let nextID = orderedIDs[index]
-        let previousID = keyboardFocusedID
-        guard previousID != nextID else {
-            reloadKeyboardFocus(previous: previousID, next: nextID)
-            scrollToItem(nextID)
-            return
-        }
-        keyboardFocusedID = nextID
-        reloadKeyboardFocus(previous: previousID, next: nextID)
-        scrollToItem(nextID)
-    }
-
-    private func moveFocus(delta: Int) -> Bool {
-        guard !orderedIDs.isEmpty else { return false }
-        let current = focusedIndex ?? 0
-        let next = min(max(0, current + delta), orderedIDs.count - 1)
-        guard next != current || keyboardFocusedID == nil else { return false }
-        focusItem(at: next)
-        return true
-    }
-
-    private var focusedIndex: Int? {
-        guard let id = keyboardFocusedID else { return nil }
-        return orderedIDs.firstIndex(of: id)
-    }
-
-    private func handleReturnKey() -> Bool {
-        guard let id = keyboardFocusedID, let item = itemsByID[id] else { return false }
-        onOpen(item)
-        return true
-    }
-
-    private func performActionKey() -> Bool {
-        guard let id = keyboardFocusedID, let item = itemsByID[id] else { return false }
-        if service.isDownloading(itemID: id) {
-            onCancelDownload()
-            return true
-        }
-        if let record = service.playableDownloadRecord(for: id) {
-            onSetAsWallpaper(record)
-            return true
-        }
-        onDownload(item)
-        return true
-    }
-
     private func handleEscapeKey() -> Bool {
         guard service.selectedBrowserItem != nil else { return false }
         InspectorHostActions.postClose()
         return true
-    }
-
-    private func scrollToItem(_ id: String) {
-        guard let indexPath = indexPathForItemID(id) else { return }
-        collectionView.scrollToItems(at: Set([indexPath]), scrollPosition: .centeredVertically)
-    }
-
-    private func reloadKeyboardFocus(previous: String?, next: String?) {
-        var indexPaths = Set<IndexPath>()
-        if let prev = previous, let path = indexPathForItemID(prev) {
-            indexPaths.insert(path)
-        }
-        if let nextID = next, let path = indexPathForItemID(nextID) {
-            indexPaths.insert(path)
-        }
-        guard !indexPaths.isEmpty else { return }
-        collectionView.reloadItems(at: indexPaths)
     }
 
     private func indexPathForItemID(_ id: String) -> IndexPath? {
@@ -485,7 +414,6 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
     }
 
     private func updateLayoutItemSize() {
-        let referenceAspectRatio: CGFloat = 354.0 / 250.0
         let inset = flowLayout.sectionInset
         let availableWidth = max(0, bounds.width - inset.left - inset.right)
         let columns = GridLayoutHelper.columnCount(
@@ -502,8 +430,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         flowLayout.minimumLineSpacing = verticalSpacing
         let totalSpacing = CGFloat(max(0, columns - 1)) * spacing
         let cardWidth = max(100, (availableWidth - totalSpacing) / CGFloat(columns))
-        let cardHeight = cardWidth * referenceAspectRatio
-        let newSize = NSSize(width: floor(cardWidth), height: floor(cardHeight))
+        let newSize = NSSize(width: floor(cardWidth), height: floor(cardWidth))
 
         guard flowLayout.itemSize != newSize else { return }
         flowLayout.itemSize = newSize
@@ -619,11 +546,6 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         prioritizeVisibleItemsForHydration()
     }
 
-    func collectionView(_ collectionView: NSCollectionView, didEndDisplaying item: NSCollectionViewItem, forRepresentedObjectAt indexPath: IndexPath) {
-        guard let id = dataSource.itemIdentifier(for: indexPath), id == keyboardFocusedID else { return }
-        cellForItemID(id)?.setKeyboardFocus(false)
-    }
-
     private func log(_ message: String) {
         _ = message
     }
@@ -632,21 +554,11 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
 extension AppKitSteamWorkshopBrowserContainerView: SteamWorkshopKeyboardDelegate {
     func steamWorkshopCollectionView(_ collectionView: SteamWorkshopKeyboardCollectionView, handleKey event: NSEvent) -> Bool {
         switch event.keyCode {
-        case 123, 126:
-            return moveFocus(delta: -1)
-        case 124, 125:
-            return moveFocus(delta: 1)
-        case 36, 76:
-            return handleReturnKey()
         case 53:
             return handleEscapeKey()
         default:
-            break
+            return false
         }
-        if let char = event.charactersIgnoringModifiers?.lowercased(), char == "d" {
-            return performActionKey()
-        }
-        return false
     }
 }
 
