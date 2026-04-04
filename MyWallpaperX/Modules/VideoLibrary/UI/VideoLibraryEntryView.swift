@@ -14,6 +14,7 @@ struct VideoLibraryEntryView: View {
     let wallpapers: [VideoWallpaper]
     let animatesReorder: Bool
     let animatesInsertDelete: Bool
+    @EnvironmentObject private var wallpaperManager: WallpaperManager
 
     var body: some View {
         AppKitLibraryGridView(
@@ -21,5 +22,27 @@ struct VideoLibraryEntryView: View {
             animatesReorder: animatesReorder,
             animatesInsertDelete: animatesInsertDelete
         )
+        .inspectorHostBridge(
+            module: .videoLibrary,
+            selectedItem: wallpaperManager.selectedWallpaperForInspector,
+            makePresentation: { wallpaper in
+                .infoPanel(
+                    cardID: wallpaper.id,
+                    title: wallpaper.displayTitle,
+                    subtitle: wallpaperManager.currentSelectionContext.displayTitle,
+                    preferredWidth: 368,
+                    focusPolicy: .preserveCurrentResponder
+                )
+            },
+            onSelectionCleared: {
+                wallpaperManager.dismissSelectedWallpaperInspector()
+            },
+            content: { wallpaper in
+                VideoLibraryInspectorView(wallpaper: wallpaper)
+            }
+        )
+        .inspectorHostAutoClose(module: .videoLibrary) {
+            wallpaperManager.dismissSelectedWallpaperInspector()
+        }
     }
 }

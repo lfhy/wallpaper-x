@@ -273,6 +273,10 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
         selectedAnchorID ?? selectedIDs.first
     }
 
+    private var availableInspectorSelectionIDs: Set<Int> {
+        Set(orderedIDs)
+    }
+
     var hasAnySelection: Bool {
         !effectiveSelectedIDs.isEmpty
     }
@@ -598,6 +602,7 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
             selectedIDs = [first]
             selectedAnchorID = first
         }
+        syncInspectorSelectionIfNeeded()
 
         let isEmpty = orderedIDs.isEmpty
         emptyLabel.stringValue = searchQuery.isEmpty ? "暂无已下载视频壁纸" : "无匹配结果"
@@ -692,6 +697,7 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
         }
         selectedIDs = Set(orderedIDs)
         reloadVisibleSelectionItems()
+        syncInspectorSelectionIfNeeded()
         OnlineDownloadsBridge.shared.refreshToolbar()
     }
 
@@ -709,6 +715,7 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
         }
         collectionView.allowsMultipleSelection = isMultiSelectMode
         reloadVisibleSelectionItems(forceReload: true)
+        syncInspectorSelectionIfNeeded()
     }
 
     func deleteSelected() {
@@ -728,29 +735,11 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
     }
 
     func showInfo() {
-        let id = primarySelectedID
-        guard let id, let entry = entriesByID[id] else { return }
-        let path = entry.localURL.path
-        let attributes = (try? FileManager.default.attributesOfItem(atPath: path)) ?? [:]
-        let fileSize = attributes[.size] as? Int64 ?? 0
-        let fileSizeMB = Double(fileSize) / (1024 * 1024)
-        let creationDate = attributes[.creationDate] as? Date ?? Date()
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .medium
-        let dateText = formatter.string(from: creationDate)
-
-        let infoText = """
-        文件名: \(entry.localURL.lastPathComponent)
-        大小: \(String(format: "%.2f MB", fileSizeMB))
-        格式: \(entry.localURL.pathExtension.uppercased())
-        持续时间: \(entry.durationString.isEmpty ? "未知" : entry.durationString)
-        分辨率: \(entry.resolutionString ?? "未知")
-        添加时间: \(dateText)
-        路径: \(path)
-        """
-        let alert = makeAppAlert(title: "视频信息", message: infoText, buttons: ["好"])
-        presentAppAlert(alert, in: appModalHostWindow())
+        OnlineLibraryService.shared.presentInspectorForSelectedDownloadedItem(
+            primarySelectedID,
+            isMultiSelectMode: isMultiSelectMode,
+            availableIDs: availableInspectorSelectionIDs
+        )
     }
 
     func revealInFinder() {
@@ -820,6 +809,7 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
             selectedIDs = [targetID]
         }
         reloadVisibleSelectionItems()
+        syncInspectorSelectionIfNeeded()
         scrollToSelectedItemIfNeeded()
         OnlineDownloadsBridge.shared.refreshToolbar()
     }
@@ -838,6 +828,7 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
         }
         selectedAnchorID = id
         reloadVisibleSelectionItems()
+        syncInspectorSelectionIfNeeded()
         OnlineDownloadsBridge.shared.refreshToolbar()
         if let item = collectionView.item(at: indexPath) as? AppKitOLDownloadsItem {
             let point = item.view.convert(event.locationInWindow, from: nil)
@@ -900,6 +891,7 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
                 selectedIDs = [id]
             }
             reloadVisibleSelectionItems()
+            syncInspectorSelectionIfNeeded()
         }
         guard !effectiveSelectedIDs.isEmpty else { return nil }
 
@@ -955,6 +947,7 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
         selectedAnchorID = id
         selectedIDs = [id]
         reloadVisibleSelectionItems()
+        syncInspectorSelectionIfNeeded()
         scrollToSelectedItemIfNeeded()
     }
 
@@ -963,6 +956,7 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
         selectedIDs = []
         selectedAnchorID = nil
         reloadVisibleSelectionItems()
+        syncInspectorSelectionIfNeeded()
     }
 
     private func scrollToSelectedItemIfNeeded() {
@@ -990,12 +984,22 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
         guard !orderedIDs.isEmpty else {
             selectedAnchorID = nil
             selectedIDs = []
+            syncInspectorSelectionIfNeeded()
             return
         }
         let nextIndex = min(desiredIndex, orderedIDs.count - 1)
         let nextID = orderedIDs[nextIndex]
         selectedAnchorID = nextID
         selectedIDs = [nextID]
+        syncInspectorSelectionIfNeeded()
+    }
+
+    private func syncInspectorSelectionIfNeeded() {
+        OnlineLibraryService.shared.syncSelectedDownloadedInspectorIfNeeded(
+            selectedID: primarySelectedID,
+            isMultiSelectMode: isMultiSelectMode,
+            availableIDs: availableInspectorSelectionIDs
+        )
     }
 
     private func normalizedPath(_ path: String) -> String {

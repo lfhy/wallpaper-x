@@ -25,6 +25,28 @@ public struct StaticImageLibraryEntryView: View {
             isMultiSelectMode: service.isMultiSelectMode,
             silTag: silTag
         )
+        .inspectorHostBridge(
+            module: .staticImageLibrary,
+            selectedItem: service.selectedWallpaperForInspector,
+            makePresentation: { wallpaper in
+                .infoPanel(
+                    cardID: wallpaper.id,
+                    title: wallpaper.title,
+                    subtitle: silTag ?? "我的图片",
+                    preferredWidth: 356,
+                    focusPolicy: .preserveCurrentResponder
+                )
+            },
+            onSelectionCleared: {
+                service.dismissSelectedWallpaperInspector()
+            },
+            content: { wallpaper in
+                SILInspectorView(wallpaper: wallpaper)
+            }
+        )
+        .inspectorHostAutoClose(module: .staticImageLibrary) {
+            service.dismissSelectedWallpaperInspector()
+        }
         .ignoresSafeArea(.container, edges: .top)
     }
 }

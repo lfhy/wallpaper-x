@@ -344,11 +344,8 @@ extension SILToolbarController {
     }
     @objc func handleInfo() {
         guard let id = SILService.shared.selectedID,
-              let w = SILService.shared.wallpapers.first(where: { $0.id == id }) else { return }
-        SILService.shared.detailInfoText(for: w) { [weak self] text in
-            let alert = makeAppAlert(title: "图片信息", message: text, buttons: ["好"])
-            presentAppAlert(alert, in: self?.window)
-        }
+              SILService.shared.wallpapers.contains(where: { $0.id == id }) else { return }
+        SILService.shared.presentInspectorForSelectedWallpaper()
     }
     @objc func handleTag() {
         let svc = SILService.shared

@@ -52,6 +52,7 @@ class WallpaperManager: ObservableObject {
     @Published var settings: WallpaperSettings = WallpaperSettings()
     @Published var selectedWallpaperId: String? = nil
     @Published var selectedWallpaperIds: Set<String> = []
+    @Published var inspectedWallpaperID: String? = nil
     @Published var isMultiSelectMode: Bool = false
     @Published var isDragSelecting: Bool = false
     @Published var currentWallpaper: VideoWallpaper? = nil
@@ -196,6 +197,17 @@ class WallpaperManager: ObservableObject {
         .sink { [weak self] _ in
             guard let self else { return }
             self.scheduleWallpapersAutoPersist()
+        }
+        .store(in: &cancellables)
+
+        Publishers.CombineLatest4(
+            $selectedWallpaperId,
+            $selectedWallpaperIds,
+            $isMultiSelectMode,
+            $wallpapers
+        )
+        .sink { [weak self] _, _, _, _ in
+            self?.syncSelectedWallpaperInspectorIfNeeded()
         }
         .store(in: &cancellables)
         

@@ -220,6 +220,12 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
 
 `beginPreviewPanelControl` / `endPreviewPanelControl` 根据 `activeModule` 挂载对应控制器。
 
+**Inspector / Preview / Feedback 三层语义边界：**
+- `Inspector`：承载“当前选中项的上下文详情”，展示方式统一走 `InspectorHost`
+- `Preview`：承载“内容预览/临时查看”，当前主要指 QuickLook 或模块自有预览链路，不进入 `InspectorHost`
+- `Feedback`：承载“操作结果、错误、确认或阻断提示”，继续走 `Alert`、toast、badge 或模块内反馈 UI，不并入详情宿主
+- 三者必须分离：不得把 QuickLook 预览或操作反馈伪装成 inspector 内容，也不得为了复用外壳把反馈弹窗挂入 `InspectorHost`
+
 ### 3.8 InspectorHost（统一浏览详情宿主）
 
 为替代模块各自散落的 `.sheet(item:)` / 自定义详情入口，框架层新增统一 `InspectorHost`。该宿主只负责承载卡片外壳、开关时序与焦点恢复，不持有任何模块业务状态。
@@ -297,6 +303,21 @@ final class XxxGridContainerView: NSView, ModuleFocusable {
   - `InspectorHostActions.postMount`
   - `inspectorHostAutoClose(module:onDisappear:)`
 - 头部样式优先复用 `InspectorHostPresentation.standard(...)` 与 `InspectorHostPresentation.infoPanel(...)` preset，避免模块各自重复拼配置
+
+**新模块默认详情接入基线：**
+- `InspectorHost` + `InspectorHostBridge` + `InspectorHostActions` 现在是新模块详情入口的默认公共基线
+- 新接入模块应优先使用：
+  - `View.inspectorHostBridge(...)`
+  - `View.inspectorHostAutoClose(...)`
+  - `InspectorHostPresentation.standard(...)` / `.infoPanel(...)`
+- 若模块需要详情能力，默认先复用这套基线；只有真实场景证明无法覆盖时，才允许回转公共层补最小协议缺口
+
+**已完成接入样板（2026-04-04）：**
+- `SteamWorkshop`：已接入统一 `InspectorHost`
+- `VideoLibrary`：已接入统一 `InspectorHost`
+- `StaticImageLibrary`：已接入统一 `InspectorHost`
+- `OnlineLibrary Downloads`：已接入统一 `InspectorHost`
+- `OnlineLibrary Browser`：**尚未纳入本轮**，当前不作为已完成样板统计
 
 ---
 

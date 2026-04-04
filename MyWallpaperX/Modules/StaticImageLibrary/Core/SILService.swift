@@ -82,6 +82,7 @@ final class SILService: ObservableObject {
     @Published var wallpapers: [SILWallpaper] = []
     @Published var selectedID: String? = nil
     @Published var selectedIDs: Set<String> = []
+    @Published var inspectedWallpaperID: String? = nil
     @Published var isMultiSelectMode: Bool = false
     @Published var gridZoomOffset: Int = 0
     @Published var searchQuery: String = ""
@@ -287,33 +288,40 @@ final class SILService: ObservableObject {
     func setSingleSelection(_ id: String) {
         guard !isMultiSelectMode else { return }
         selectedID = id
+        syncSelectedWallpaperInspectorIfNeeded()
     }
 
     func replaceMultiSelection(with ids: Set<String>) {
         selectedIDs = ids
+        syncSelectedWallpaperInspectorIfNeeded()
     }
 
     func selectAll() {
         selectedIDs = Set(sortedWallpapers.map(\.id))
+        syncSelectedWallpaperInspectorIfNeeded()
     }
 
     func deselectAll() {
         selectedIDs = []
+        syncSelectedWallpaperInspectorIfNeeded()
     }
 
     func clearSingleSelection() {
         selectedID = nil
+        syncSelectedWallpaperInspectorIfNeeded()
     }
 
     func enterMultiSelectMode() {
         isMultiSelectMode = true
         selectedIDs = []
         selectedID = nil
+        syncSelectedWallpaperInspectorIfNeeded()
     }
 
     func exitMultiSelectMode() {
         isMultiSelectMode = false
         selectedIDs = []
+        syncSelectedWallpaperInspectorIfNeeded()
     }
 
     /// 切换列表或执行批量操作后统一调用，效果与视频库 clearSelectionState() 一致
@@ -321,6 +329,7 @@ final class SILService: ObservableObject {
         isMultiSelectMode = false
         selectedIDs = []
         selectedID = nil
+        syncSelectedWallpaperInspectorIfNeeded()
     }
 
     func moveSingleSelectionByArrowKey(_ keyCode: UInt16) {
@@ -329,6 +338,7 @@ final class SILService: ObservableObject {
         guard !list.isEmpty else { return }
         guard let current = selectedID, let idx = list.firstIndex(where: { $0.id == current }) else {
             selectedID = list.first?.id
+            syncSelectedWallpaperInspectorIfNeeded()
             return
         }
         let cols = max(1, visibleGridColumnCount)
@@ -341,6 +351,36 @@ final class SILService: ObservableObject {
         default: return
         }
         selectedID = list[newIdx].id
+        syncSelectedWallpaperInspectorIfNeeded()
+    }
+
+    var selectedWallpaperForInspector: SILWallpaper? {
+        guard let inspectedWallpaperID else { return nil }
+        return wallpapers.first { $0.id == inspectedWallpaperID }
+    }
+
+    func presentInspectorForSelectedWallpaper() {
+        guard !isMultiSelectMode,
+              let selectedID,
+              wallpapers.contains(where: { $0.id == selectedID }) else {
+            return
+        }
+        inspectedWallpaperID = selectedID
+    }
+
+    func dismissSelectedWallpaperInspector() {
+        inspectedWallpaperID = nil
+    }
+
+    func syncSelectedWallpaperInspectorIfNeeded() {
+        guard inspectedWallpaperID != nil else { return }
+        guard !isMultiSelectMode,
+              let selectedID,
+              wallpapers.contains(where: { $0.id == selectedID }) else {
+            inspectedWallpaperID = nil
+            return
+        }
+        inspectedWallpaperID = selectedID
     }
 
     // MARK: - 导入
@@ -443,6 +483,7 @@ final class SILService: ObservableObject {
         selectedIDs.subtract(ids)
         selectedID = nextID
         if isMultiSelectMode { isMultiSelectMode = false }
+        syncSelectedWallpaperInspectorIfNeeded()
         save()
     }
 

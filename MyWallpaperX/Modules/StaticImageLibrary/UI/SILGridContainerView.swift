@@ -447,11 +447,8 @@ extension SILGridContainerView {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: w.path)])
     }
     @objc private func ctxInfo() {
-        guard let id = SILService.shared.selectedID, let w = wallpapersByID[id] else { return }
-        SILService.shared.detailInfoText(for: w) { [weak self] text in
-            let alert = makeAppAlert(title: "图片信息", message: text, buttons: ["好"])
-            presentAppAlert(alert, in: self?.window)
-        }
+        guard let id = SILService.shared.selectedID, wallpapersByID[id] != nil else { return }
+        SILService.shared.presentInspectorForSelectedWallpaper()
     }
     @objc private func ctxAddTag() {
         let svc = SILService.shared

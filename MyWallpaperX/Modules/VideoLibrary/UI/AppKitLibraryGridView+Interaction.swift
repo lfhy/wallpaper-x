@@ -103,7 +103,7 @@ extension AppKitLibraryGridContainerView {
     }
 
     @objc func handleContextShowInfo(_ sender: Any?) {
-        UIActionHelper.presentInfo(manager: wallpaperManager, window: window)
+        wallpaperManager.presentInspectorForSelectedWallpaper()
     }
 
     @objc func handleContextRevealInFinder(_ sender: Any?) {

@@ -102,53 +102,83 @@ struct WallpaperDeletionSummary {
     }
 }
 
-func wallpaperDetailInfoText(for wallpaper: VideoWallpaper, completion: @escaping (String) -> Void) {
-    // 使用 Task 做异步 AVAsset 读取，返回 Task 供调用方在视图销毁时取消，防止 completion 持有悬挂引用。
-    // 注意：调用方应在 onDisappear / deinit 时调用 task.cancel()。
+struct WallpaperInspectorDetails: Equatable {
+    let fileName: String
+    let fileSizeText: String
+    let formatText: String
+    let durationText: String
+    let codecText: String
+    let resolutionText: String
+    let addedDateText: String
+    let pathText: String
+
+    var infoText: String {
+        """
+        文件名: \(fileName)
+        大小: \(fileSizeText)
+        格式: \(formatText)
+        持续时间: \(durationText)
+        编解码器: \(codecText)
+        分辨率: \(resolutionText)
+        添加时间: \(addedDateText)
+        路径: \(pathText)
+        """
+    }
+}
+
+@discardableResult
+func loadWallpaperInspectorDetails(
+    for wallpaper: VideoWallpaper,
+    completion: @escaping (WallpaperInspectorDetails) -> Void
+) -> Task<Void, Never> {
     let url = URL(fileURLWithPath: wallpaper.path)
     let path = wallpaper.path
     let formatText = url.pathExtension.isEmpty ? "未知" : url.pathExtension.uppercased()
     let attributes = (try? FileManager.default.attributesOfItem(atPath: path)) ?? [:]
     let fileSize = attributes[.size] as? Int64 ?? 0
-    let fileSizeMB = Double(fileSize) / (1024 * 1024)
+    let fileSizeText = String(format: "%.2f MB", Double(fileSize) / (1024 * 1024))
     let creationDate = attributes[.creationDate] as? Date ?? Date()
     let dateFormatter = DateFormatter()
     dateFormatter.dateStyle = .medium
     dateFormatter.timeStyle = .medium
     let addedDateText = dateFormatter.string(from: creationDate)
 
-    @discardableResult
-    func make() -> Task<Void, Never> {
-        Task {
-            let asset = AVURLAsset(url: url)
-            var durationText = "未知"
-            if let duration = try? await asset.load(.duration) {
-                let durationSeconds = CMTimeGetSeconds(duration)
-                if durationSeconds.isFinite && durationSeconds > 0 {
-                    durationText = formattedDuration(durationSeconds)
-                }
-            }
-            guard !Task.isCancelled else { return }
-            let resolutionText = await videoResolutionText(for: asset)
-            let codecText = await videoCodecText(for: asset)
-            guard !Task.isCancelled else { return }
-
-            let text = """
-            文件名: \(url.lastPathComponent)
-            大小: \(String(format: "%.2f MB", fileSizeMB))
-            格式: \(formatText)
-            持续时间: \(durationText)
-            编解码器: \(codecText)
-            分辨率: \(resolutionText)
-            添加时间: \(addedDateText)
-            路径: \(path)
-            """
-            await MainActor.run {
-                completion(text)
+    return Task {
+        let asset = AVURLAsset(url: url)
+        var durationText = wallpaper.duration.map { formattedDuration(Double($0)) } ?? "未知"
+        if let duration = try? await asset.load(.duration) {
+            let durationSeconds = CMTimeGetSeconds(duration)
+            if durationSeconds.isFinite && durationSeconds > 0 {
+                durationText = formattedDuration(durationSeconds)
             }
         }
+        guard !Task.isCancelled else { return }
+
+        let resolutionText = await videoResolutionText(for: asset, fallback: wallpaper.resolution)
+        let codecText = await videoCodecText(for: asset)
+        guard !Task.isCancelled else { return }
+
+        let details = WallpaperInspectorDetails(
+            fileName: url.lastPathComponent,
+            fileSizeText: fileSizeText,
+            formatText: formatText,
+            durationText: durationText,
+            codecText: codecText,
+            resolutionText: resolutionText,
+            addedDateText: addedDateText,
+            pathText: path
+        )
+
+        await MainActor.run {
+            completion(details)
+        }
     }
-    make()
+}
+
+func wallpaperDetailInfoText(for wallpaper: VideoWallpaper, completion: @escaping (String) -> Void) {
+    loadWallpaperInspectorDetails(for: wallpaper) { details in
+        completion(details.infoText)
+    }
 }
 
 private func formattedDuration(_ seconds: Double) -> String {
@@ -163,19 +193,19 @@ private func formattedDuration(_ seconds: Double) -> String {
     return String(format: "%d:%02d", minutes, remainingSeconds)
 }
 
-private func videoResolutionText(for asset: AVAsset) async -> String {
+private func videoResolutionText(for asset: AVAsset, fallback: String? = nil) async -> String {
     guard let tracks = try? await asset.loadTracks(withMediaType: .video),
           let track = tracks.first else {
-        return "未知"
+        return fallback ?? "未知"
     }
     guard let naturalSize = try? await track.load(.naturalSize),
           let preferredTransform = try? await track.load(.preferredTransform) else {
-        return "未知"
+        return fallback ?? "未知"
     }
     let transformedSize = naturalSize.applying(preferredTransform)
     let width = Int(abs(transformedSize.width).rounded())
     let height = Int(abs(transformedSize.height).rounded())
-    guard width > 0, height > 0 else { return "未知" }
+    guard width > 0, height > 0 else { return fallback ?? "未知" }
     return "\(width) × \(height)"
 }
 

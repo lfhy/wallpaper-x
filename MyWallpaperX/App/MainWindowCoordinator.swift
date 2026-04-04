@@ -192,18 +192,9 @@ enum MainWindowCoordinator {
     static func menuShowInfo() {
         switch activeModule {
         case .videoLibrary:
-            UIActionHelper.presentInfo(
-                manager: WallpaperManager.shared,
-                window: appModalHostWindow()
-            )
+            WallpaperManager.shared.presentInspectorForSelectedWallpaper()
         case .staticImageLibrary:
-            let svc = SILService.shared
-            guard let id = svc.selectedID,
-                  let w = svc.wallpapers.first(where: { $0.id == id }) else { return }
-            svc.detailInfoText(for: w) { text in
-                let alert = makeAppAlert(title: "图片信息", message: text, buttons: ["好"])
-                presentAppAlert(alert, in: appModalHostWindow())
-            }
+            SILService.shared.presentInspectorForSelectedWallpaper()
         case .onlineLibrary:
             if OnlineDownloadsBridge.shared.isActive {
                 OnlineDownloadsBridge.shared.showInfo()

@@ -374,8 +374,45 @@ final class OnlineLibraryService: ObservableObject {
     @Published var downloadSuccessMessage: String? = nil
     /// OL-04：最近下载完成的 item ID，供 Toast「设为壁纸」按钮使用
     @Published var lastDownloadedItemID: Int? = nil
+    @Published private(set) var inspectedDownloadedItemID: Int? = nil
     /// 下载中途点「设为壁纸」时记录的待播放 ID，下载完成后自动触发（OL-06）
     private var pendingSetAfterDownload: Set<Int> = []
+
+    var selectedDownloadedItemIDForInspector: Int? {
+        inspectedDownloadedItemID
+    }
+
+    func presentInspectorForSelectedDownloadedItem(
+        _ selectedID: Int?,
+        isMultiSelectMode: Bool,
+        availableIDs: Set<Int>
+    ) {
+        guard !isMultiSelectMode,
+              let selectedID,
+              availableIDs.contains(selectedID) else {
+            return
+        }
+        inspectedDownloadedItemID = selectedID
+    }
+
+    func dismissSelectedDownloadedInspector() {
+        inspectedDownloadedItemID = nil
+    }
+
+    func syncSelectedDownloadedInspectorIfNeeded(
+        selectedID: Int?,
+        isMultiSelectMode: Bool,
+        availableIDs: Set<Int>
+    ) {
+        guard inspectedDownloadedItemID != nil else { return }
+        guard !isMultiSelectMode,
+              let selectedID,
+              availableIDs.contains(selectedID) else {
+            inspectedDownloadedItemID = nil
+            return
+        }
+        inspectedDownloadedItemID = selectedID
+    }
 
     /// 仅下载到本地，不触发播放
     func download(item: OnlineLibraryVideoItem) {

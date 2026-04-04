@@ -175,6 +175,35 @@ extension WallpaperManager {
         return wallpapers.first { $0.id == selectedWallpaperId }
     }
 
+    var selectedWallpaperForInspector: VideoWallpaper? {
+        guard let inspectedWallpaperID else { return nil }
+        return wallpapers.first { $0.id == inspectedWallpaperID }
+    }
+
+    func presentInspectorForSelectedWallpaper() {
+        guard !isMultiSelectMode,
+              let selectedWallpaperId,
+              wallpapers.contains(where: { $0.id == selectedWallpaperId }) else {
+            return
+        }
+        inspectedWallpaperID = selectedWallpaperId
+    }
+
+    func dismissSelectedWallpaperInspector() {
+        inspectedWallpaperID = nil
+    }
+
+    func syncSelectedWallpaperInspectorIfNeeded() {
+        guard inspectedWallpaperID != nil else { return }
+        guard !isMultiSelectMode,
+              let selectedWallpaperId,
+              wallpapers.contains(where: { $0.id == selectedWallpaperId }) else {
+            inspectedWallpaperID = nil
+            return
+        }
+        inspectedWallpaperID = selectedWallpaperId
+    }
+
     var isMuted: Bool {
         settings.volume <= 0
     }
