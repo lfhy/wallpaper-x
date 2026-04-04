@@ -260,6 +260,9 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
     }()
 
     private var effectiveSelectedIDs: Set<Int> {
+        if isMultiSelectMode {
+            return selectedIDs
+        }
         if !selectedIDs.isEmpty {
             return selectedIDs
         }
@@ -598,7 +601,7 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
         if let anchor = selectedAnchorID, !orderedIDs.contains(anchor) {
             selectedAnchorID = nil
         }
-        if selectedIDs.isEmpty, let first = orderedIDs.first {
+        if !isMultiSelectMode, selectedIDs.isEmpty, let first = orderedIDs.first {
             selectedIDs = [first]
             selectedAnchorID = first
         }
@@ -704,14 +707,10 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
     func toggleMultiSelect() {
         isMultiSelectMode.toggle()
         if isMultiSelectMode {
-            if let anchor = selectedAnchorID {
-                selectedIDs = [anchor]
-            } else if let first = orderedIDs.first {
-                selectedAnchorID = first
-                selectedIDs = [first]
-            }
-        } else if let anchor = selectedAnchorID {
-            selectedIDs = [anchor]
+            selectedIDs = []
+            selectedAnchorID = nil
+        } else {
+            selectedIDs = []
         }
         collectionView.allowsMultipleSelection = isMultiSelectMode
         reloadVisibleSelectionItems(forceReload: true)
@@ -735,11 +734,25 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
     }
 
     func showInfo() {
-        OnlineLibraryService.shared.presentInspectorForSelectedDownloadedItem(
-            primarySelectedID,
-            isMultiSelectMode: isMultiSelectMode,
-            availableIDs: availableInspectorSelectionIDs
-        )
+        let service = OnlineLibraryService.shared
+        let selectedID = primarySelectedID
+        let availableIDs = availableInspectorSelectionIDs
+
+        guard !isMultiSelectMode,
+              let selectedID,
+              availableIDs.contains(selectedID) else {
+            return
+        }
+
+        if service.selectedDownloadedItemIDForInspector == selectedID {
+            service.dismissSelectedDownloadedInspector()
+        } else {
+            service.presentInspectorForSelectedDownloadedItem(
+                selectedID,
+                isMultiSelectMode: isMultiSelectMode,
+                availableIDs: availableIDs
+            )
+        }
     }
 
     func revealInFinder() {
@@ -818,10 +831,10 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
         guard indexPath.item < orderedIDs.count else { return }
         let id = orderedIDs[indexPath.item]
         if isMultiSelectMode {
-            if event.modifierFlags.contains(.command) {
-                if selectedIDs.contains(id) { selectedIDs.remove(id) } else { selectedIDs.insert(id) }
+            if selectedIDs.contains(id) {
+                selectedIDs.remove(id)
             } else {
-                selectedIDs = [id]
+                selectedIDs.insert(id)
             }
         } else {
             selectedIDs = [id]

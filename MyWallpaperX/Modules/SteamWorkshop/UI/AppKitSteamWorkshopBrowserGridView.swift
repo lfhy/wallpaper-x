@@ -13,7 +13,7 @@ struct AppKitSteamWorkshopBrowserGridView: NSViewRepresentable {
     let onAuthor: (SteamWorkshopBrowserItem) -> Void
     let onDownload: (SteamWorkshopBrowserItem) -> Void
     let onSetAsWallpaper: (SteamWorkshopDownloadRecord) -> Void
-    let onCancelDownload: () -> Void
+    let onCancelDownload: (SteamWorkshopBrowserItem) -> Void
 
     func makeNSView(context: Context) -> AppKitSteamWorkshopBrowserContainerView {
         AppKitSteamWorkshopBrowserContainerView(
@@ -62,7 +62,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
     var onAuthor: (SteamWorkshopBrowserItem) -> Void
     var onDownload: (SteamWorkshopBrowserItem) -> Void
     var onSetAsWallpaper: (SteamWorkshopDownloadRecord) -> Void
-    var onCancelDownload: () -> Void
+    var onCancelDownload: (SteamWorkshopBrowserItem) -> Void
 
     private var cancellables = Set<AnyCancellable>()
     private var itemsByID: [String: SteamWorkshopBrowserItem] = [:]
@@ -130,7 +130,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         onAuthor: @escaping (SteamWorkshopBrowserItem) -> Void,
         onDownload: @escaping (SteamWorkshopBrowserItem) -> Void,
         onSetAsWallpaper: @escaping (SteamWorkshopDownloadRecord) -> Void,
-        onCancelDownload: @escaping () -> Void
+        onCancelDownload: @escaping (SteamWorkshopBrowserItem) -> Void
     ) {
         self.service = service
         self.onOpen = onOpen
@@ -192,13 +192,6 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             .store(in: &cancellables)
 
         service.$activeDownloadItemID
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.reloadVisibleItems()
-            }
-            .store(in: &cancellables)
-
-        service.$activeDownloadProgressText
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.reloadVisibleItems()
@@ -335,9 +328,9 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
     private func configureCell(_ cell: AppKitSteamWorkshopBrowserItem, for id: String) {
         guard let item = itemsByID[id] else { return }
         cell.configure(
+            displayContext: .browser,
             item: item,
             downloadRecord: service.latestDownloadRecord(for: id),
-            downloadProgressText: service.downloadProgressLabel(for: id),
             isDownloading: service.isDownloading(itemID: id),
             isDownloaded: service.isDownloaded(itemID: id),
             isKeyboardFocused: false,
@@ -348,16 +341,16 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
                 guard let self, let record = self.service.playableDownloadRecord(for: id) else { return }
                 self.onSetAsWallpaper(record)
             },
-            onCancelDownload: { [weak self] in self?.onCancelDownload() }
+            onCancelDownload: { [weak self] in self?.onCancelDownload(item) }
         )
     }
 
     private func configureMetadataCell(_ cell: AppKitSteamWorkshopBrowserItem, for id: String) {
         guard let item = itemsByID[id] else { return }
         cell.configureMetadataOnly(
+            displayContext: .browser,
             item: item,
             downloadRecord: service.latestDownloadRecord(for: id),
-            downloadProgressText: service.downloadProgressLabel(for: id),
             isDownloading: service.isDownloading(itemID: id),
             isDownloaded: service.isDownloaded(itemID: id),
             isKeyboardFocused: false,
@@ -368,7 +361,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
                 guard let self, let record = self.service.playableDownloadRecord(for: id) else { return }
                 self.onSetAsWallpaper(record)
             },
-            onCancelDownload: { [weak self] in self?.onCancelDownload() }
+            onCancelDownload: { [weak self] in self?.onCancelDownload(item) }
         )
     }
 

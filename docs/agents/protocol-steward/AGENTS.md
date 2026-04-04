@@ -22,6 +22,7 @@
 3. 不允许随意修改 `Core/` 或 `Shared/`
 4. 所有修改必须使用 diff patch 输出
 5. 公共协议改动后，必须同步 `docs/framework-architecture-memo.md`
+6. Protocol Steward 必须知道何时把任务回抛给 `Architect`，何时下发给对应 `Module Agent`，何时交给 `Integrator` / `Verifier`
 
 ## 角色职责
 - 维护公共协议层的稳定性与可追溯性
@@ -109,6 +110,8 @@ Protocol Steward 统一输出：
 
 【交接说明】
 - 需要哪个 Module Agent 继续对接：
+- 是否需要 Integrator 收口：
+- 是否需要 Verifier 验证：
 - 需要 Gatekeeper 重点复查的点：
 ```
 
@@ -117,3 +120,12 @@ Protocol Steward 统一输出：
 - 若请求想直接改 `Core/`：拒绝并要求 Architect 明确批准
 - 若公共层改动未同步文档：视为未完成
 - 若模块想通过本角色偷偷接入跨模块直连：直接驳回
+
+## 默认协作与上报
+- 若任务涉及产品策略、职责重划、敏感层、或多个模块同时调整，必须向 `Architect` 上报
+- 若公共协议已明确、只差模块内落地，应转交对应 `Module Agent`
+- 若任务已有多个补丁或多个角色参与，先交 `Integrator`
+- 若实现已完成且需要对照验收标准确认行为，再交 `Verifier`
+- 最终再交 `Gatekeeper`
+- 协作协议见：
+  - `docs/agents/collaboration-protocol.md`

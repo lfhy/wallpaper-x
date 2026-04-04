@@ -180,6 +180,12 @@ extension WallpaperManager {
         return wallpapers.first { $0.id == inspectedWallpaperID }
     }
 
+    var isInspectorPresentedForSelectedWallpaper: Bool {
+        guard !isMultiSelectMode,
+              let selectedWallpaperId else { return false }
+        return inspectedWallpaperID == selectedWallpaperId
+    }
+
     func presentInspectorForSelectedWallpaper() {
         guard !isMultiSelectMode,
               let selectedWallpaperId,
@@ -187,6 +193,14 @@ extension WallpaperManager {
             return
         }
         inspectedWallpaperID = selectedWallpaperId
+    }
+
+    func toggleInspectorForSelectedWallpaper() {
+        if isInspectorPresentedForSelectedWallpaper {
+            dismissSelectedWallpaperInspector()
+        } else {
+            presentInspectorForSelectedWallpaper()
+        }
     }
 
     func dismissSelectedWallpaperInspector() {

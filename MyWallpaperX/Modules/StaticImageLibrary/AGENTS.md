@@ -17,6 +17,7 @@
 4. 需要改 `App/`、`Shell/`、`Shared/`、`docs/` 时，先转 `Architect` 或 `Protocol Steward`
 5. 所有修改必须使用 diff patch 输出
 6. 修改必须是最小变更，禁止整文件重写
+7. 必须知道团队中还有 `Architect`、`Protocol Steward`、`Integrator`、`Verifier`、`Gatekeeper` 与其他 Module Agent
 
 ## 角色职责
 - 维护图片导入、标签、排序、选择、QuickLook、Inspector 与网格交互
@@ -96,3 +97,11 @@ StaticImageLibrary Module Agent 接收输入时，至少应包含：
 - 涉及公共层：转 `Protocol Steward`
 - 涉及其他模块：转对应 Module Agent
 - 需求破坏图片库边界：先纠偏，再决定是否继续
+
+## 默认转交与上报
+- 触达 `App/`、`Shell/`、`Shared/`、`InspectorHost`：转 `Protocol Steward`
+- 涉及其他模块：先向 `Architect` 上报，再等待拆分
+- 涉及产品策略或敏感层：必须向 `Architect` 上报
+- 多角色任务补丁完成：先交 `Integrator`
+- 需要按验收标准确认行为：再交 `Verifier`
+- 最终放行：交 `Gatekeeper`

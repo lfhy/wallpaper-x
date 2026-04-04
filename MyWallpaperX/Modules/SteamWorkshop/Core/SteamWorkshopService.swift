@@ -83,6 +83,8 @@ final class SteamWorkshopService: ObservableObject {
         didSet { navigateToBrowse() }
     }
     @Published var downloadsQuery: String = ""
+    @Published var downloadsSortMode: SteamWorkshopDownloadsSortMode = .updatedAt
+    @Published var downloadsSortAscending: Bool = false
     @Published var zoomOffset: Int = 0
     @Published var statusMessage: String = "浏览页使用原生网格展示，后台抓取 Wallpaper Engine 创意工坊视频信息。"
     @Published var currentWorkshopItemID: String?
@@ -93,8 +95,9 @@ final class SteamWorkshopService: ObservableObject {
     @Published var requestedURL: URL
     @Published var navigationVersion: Int = 0
     @Published var activeDownloadItemID: String?
-    @Published var activeDownloadProgressText: String?
-    @Published var activeDownloadProgressFraction: Double?
+    @Published var isDownloadsMultiSelectMode = false
+    @Published var selectedDownloadID: String?
+    @Published var selectedDownloadIDs: Set<String> = []
     @Published var downloadError: String?
     @Published var selectedBrowserItem: SteamWorkshopBrowserItem?
     @Published private(set) var isRefreshingSelectedBrowserItem = false
@@ -136,11 +139,10 @@ final class SteamWorkshopService: ObservableObject {
     var loginBootstrapTimeoutTask: Task<Void, Never>?
     var loginSessionID: String = ""
     var pendingDownloadRequest: SteamWorkshopPendingDownloadRequest?
+    var queuedDownloadRequests: [SteamWorkshopPendingDownloadRequest] = []
     var lastSuccessfulSessionValidationAt: Date?
     var activeDownloadProcess: Process?
-    var activeDownloadPipe: Pipe?
-    var activeDownloadMonitorTask: Task<Void, Never>?
-    var activeDownloadExpectedBytes: Int64?
+    var activeDownloadTask: Task<Void, Never>?
     var activeDownloadWasCancelled = false
     private var selectedItemDetailTask: Task<Void, Never>?
     private var discoveryBrowseSnapshot: SteamWorkshopDiscoveryBrowseSnapshot?
@@ -230,14 +232,6 @@ final class SteamWorkshopService: ObservableObject {
             .appendingPathComponent(Constants.workshopAppID, isDirectory: true)
     }
 
-    var stagingWorkshopDownloadsRootURL: URL {
-        runtimeInstallRootURL
-            .appendingPathComponent("steamapps", isDirectory: true)
-            .appendingPathComponent("workshop", isDirectory: true)
-            .appendingPathComponent("downloads", isDirectory: true)
-            .appendingPathComponent(Constants.workshopAppID, isDirectory: true)
-    }
-
     var libraryRootURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Movies", isDirectory: true)
@@ -264,14 +258,40 @@ final class SteamWorkshopService: ObservableObject {
 
     var filteredDownloads: [SteamWorkshopDownloadRecord] {
         let query = downloadsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return downloads }
-        let normalized = query.localizedLowercase
-        return downloads.filter {
-            $0.title.localizedLowercase.contains(normalized)
-            || $0.description.localizedLowercase.contains(normalized)
-            || $0.tags.contains(where: { $0.localizedLowercase.contains(normalized) })
-            || $0.id.localizedLowercase.contains(normalized)
-            || $0.browserItem?.author.localizedLowercase.contains(normalized) == true
+        let filtered: [SteamWorkshopDownloadRecord]
+        if query.isEmpty {
+            filtered = downloads
+        } else {
+            let normalized = query.localizedLowercase
+            filtered = downloads.filter {
+                $0.title.localizedLowercase.contains(normalized)
+                || $0.description.localizedLowercase.contains(normalized)
+                || $0.tags.contains(where: { $0.localizedLowercase.contains(normalized) })
+                || $0.id.localizedLowercase.contains(normalized)
+                || $0.browserItem?.author.localizedLowercase.contains(normalized) == true
+            }
+        }
+        return filtered.sorted { lhs, rhs in
+            switch downloadsSortMode {
+            case .updatedAt:
+                if lhs.updatedAt == rhs.updatedAt {
+                    return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+                }
+                return downloadsSortAscending ? (lhs.updatedAt < rhs.updatedAt) : (lhs.updatedAt > rhs.updatedAt)
+            case .title:
+                let comparison = lhs.title.localizedStandardCompare(rhs.title)
+                if comparison == .orderedSame {
+                    return downloadsSortAscending ? (lhs.updatedAt < rhs.updatedAt) : (lhs.updatedAt > rhs.updatedAt)
+                }
+                return downloadsSortAscending ? (comparison == .orderedAscending) : (comparison == .orderedDescending)
+            case .size:
+                let lhsSize = Self.parseByteCount(from: lhs.sizeText) ?? 0
+                let rhsSize = Self.parseByteCount(from: rhs.sizeText) ?? 0
+                if lhsSize == rhsSize {
+                    return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+                }
+                return downloadsSortAscending ? (lhsSize < rhsSize) : (lhsSize > rhsSize)
+            }
         }
     }
 
@@ -301,11 +321,52 @@ final class SteamWorkshopService: ObservableObject {
     }
 
     func isDownloading(itemID: String) -> Bool {
-        activeDownloadItemID == itemID
+        latestDownloadRecord(for: itemID)?.status == .downloading
+    }
+
+    func isQueuedForDownload(itemID: String) -> Bool {
+        latestDownloadRecord(for: itemID)?.status == .queued
     }
 
     func latestDownloadRecord(for itemID: String) -> SteamWorkshopDownloadRecord? {
         downloads.first(where: { $0.id == itemID })
+    }
+
+    var selectedDownloadRecord: SteamWorkshopDownloadRecord? {
+        guard let selectedDownloadID else { return nil }
+        return latestDownloadRecord(for: selectedDownloadID)
+    }
+
+    var effectiveSelectedDownloadIDs: Set<String> {
+        if isDownloadsMultiSelectMode {
+            return selectedDownloadIDs
+        }
+        if let selectedDownloadID {
+            return [selectedDownloadID]
+        }
+        return []
+    }
+
+    var canDeleteSelectedDownload: Bool {
+        let selectedIDs = effectiveSelectedDownloadIDs
+        guard !selectedIDs.isEmpty else { return false }
+        return selectedIDs.allSatisfy { id in
+            guard let record = latestDownloadRecord(for: id) else { return false }
+            switch record.status {
+            case .ready, .failed:
+                return true
+            case .queued, .downloading:
+                return false
+            }
+        }
+    }
+
+    var canShowSelectedDownloadInfo: Bool {
+        !isDownloadsMultiSelectMode && selectedDownloadRecord != nil
+    }
+
+    var canRevealSelectedDownload: Bool {
+        !isDownloadsMultiSelectMode && selectedDownloadRecord != nil
     }
 
     func downloadRecord(for itemID: String) -> SteamWorkshopDownloadRecord? {
@@ -331,11 +392,6 @@ final class SteamWorkshopService: ObservableObject {
 
     func latestDownloadFailure(for itemID: String) -> String? {
         latestDownloadRecord(for: itemID)?.failureMessage
-    }
-
-    func downloadProgressLabel(for itemID: String) -> String? {
-        guard activeDownloadItemID == itemID else { return nil }
-        return activeDownloadProgressText
     }
 
     func updateBrowserScrollMetrics(
@@ -877,6 +933,18 @@ final class SteamWorkshopService: ObservableObject {
             || lowered.contains("please use force_install_dir before logon")
             || lowered.contains("steam guard")
             || lowered.contains("please enter your password")
+    }
+
+    func outputIndicatesBenignSteamBootstrap(_ output: String) -> Bool {
+        let lowered = output.localizedLowercase
+        guard lowered.contains("loading steam api") || lowered.contains("iopollinghelpers_osx.cpp") else {
+            return false
+        }
+        guard lowered.contains("ok") else {
+            return false
+        }
+        return !outputIndicatesAuthenticationFailure(output)
+            && !outputIndicatesAccessRestriction(output)
     }
 
     func outputIndicatesAccessRestriction(_ output: String) -> Bool {

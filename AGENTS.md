@@ -23,6 +23,8 @@
 - `Architect`
 - `Explorer`
 - `Protocol Steward`
+- `Integrator / Rollout Manager`
+- `Verifier / QA Agent`
 - `Gatekeeper`
 - `macOS26 System UI Designer`
 - `VideoLibrary Module Agent`
@@ -32,9 +34,128 @@
 
 它们不是平级乱跑的自由 Agent，而是一套有职责边界的协作系统。
 
+## 团队岗位说明
+
+### `Architect（架构统筹）`
+
+职责：
+
+- 负责判定任务归属
+- 负责拆分跨模块或跨层任务
+- 负责决定是否触达公共层
+- 负责维护整体架构一致性
+
+它是默认总入口，优先处理边界、职责和协作顺序问题。
+
+### `Explorer（代码扫描 / 上下文构建）`
+
+职责：
+
+- 负责先扫描代码与文档
+- 负责梳理涉及文件、模块与触点
+- 负责指出越界风险与潜在遗漏
+- 负责给 `Architect` 提供事实基础
+
+它不负责拍板，也不负责直接实现。
+
+### `Protocol Steward（公共协议接入）`
+
+职责：
+
+- 负责公共层协作协议落地
+- 负责路由、Notification、菜单、工具栏、焦点与 `InspectorHost`
+- 负责公共层桥接与中转接入
+- 负责架构文档同步
+
+它不负责模块内部业务实现。
+
+### `VideoLibrary Module Agent（视频库模块开发）`
+
+职责：
+
+- 负责视频库模块内部业务与界面实现
+- 负责视频列表、选择、排序、QuickLook、Inspector 与播放链路
+- 负责模块内状态与 `WallpaperManager` 相关行为维护
+
+### `StaticImageLibrary Module Agent（图片库模块开发）`
+
+职责：
+
+- 负责图片库模块内部业务与界面实现
+- 负责图片标签、排序、选择、QuickLook、Inspector 与网格交互
+- 负责图片库内部状态与标签系统维护
+
+### `OnlineLibrary Module Agent（在线库模块开发）`
+
+职责：
+
+- 负责在线库浏览页与已下载页的模块内实现
+- 负责搜索、分页、下载、已下载管理、QuickLook 与 Inspector
+- 负责模块内 bridge、选择态与下载状态维护
+
+### `SteamWorkshop Module Agent（创意工坊模块开发）`
+
+职责：
+
+- 负责 Steam 创意工坊浏览、详情、登录、下载与下载页管理
+- 负责模块内工具栏、原生网格与 Inspector 内容实现
+- 负责 steamcmd 相关模块内业务代码维护
+
+### `Integrator / Rollout Manager（交付整合）`
+
+职责：
+
+- 负责把多个 Agent 的输出收口成一次完整交付
+- 负责检查公共层补丁与模块补丁是否能拼起来
+- 负责维护当前任务 owner、缺口与闭环状态
+- 负责决定何时进入验证与最终放行
+
+它不重新拍板，也不代替别人写业务。
+
+### `Verifier / QA Agent（交付验证）`
+
+职责：
+
+- 负责按验收标准验证任务是否真的完成
+- 负责检查用户路径、状态切换与回归风险
+- 负责区分“代码已写”和“行为达标”
+- 负责给最终放行提供验证结论
+
+它不代修业务，也不代替架构审查。
+
+### `Gatekeeper（审查与拒绝违规）`
+
+职责：
+
+- 负责最终架构审查与边界把关
+- 负责拒绝跨模块直连、绕过 Notification、误改公共层等违规行为
+- 负责检查文档同步、菜单一致性、路由一致性、焦点一致性与 `InspectorHost` 一致性
+- 负责决定补丁是放行、拒绝还是回退
+
+它不负责代替别人实现功能。
+
+### `macOS26 System UI Designer（macOS 26 系统 UI 设计师）`
+
+职责：
+
+- 负责 macOS 原生界面设计质量
+- 负责窗口、工具栏、侧边栏、表单、Inspector、空态与错误态的设计一致性
+- 负责界面层级、排版、间距、交互语义与视觉表达优化
+- 负责对现有模块 UI 做设计审查与纠偏
+
+它不负责业务逻辑和公共协议改造。
+
+所有 Agent 默认都应知道：
+
+- 团队中还有哪些角色
+- 自己遇到问题时该转交给谁
+- 自己遇到阻塞时必须向谁上报
+- 默认协作协议见：
+  - `docs/agents/collaboration-protocol.md`
+
 默认协作顺序：
 
-`Explorer -> Architect -> Protocol Steward / Module Agent -> Gatekeeper`
+`Explorer -> Architect -> Protocol Steward / Module Agent -> Integrator -> Verifier -> Gatekeeper`
 
 如果任务是纯 UI 设计问题，可以在 Architect 判责后引入：
 
@@ -51,8 +172,8 @@
 主要职责：
 
 - 放置 `Architect` 身份设定
-- 放置 `Explorer`、`Gatekeeper`、`Protocol Steward`、`macOS26 UI Designer` 等公共角色说明
-- 放置任务派发模板、审查清单、管理手册等辅助文档
+- 放置 `Explorer`、`Protocol Steward`、`Integrator`、`Verifier`、`Gatekeeper`、`macOS26 UI Designer` 等公共角色说明
+- 放置任务派发模板、审查清单、管理手册、协作协议等辅助文档
 
 当前大致分工：
 
@@ -62,10 +183,16 @@
   - 只读扫描、上下文构建、风险提示
 - `docs/agents/protocol-steward/AGENTS.md`
   - 公共协议接入：路由、通知、菜单、工具栏、焦点、InspectorHost、文档同步
+- `docs/agents/integrator/AGENTS.md`
+  - 多角色补丁收口、交付拼装、闭环状态维护
+- `docs/agents/verifier/AGENTS.md`
+  - 验收验证、用户路径检查、回归风险提示
 - `docs/agents/gatekeeper/AGENTS.md`
   - 审查与拒绝违规
 - `docs/agents/macos26-ui-designer/AGENTS.md`
   - macOS 26 原生 UI 设计、界面层级、交互一致性
+- `docs/agents/collaboration-protocol.md`
+  - 团队可见性、转交矩阵、向上报告机制、阻塞暂停规则
 
 ### 2. `MyWallpaperX/Modules/VideoLibrary/`
 
@@ -205,6 +332,7 @@
 
 - `Architect`
 - `Protocol Steward`
+- `Integrator`
 - `Gatekeeper`
 
 负责范围：
@@ -227,6 +355,8 @@
 5. 所有修改必须使用 diff patch 输出
 6. 修改必须是最小变更
 7. 不确定职责时，先判责，不直接动手
+8. 遇到阻塞、跨层、跨模块、职责不清时，必须转交或向上报告
+9. 多补丁任务进入放行前，必须先经过 `Integrator` 收口与 `Verifier` 验证
 
 ---
 

@@ -575,7 +575,7 @@ final class VideoLibraryToolbarController: NSObject, NSToolbarDelegate, NSSearch
 
     @objc func handleInfoButtonAction() {
         performToolbarAction(requiresNonSettingsSelection: true) { _ in
-            wallpaperManager.presentInspectorForSelectedWallpaper()
+            wallpaperManager.toggleInspectorForSelectedWallpaper()
         }
     }
 

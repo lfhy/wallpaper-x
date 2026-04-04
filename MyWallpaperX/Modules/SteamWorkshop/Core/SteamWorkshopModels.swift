@@ -1,5 +1,22 @@
 import Foundation
 
+enum SteamWorkshopDownloadsSortMode: String, CaseIterable, Equatable {
+    case updatedAt
+    case title
+    case size
+
+    var displayName: String {
+        switch self {
+        case .updatedAt:
+            return "修改时间"
+        case .title:
+            return "名称"
+        case .size:
+            return "文件大小"
+        }
+    }
+}
+
 enum SteamWorkshopPreviewAssetKind: String, Equatable, Codable {
     case unknown
     case stillImage
@@ -64,6 +81,7 @@ struct SteamWorkshopBrowserItem: Identifiable, Equatable, Codable {
 
 struct SteamWorkshopDownloadRecord: Identifiable, Equatable {
     enum Status: Equatable {
+        case queued
         case downloading
         case ready
         case failed(String)
@@ -83,6 +101,8 @@ struct SteamWorkshopDownloadRecord: Identifiable, Equatable {
 
     var statusText: String {
         switch status {
+        case .queued:
+            return "队列中"
         case .downloading:
             return "下载中"
         case .ready:
@@ -133,6 +153,40 @@ struct SteamWorkshopDownloadRecord: Identifiable, Equatable {
             moderationText: browserItem.moderationText,
             detailFields: browserItem.detailFields,
             detailURL: browserItem.detailURL
+        )
+    }
+
+    var displayItemForToolbar: SteamWorkshopBrowserItem {
+        displayItem ?? SteamWorkshopBrowserItem(
+            id: id,
+            title: title,
+            author: "未知作者",
+            authorProfileURL: nil,
+            authorWorkshopURL: nil,
+            hasAdultContent: false,
+            summary: description,
+            descriptionText: description,
+            tags: tags,
+            workshopTypeText: "Video",
+            ageRatingText: nil,
+            genreText: nil,
+            categoryText: "Wallpaper",
+            previewImageURL: previewURL,
+            previewVideoURL: nil,
+            previewAssetKind: .stillImage,
+            fileSizeText: sizeText,
+            resolutionText: nil,
+            postedText: nil,
+            updatedText: nil,
+            favoritesText: nil,
+            subscriptionsText: nil,
+            scoreText: nil,
+            lifetimeFavoritesText: nil,
+            lifetimeSubscriptionsText: nil,
+            visibilityText: nil,
+            moderationText: nil,
+            detailFields: [],
+            detailURL: URL(string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(id)")!
         )
     }
 }

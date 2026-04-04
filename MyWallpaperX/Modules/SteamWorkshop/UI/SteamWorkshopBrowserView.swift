@@ -45,17 +45,6 @@ public struct SteamWorkshopEntryView: View {
 private struct SteamWorkshopBrowserContentView: View {
     @ObservedObject private var service = SteamWorkshopService.shared
 
-    private var pendingDownloadTitle: String? {
-        if let pageTitle = service.pendingDownloadRequest?.pageTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !pageTitle.isEmpty {
-            return pageTitle
-        }
-        if let pending = service.pendingDownloadRequest {
-            return "Workshop #\(pending.id)"
-        }
-        return nil
-    }
-
     var body: some View {
         content
         .task {
@@ -83,27 +72,6 @@ private struct SteamWorkshopBrowserContentView: View {
         )
         .inspectorHostAutoClose(module: .steamWorkshop) {
             service.dismissItemDetail()
-        }
-        .overlay {
-            if shouldShowAuthBanner {
-                VStack {
-                    SteamWorkshopStatusBanner(
-                        title: authBannerTitle,
-                        message: authBannerMessage,
-                        progressFraction: authBannerProgressFraction,
-                        progressText: authBannerProgressText,
-                        primaryActionTitle: authBannerPrimaryActionTitle,
-                        primaryAction: authBannerPrimaryAction,
-                        secondaryActionTitle: authBannerSecondaryActionTitle,
-                        secondaryAction: authBannerSecondaryAction
-                    )
-                    .padding(.top, 12)
-                    .padding(.horizontal, 16)
-
-                    Spacer()
-                }
-                .transition(.move(edge: .top).combined(with: .opacity))
-            }
         }
         .overlay {
             if service.isLoginSheetPresented {
@@ -170,90 +138,14 @@ private struct SteamWorkshopBrowserContentView: View {
                         onSetAsWallpaper: { record in
                             service.setAsWallpaper(record)
                         },
-                        onCancelDownload: {
-                            service.cancelActiveDownload()
+                        onCancelDownload: { item in
+                            service.cancelDownload(itemID: item.id)
                         }
                     )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-    }
-
-    private var shouldShowAuthBanner: Bool {
-        service.authPhase == .awaitingGuardCode
-            || service.authSessionState == .authenticating
-            || pendingDownloadTitle != nil
-            || service.activeDownloadItemID != nil
-    }
-
-    private var authBannerTitle: String {
-        if service.authPhase == .awaitingGuardCode {
-            return "等待 Steam Guard 验证"
-        }
-        if service.authSessionState == .authenticating {
-            return "正在验证 Steam 会话"
-        }
-        if service.activeDownloadItemID != nil {
-            return "下载任务进行中"
-        }
-        return "下载任务待继续"
-    }
-
-    private var authBannerMessage: String {
-        if let pendingDownloadTitle {
-            return "\(service.authStatusMessage)\n登录成功后会自动继续下载：\(pendingDownloadTitle)"
-        }
-        return service.activeDownloadItemID != nil ? service.statusMessage : service.authStatusMessage
-    }
-
-    private var authBannerPrimaryActionTitle: String? {
-        if service.authPhase == .awaitingGuardCode {
-            return "输入 Guard 令牌"
-        }
-        if pendingDownloadTitle != nil || service.authSessionState == .authenticating {
-            return "继续登录"
-        }
-        return nil
-    }
-
-    private var authBannerPrimaryAction: (() -> Void)? {
-        guard authBannerPrimaryActionTitle != nil else { return nil }
-        return {
-            service.presentLoginGate()
-        }
-    }
-
-    private var authBannerSecondaryActionTitle: String? {
-        if pendingDownloadTitle != nil {
-            return "取消待续下载"
-        }
-        if service.activeDownloadItemID != nil {
-            return "取消当前下载"
-        }
-        return nil
-    }
-
-    private var authBannerSecondaryAction: (() -> Void)? {
-        if pendingDownloadTitle != nil {
-            return {
-                service.clearPendingDownloadRequest()
-            }
-        }
-        if service.activeDownloadItemID != nil {
-            return {
-                service.cancelActiveDownload()
-            }
-        }
-        return nil
-    }
-
-    private var authBannerProgressFraction: Double? {
-        service.activeDownloadItemID != nil ? service.activeDownloadProgressFraction : nil
-    }
-
-    private var authBannerProgressText: String? {
-        service.activeDownloadItemID != nil ? service.activeDownloadProgressText : nil
     }
 
     private var emptyStateMessage: String {
@@ -266,70 +158,6 @@ private struct SteamWorkshopBrowserContentView: View {
         return service.isBrowsingAuthorWorkshop
                         ? "\(service.activeAuthorWorkshopName ?? "该作者") 当前没有抓取到视频项目"
                         : "当前条件下没有抓取到视频项目"
-    }
-}
-
-struct SteamWorkshopStatusBanner: View {
-    let title: String
-    let message: String
-    var progressFraction: Double? = nil
-    var progressText: String? = nil
-    var primaryActionTitle: String? = nil
-    var primaryAction: (() -> Void)? = nil
-    var secondaryActionTitle: String? = nil
-    var secondaryAction: (() -> Void)? = nil
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.primary)
-            Text(message)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.leading)
-            if let progressFraction {
-                ProgressView(value: progressFraction)
-                    .progressViewStyle(.linear)
-                    .controlSize(.small)
-                    .padding(.top, 4)
-            }
-            if let progressText,
-               !progressText.isEmpty {
-                Text(progressText)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-            }
-            if primaryAction != nil || secondaryAction != nil {
-                HStack(spacing: 8) {
-                    if let primaryActionTitle,
-                       let primaryAction {
-                        Button(primaryActionTitle, action: primaryAction)
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                    }
-                    if let secondaryActionTitle,
-                       let secondaryAction {
-                        Button(secondaryActionTitle, action: secondaryAction)
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                    }
-                }
-                .padding(.top, 4)
-            }
-        }
-        .frame(maxWidth: 420, alignment: .leading)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.regularMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.white.opacity(0.14), lineWidth: 0.8)
-                )
-        )
-        .shadow(color: .black.opacity(0.12), radius: 18, x: 0, y: 10)
     }
 }
 

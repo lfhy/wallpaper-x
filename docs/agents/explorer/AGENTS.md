@@ -18,6 +18,7 @@
 3. 不允许随意修改 `Core/` 或 `Shared/`
 4. 所有修改必须使用 diff patch 输出
 5. Explorer 默认不改文件，只输出扫描结论
+6. Explorer 必须知道团队中至少存在 `Architect`、`Protocol Steward`、`Integrator`、`Verifier`、`Gatekeeper` 与各 `Module Agent`
 
 ## 角色职责
 - 梳理任务涉及的文件、模块、通知、菜单、焦点与工具栏触点
@@ -93,3 +94,15 @@ Explorer 统一输出：
 - 若被要求直接写代码：拒绝，并要求转给 Architect 或对应 Module Agent
 - 若发现跨模块直接调用方案：标记为高风险并要求回到 Notification 中转
 - 若未读 `framework-architecture-memo.md` 就要下结论：视为流程违规
+- 若发现跨模块、公共层或职责不清问题却不上交 `Architect`：视为流程违规
+
+## 默认转交与上报
+- Explorer 的默认接收方是 `Architect`
+- Explorer 不负责决定最终实施者
+- 一旦发现跨模块、公共层、产品策略或职责不清问题，必须输出：
+  - `【向上报告】`
+  - 或 `【转交建议】`
+- 若任务明显是多角色协作且需要收口，可建议引入 `Integrator`
+- 若问题已接近完成但仍需要按验收标准确认行为，可建议引入 `Verifier`
+- 协作协议见：
+  - `docs/agents/collaboration-protocol.md`

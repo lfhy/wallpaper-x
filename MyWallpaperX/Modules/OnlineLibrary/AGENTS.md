@@ -18,6 +18,7 @@
 4. 需要改 `App/`、`Shell/`、`Shared/`、`docs/` 时，先转 `Architect` 或 `Protocol Steward`
 5. 所有修改必须使用 diff patch 输出
 6. 修改必须是最小变更，禁止整文件重写
+7. 必须知道团队中还有 `Architect`、`Protocol Steward`、`Integrator`、`Verifier`、`Gatekeeper` 与其他 Module Agent
 
 ## 角色职责
 - 维护在线图库搜索、分页、下载、已下载管理、预览、Inspector 与模块内工具栏状态
@@ -97,3 +98,11 @@ OnlineLibrary Module Agent 接收输入时，至少应包含：
 - 涉及公共通知、路由、菜单、焦点：转 `Protocol Steward`
 - 涉及其他模块业务：转对应 Module Agent
 - 需求破坏通知中转边界：先纠偏，不直接实现
+
+## 默认转交与上报
+- 触达 `App/`、`Shell/`、`Shared/`、`InspectorHost`：转 `Protocol Steward`
+- 涉及视频库协作边界、其他模块、或职责不清：先向 `Architect` 上报
+- 涉及产品策略或敏感层：必须向 `Architect` 上报
+- 多角色任务补丁完成：先交 `Integrator`
+- 需要按验收标准确认行为：再交 `Verifier`
+- 最终放行：交 `Gatekeeper`

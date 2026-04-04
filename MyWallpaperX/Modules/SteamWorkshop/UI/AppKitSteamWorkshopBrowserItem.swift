@@ -327,7 +327,18 @@ final class SteamWorkshopMarqueeTextView: NSView {
 }
 
 private final class SteamWorkshopGlassBarView: NSGlassEffectView {
+    enum AccentStyle {
+        case neutral
+        case downloading
+        case queued
+        case ready
+    }
+
     private let glossLayer = CAGradientLayer()
+    private let accentLayer = CAGradientLayer()
+    private let scanLayer = CAGradientLayer()
+    private var accentStyle: AccentStyle = .neutral
+    private var showsScanAnimation = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -344,6 +355,9 @@ private final class SteamWorkshopGlassBarView: NSGlassEffectView {
         layer?.masksToBounds = false
         layer?.borderWidth = 1
         layer?.backgroundColor = NSColor.clear.cgColor
+        accentLayer.startPoint = CGPoint(x: 0, y: 0.5)
+        accentLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        layer?.addSublayer(accentLayer)
         glossLayer.colors = [
             NSColor.white.withAlphaComponent(0.14).cgColor,
             NSColor.white.withAlphaComponent(0.04).cgColor,
@@ -353,12 +367,17 @@ private final class SteamWorkshopGlassBarView: NSGlassEffectView {
         glossLayer.startPoint = CGPoint(x: 0.18, y: 0.98)
         glossLayer.endPoint = CGPoint(x: 0.82, y: 0.08)
         layer?.addSublayer(glossLayer)
+        scanLayer.startPoint = CGPoint(x: 0, y: 0.5)
+        scanLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        layer?.addSublayer(scanLayer)
         updateMaterial()
     }
 
     override func layout() {
         super.layout()
+        accentLayer.frame = bounds
         glossLayer.frame = bounds
+        scanLayer.frame = CGRect(x: -bounds.width * 0.62, y: 0, width: bounds.width * 0.62, height: bounds.height)
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -367,17 +386,95 @@ private final class SteamWorkshopGlassBarView: NSGlassEffectView {
     }
 
     private func updateMaterial() {
-        style = .regular
-        if effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
-            tintColor = NSColor(calibratedWhite: 0.10, alpha: 0.82)
-        } else {
-            tintColor = NSColor(calibratedWhite: 1.0, alpha: 0.72)
-        }
         let isDarkMode = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        layer?.borderColor = (isDarkMode
-            ? NSColor(calibratedWhite: 0.18, alpha: 0.16)
-            : NSColor(calibratedWhite: 1.0, alpha: 0.20)
+        let accentBaseColor: NSColor = {
+            switch accentStyle {
+            case .neutral:
+                return isDarkMode ? NSColor.white.withAlphaComponent(0.18) : NSColor.black.withAlphaComponent(0.10)
+            case .downloading:
+                return NSColor.systemGreen
+            case .queued:
+                return NSColor.systemBlue
+            case .ready:
+                return isDarkMode ? NSColor.white.withAlphaComponent(0.18) : NSColor.black.withAlphaComponent(0.10)
+            }
+        }()
+        let usesSolidStatusFill = accentStyle == .downloading || accentStyle == .queued
+
+        style = usesSolidStatusFill ? .regular : .regular
+        tintColor = {
+            if usesSolidStatusFill {
+                return accentBaseColor.withAlphaComponent(0.80)
+            }
+            return isDarkMode
+                ? NSColor(calibratedWhite: 0.10, alpha: accentStyle == .neutral ? 0.82 : 0.66)
+                : NSColor(calibratedWhite: 1.0, alpha: accentStyle == .neutral ? 0.72 : 0.58)
+        }()
+
+        layer?.backgroundColor = (usesSolidStatusFill
+            ? accentBaseColor.withAlphaComponent(0.80)
+            : NSColor.clear
         ).cgColor
+        layer?.borderColor = (usesSolidStatusFill
+            ? NSColor.white.withAlphaComponent(isDarkMode ? 0.18 : 0.14)
+            : accentBaseColor.withAlphaComponent(isDarkMode ? 0.34 : 0.22)
+        ).cgColor
+
+        accentLayer.colors = usesSolidStatusFill
+            ? [
+                accentBaseColor.withAlphaComponent(0.84).cgColor,
+                accentBaseColor.withAlphaComponent(0.80).cgColor,
+                accentBaseColor.withAlphaComponent(0.84).cgColor
+            ]
+            : [
+                accentBaseColor.withAlphaComponent(isDarkMode ? 0.34 : 0.22).cgColor,
+                accentBaseColor.withAlphaComponent(isDarkMode ? 0.18 : 0.10).cgColor,
+                NSColor.clear.cgColor
+            ]
+        accentLayer.locations = usesSolidStatusFill ? [0, 0.5, 1] : [0, 0.55, 1]
+
+        glossLayer.isHidden = usesSolidStatusFill
+        scanLayer.colors = usesSolidStatusFill
+            ? [
+                NSColor.clear.cgColor,
+                NSColor.white.withAlphaComponent(isDarkMode ? 0.08 : 0.10).cgColor,
+                NSColor.white.withAlphaComponent(isDarkMode ? 0.34 : 0.30).cgColor,
+                NSColor.white.withAlphaComponent(isDarkMode ? 0.08 : 0.10).cgColor,
+                NSColor.clear.cgColor
+            ]
+            : [
+                NSColor.clear.cgColor,
+                accentBaseColor.withAlphaComponent(isDarkMode ? 0.20 : 0.16).cgColor,
+                NSColor.white.withAlphaComponent(isDarkMode ? 0.18 : 0.16).cgColor,
+                accentBaseColor.withAlphaComponent(isDarkMode ? 0.16 : 0.12).cgColor,
+                NSColor.clear.cgColor
+            ]
+        scanLayer.locations = [0, 0.22, 0.5, 0.78, 1]
+        updateScanAnimation()
+    }
+
+    func applyAccentStyle(_ style: AccentStyle, animated: Bool) {
+        accentStyle = style
+        updateMaterial()
+    }
+
+    func setScanAnimationEnabled(_ enabled: Bool) {
+        showsScanAnimation = enabled
+        updateScanAnimation()
+    }
+
+    private func updateScanAnimation() {
+        scanLayer.removeAnimation(forKey: "steam.bar.scan")
+        scanLayer.isHidden = !showsScanAnimation
+        guard showsScanAnimation, bounds.width > 0 else { return }
+        let animation = CABasicAnimation(keyPath: "transform.translation.x")
+        animation.fromValue = -bounds.width * 1.18
+        animation.toValue = bounds.width * 2.18
+        animation.duration = 1.75
+        animation.repeatCount = .infinity
+        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        animation.isRemovedOnCompletion = false
+        scanLayer.add(animation, forKey: "steam.bar.scan")
     }
 }
 
@@ -389,10 +486,10 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     private let hoverOutlineView = NSView()
     private let previewContainer = NSView()
     private let previewImageView = NSImageView()
+    private let multiSelectBadgeView = NSView()
+    private let multiSelectBadgeIcon = NSImageView()
     private let overlayBarShadowView = NSView()
     private let overlayBar = SteamWorkshopGlassBarView()
-    private let downloadProgressTrackView = NSView()
-    private let downloadProgressFillView = NSView()
     private let detailButton = SteamWorkshopOverlayIconButton()
     private let titleMarqueeView = SteamWorkshopMarqueeTextView()
     private let statusBadgeButton = SteamWorkshopOverlayIconButton()
@@ -406,7 +503,6 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     private var onSetAsWallpaper: (() -> Void)?
     private var onCancelDownload: (() -> Void)?
     private var currentActionKind: ActionKind = .download
-    private var currentDownloadProgressFraction: Double?
     private var prefersCircularPlayBadge = false
     private var trackingAreaRef: NSTrackingArea?
     private var isHovering = false
@@ -414,12 +510,30 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     private var currentCardScale: CGFloat = 1.0
     private var currentBarVisibility = false
     private var isHoverOutlineVisible = false
+    private var isSelectionHighlighted = false
+    private var isMultiSelectMode = false
+    private var currentDisplayContext: DisplayContext = .browser
+    private var currentBarState: BarState = .idle
+    private var shouldPersistBarVisibility = false
 
     private enum ActionKind {
         case download
         case cancel
         case setAsWallpaper
         case retry
+    }
+
+    enum DisplayContext {
+        case browser
+        case downloads
+    }
+
+    private enum BarState {
+        case idle
+        case downloading
+        case queued
+        case ready
+        case failed
     }
 
     private enum Layout {
@@ -436,8 +550,6 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         static let barSpacing: CGFloat = 8
         static let marqueeSideInset: CGFloat = 2
         static let minBarCornerInset: CGFloat = 4
-        static let progressHeight: CGFloat = 4
-        static let progressBottomSpacing: CGFloat = 8
     }
 
     private struct Metrics {
@@ -475,7 +587,6 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         currentPreviewURL = nil
         currentTitleText = ""
         titleMarqueeView.text = ""
-        currentDownloadProgressFraction = nil
         previewImageView.image = nil
         onOpen = nil
         onAuthor = nil
@@ -489,20 +600,28 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         currentCardScale = 1.0
         currentBarVisibility = false
         isHoverOutlineVisible = false
+        isSelectionHighlighted = false
+        isMultiSelectMode = false
+        currentDisplayContext = .browser
+        currentBarState = .idle
+        shouldPersistBarVisibility = false
         cardView.layer?.transform = CATransform3DIdentity
         overlayBar.alphaValue = 0
         hoverOutlineView.alphaValue = 0
         titleMarqueeView.setActive(false)
+        overlayBar.setScanAnimationEnabled(false)
+        overlayBar.applyAccentStyle(.neutral, animated: false)
+        statusBadgeButton.layer?.removeAnimation(forKey: "steam.status.spin")
         refreshThemeAwareAppearance()
     }
 
     func configure(
+        displayContext: DisplayContext = .browser,
         item: SteamWorkshopBrowserItem,
         downloadRecord: SteamWorkshopDownloadRecord?,
-        downloadProgressFraction: Double? = nil,
-        downloadProgressText: String?,
         isDownloading: Bool,
         isDownloaded: Bool,
+        isMultiSelectMode: Bool = false,
         isKeyboardFocused: Bool,
         onOpen: @escaping () -> Void,
         onAuthor: @escaping () -> Void,
@@ -515,26 +634,26 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         self.onDownload = onDownload
         self.onSetAsWallpaper = onSetAsWallpaper
         self.onCancelDownload = onCancelDownload
+        currentDisplayContext = displayContext
         prefersCircularPlayBadge = false
         applyContent(
             item: item,
             downloadRecord: downloadRecord,
-            downloadProgressFraction: downloadProgressFraction,
-            downloadProgressText: downloadProgressText,
             isDownloading: isDownloading,
             isDownloaded: isDownloaded,
+            isMultiSelectMode: isMultiSelectMode,
             isKeyboardFocused: isKeyboardFocused
         )
         loadPreview(from: item.previewImageURL)
     }
 
     func configureMetadataOnly(
+        displayContext: DisplayContext = .browser,
         item: SteamWorkshopBrowserItem,
         downloadRecord: SteamWorkshopDownloadRecord?,
-        downloadProgressFraction: Double? = nil,
-        downloadProgressText: String?,
         isDownloading: Bool,
         isDownloaded: Bool,
+        isMultiSelectMode: Bool = false,
         isKeyboardFocused: Bool,
         onOpen: @escaping () -> Void,
         onAuthor: @escaping () -> Void,
@@ -547,14 +666,14 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         self.onDownload = onDownload
         self.onSetAsWallpaper = onSetAsWallpaper
         self.onCancelDownload = onCancelDownload
+        currentDisplayContext = displayContext
         prefersCircularPlayBadge = false
         applyContent(
             item: item,
             downloadRecord: downloadRecord,
-            downloadProgressFraction: downloadProgressFraction,
-            downloadProgressText: downloadProgressText,
             isDownloading: isDownloading,
             isDownloaded: isDownloaded,
+            isMultiSelectMode: isMultiSelectMode,
             isKeyboardFocused: isKeyboardFocused
         )
     }
@@ -581,19 +700,8 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             width: barWidth,
             height: metrics.barHeight
         )
-        let progressFrame = CGRect(
-            x: metrics.barHorizontalInset,
-            y: max(
-                metrics.barBottomInset + metrics.barHeight + Layout.progressBottomSpacing,
-                metrics.barBottomInset
-            ),
-            width: barWidth,
-            height: Layout.progressHeight
-        )
         overlayBarShadowView.frame = barFrame
         overlayBar.frame = barFrame
-        downloadProgressTrackView.frame = progressFrame
-        updateDownloadProgressFrame()
 
         let iconSize = metrics.iconButtonSize
         let barMidY = floor((overlayBar.bounds.height - iconSize) * 0.5)
@@ -614,12 +722,30 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             height: overlayBar.bounds.height
         )
 
+        let badgeSize = max(22, min(28, cardView.bounds.width * 0.12))
+        let badgeOrigin: CGPoint
+        if currentDisplayContext == .downloads && isMultiSelectMode {
+            badgeOrigin = CGPoint(
+                x: floor((cardView.bounds.width - badgeSize) * 0.5),
+                y: floor((cardView.bounds.height - badgeSize) * 0.5)
+            )
+        } else {
+            badgeOrigin = CGPoint(x: 10, y: cardView.bounds.height - badgeSize - 10)
+        }
+        multiSelectBadgeView.frame = CGRect(origin: badgeOrigin, size: CGSize(width: badgeSize, height: badgeSize))
+        multiSelectBadgeIcon.frame = multiSelectBadgeView.bounds.insetBy(dx: 5, dy: 5)
+
         applyHoverStyle(animated: false)
         refreshTrackingArea()
         syncHoverStateFromWindow(animated: false)
     }
 
     func setKeyboardFocus(_ focused: Bool) {
+        isSelectionHighlighted = focused
+        refreshThemeAwareAppearance()
+        if view.window != nil {
+            applyHoverStyle(animated: false)
+        }
         if focused {
             syncHoverStateFromWindow(animated: false)
         }
@@ -648,15 +774,23 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     private func applyContent(
         item: SteamWorkshopBrowserItem,
         downloadRecord: SteamWorkshopDownloadRecord?,
-        downloadProgressFraction: Double?,
-        downloadProgressText: String?,
         isDownloading: Bool,
         isDownloaded: Bool,
+        isMultiSelectMode: Bool,
         isKeyboardFocused: Bool
     ) {
+        let barState = resolvedBarState(
+            downloadRecord: downloadRecord,
+            isDownloading: isDownloading,
+            isDownloaded: isDownloaded
+        )
+        currentBarState = barState
+        shouldPersistBarVisibility = shouldPersistBar(for: barState)
+        isSelectionHighlighted = isKeyboardFocused
+        self.isMultiSelectMode = isMultiSelectMode
+        let displayTitle = resolvedDisplayTitle(item: item, downloadRecord: downloadRecord, barState: barState)
         currentTitleText = item.title
-        currentDownloadProgressFraction = isDownloading ? downloadProgressFraction : nil
-        titleMarqueeView.text = item.title
+        titleMarqueeView.text = displayTitle
         detailButton.setAccessibilityLabel("查看详情：\(item.title)")
 
         currentActionKind = resolvedActionKind(
@@ -666,15 +800,67 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         )
         applyStatusBadgeAppearance(
             actionKind: currentActionKind,
-            itemTitle: item.title,
-            progressText: downloadProgressText
+            itemTitle: item.title
         )
 
-        titleMarqueeView.setActive(true)
+        titleMarqueeView.setActive(barState == .idle || barState == .ready || barState == .failed)
         refreshThemeAwareAppearance()
-        updateDownloadProgressFrame()
         if view.window != nil {
             applyHoverStyle(animated: false)
+        }
+    }
+
+    private func resolvedBarState(
+        downloadRecord: SteamWorkshopDownloadRecord?,
+        isDownloading: Bool,
+        isDownloaded: Bool
+    ) -> BarState {
+        if isDownloading || downloadRecord?.status == .downloading {
+            return .downloading
+        }
+        if downloadRecord?.status == .queued {
+            return .queued
+        }
+        if isDownloaded {
+            return .ready
+        }
+        if downloadRecord?.failureMessage != nil {
+            return .failed
+        }
+        return .idle
+    }
+
+    private func resolvedDisplayTitle(
+        item: SteamWorkshopBrowserItem,
+        downloadRecord: SteamWorkshopDownloadRecord?,
+        barState: BarState
+    ) -> String {
+        let trimmedRecordSize = downloadRecord?.sizeText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sizeText = (trimmedRecordSize?.isEmpty == false ? trimmedRecordSize : nil)
+            ?? item.fileSizeText
+            ?? "未知大小"
+
+        switch barState {
+        case .downloading:
+            return "下载中/\(sizeText)"
+        case .queued:
+            return "队列中/\(sizeText)"
+        case .idle, .ready, .failed:
+            return item.title
+        }
+    }
+
+    private func shouldPersistBar(for state: BarState) -> Bool {
+        if currentDisplayContext == .downloads && isMultiSelectMode {
+            return false
+        }
+        switch state {
+        case .downloading, .queued:
+            return true
+        case .ready:
+            return currentDisplayContext == .browser
+        case .idle, .failed:
+            return false
         }
     }
 
@@ -683,7 +869,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         isDownloading: Bool,
         isDownloaded: Bool
     ) -> ActionKind {
-        if isDownloading {
+        if isDownloading || downloadRecord?.status == .queued {
             return .cancel
         }
         if isDownloaded {
@@ -697,8 +883,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
 
     private func applyStatusBadgeAppearance(
         actionKind: ActionKind,
-        itemTitle: String,
-        progressText: String?
+        itemTitle: String
     ) {
         let symbolName: String
         let tintColor: NSColor
@@ -706,21 +891,21 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
 
         switch actionKind {
         case .download:
-            symbolName = "archivebox"
+            symbolName = "square.and.arrow.down"
             tintColor = .white
             accessibilityLabel = "下载：\(itemTitle)"
         case .cancel:
-            symbolName = "hourglass"
-            tintColor = .systemBlue
-            accessibilityLabel = progressText?.isEmpty == false
-                ? "取消下载：\(itemTitle)，当前进度 \(progressText!)"
+            symbolName = currentBarState == .downloading ? "arrow.clockwise" : "xmark"
+            tintColor = .white
+            accessibilityLabel = currentBarState == .downloading
+                ? "下载中：\(itemTitle)"
                 : "取消下载：\(itemTitle)"
         case .setAsWallpaper:
-            symbolName = prefersCircularPlayBadge ? "play.fill" : "checkmark"
+            symbolName = "play.fill"
             tintColor = .white
-            accessibilityLabel = prefersCircularPlayBadge ? "播放：\(itemTitle)" : "设为壁纸：\(itemTitle)"
+            accessibilityLabel = "播放：\(itemTitle)"
         case .retry:
-            symbolName = "exclamationmark"
+            symbolName = "square.and.arrow.down"
             tintColor = .white
             accessibilityLabel = "重新下载：\(itemTitle)"
         }
@@ -731,6 +916,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         )
         statusBadgeButton.iconTintColor = tintColor
         statusBadgeButton.setAccessibilityLabel(accessibilityLabel)
+        updateStatusBadgeAnimation()
     }
 
     private func metrics(for cardSize: CGSize) -> Metrics {
@@ -833,13 +1019,17 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         previewImageView.animates = true
         previewContainer.addSubview(previewImageView)
 
-        downloadProgressTrackView.wantsLayer = true
-        downloadProgressTrackView.layer?.masksToBounds = true
-        cardView.addSubview(downloadProgressTrackView)
+        multiSelectBadgeView.wantsLayer = true
+        multiSelectBadgeView.layer?.cornerRadius = 12
+        multiSelectBadgeView.layer?.masksToBounds = true
+        multiSelectBadgeView.isHidden = true
+        cardView.addSubview(multiSelectBadgeView)
 
-        downloadProgressFillView.wantsLayer = true
-        downloadProgressFillView.layer?.masksToBounds = true
-        downloadProgressTrackView.addSubview(downloadProgressFillView)
+        multiSelectBadgeIcon.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)
+        multiSelectBadgeIcon.contentTintColor = .white
+        multiSelectBadgeIcon.imageScaling = .scaleProportionallyDown
+        multiSelectBadgeIcon.isHidden = true
+        multiSelectBadgeView.addSubview(multiSelectBadgeIcon)
 
         overlayBarShadowView.wantsLayer = true
         overlayBarShadowView.layer?.backgroundColor = NSColor.clear.cgColor
@@ -853,7 +1043,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         overlayBar.wantsLayer = true
         cardView.addSubview(overlayBar)
 
-        detailButton.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "详情")
+        detailButton.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "详情")
         detailButton.target = self
         detailButton.action = #selector(handleOpen)
         overlayBar.addSubview(detailButton)
@@ -873,10 +1063,8 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         let fixedForeground = isDarkMode
             ? NSColor(calibratedWhite: 1.0, alpha: 0.98)
             : NSColor(calibratedWhite: 0.08, alpha: 0.92)
-        let fixedBorder = isDarkMode
-            ? NSColor(calibratedWhite: 0.18, alpha: isHovering ? 0.18 : 0.14)
-            : NSColor(calibratedWhite: 1.0, alpha: isHovering ? 0.22 : 0.18)
         let hoverOutlineColor = NSColor.white.withAlphaComponent(isDarkMode ? 0.56 : 0.72)
+        let selectedOutlineColor = NSColor.controlAccentColor.withAlphaComponent(isDarkMode ? 0.92 : 0.84)
 
         layer.backgroundColor = NSColor.clear.cgColor
         let ringColor: NSColor
@@ -889,32 +1077,33 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         layer.shadowOpacity = isHovering ? 0.05 : 0.025
         layer.shadowRadius = isHovering ? 7 : 6
         layer.shadowOffset = CGSize(width: 0, height: -1)
-        hoverOutlineView.layer?.borderColor = hoverOutlineColor.cgColor
+        hoverOutlineView.layer?.borderColor = (isSelectionHighlighted ? selectedOutlineColor : hoverOutlineColor).cgColor
+        hoverOutlineView.layer?.borderWidth = isSelectionHighlighted ? 1.6 : 1
 
         previewContainer.layer?.backgroundColor = NSColor.clear.cgColor
 
+        let showsSelectionBadge = currentDisplayContext == .downloads && isMultiSelectMode
+        multiSelectBadgeView.isHidden = !showsSelectionBadge
+        if showsSelectionBadge {
+            multiSelectBadgeView.layer?.backgroundColor = isSelectionHighlighted
+                ? NSColor.controlAccentColor.cgColor
+                : NSColor.black.withAlphaComponent(0.42).cgColor
+            multiSelectBadgeView.layer?.borderColor = NSColor.white.withAlphaComponent(0.28).cgColor
+            multiSelectBadgeView.layer?.borderWidth = isSelectionHighlighted ? 0 : 1
+            multiSelectBadgeIcon.isHidden = !isSelectionHighlighted
+        } else {
+            multiSelectBadgeIcon.isHidden = true
+        }
+
         overlayBar.appearance = NSAppearance(named: isDarkMode ? .darkAqua : .aqua)
-        overlayBar.alphaValue = currentBarVisibility ? 0.78 : 0
-        overlayBar.layer?.borderColor = fixedBorder.cgColor
+        overlayBar.alphaValue = currentBarVisibility ? (isHovering ? 0.92 : 0.84) : 0
         overlayBar.layer?.borderWidth = 0.8
         overlayBar.layer?.shadowOpacity = 0
         overlayBarShadowView.layer?.shadowOpacity = currentBarVisibility ? 0.11 : 0.08
         overlayBarShadowView.layer?.shadowRadius = 18
         overlayBarShadowView.layer?.shadowOffset = CGSize(width: 0, height: -1)
-
-        let progressVisible = currentDownloadProgressFraction != nil
-        let progressTrackColor = isDarkMode
-            ? NSColor.white.withAlphaComponent(0.12)
-            : NSColor.black.withAlphaComponent(0.12)
-        let progressFillColor = isDarkMode
-            ? NSColor.systemBlue.withAlphaComponent(0.94)
-            : NSColor.systemBlue.withAlphaComponent(0.84)
-        downloadProgressTrackView.layer?.backgroundColor = progressTrackColor.cgColor
-        downloadProgressTrackView.layer?.cornerRadius = Layout.progressHeight * 0.5
-        downloadProgressFillView.layer?.backgroundColor = progressFillColor.cgColor
-        downloadProgressFillView.layer?.cornerRadius = Layout.progressHeight * 0.5
-        downloadProgressTrackView.alphaValue = progressVisible ? 1 : 0
-        downloadProgressTrackView.isHidden = !progressVisible
+        overlayBar.applyAccentStyle(barAccentStyle(for: currentBarState), animated: false)
+        overlayBar.setScanAnimationEnabled(currentBarState == .downloading || currentBarState == .queued)
 
         detailButton.normalBackgroundColor = .clear
         detailButton.hoverBackgroundColor = .clear
@@ -941,34 +1130,36 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         statusBadgeButton.pressedBackgroundColor = .clear
         statusBadgeButton.borderColor = .clear
         statusBadgeButton.borderWidth = 0
-        switch currentActionKind {
-        case .cancel:
-            statusBadgeButton.iconTintColor = NSColor.systemBlue.withAlphaComponent(isDarkMode ? 0.96 : 0.92)
-        default:
-            statusBadgeButton.iconTintColor = fixedForeground
-        }
+        statusBadgeButton.iconTintColor = fixedForeground
         statusBadgeButton.appearance = overlayBar.appearance
+        updateStatusBadgeAnimation()
     }
 
-    private func updateDownloadProgressFrame() {
-        let fraction = min(max(currentDownloadProgressFraction ?? 0, 0), 1)
-        let width = downloadProgressTrackView.bounds.width
-        guard width.isFinite, width > 0 else {
-            downloadProgressFillView.frame = .zero
-            return
+    private func updateStatusBadgeAnimation() {
+        guard let layer = statusBadgeButton.layer else { return }
+        let animationKey = "steam.status.spin"
+        let shouldSpin = currentActionKind == .cancel && currentBarState == .downloading
+        if shouldSpin {
+            guard layer.animation(forKey: animationKey) == nil else { return }
+            let animation = CABasicAnimation(keyPath: "transform.rotation.z")
+            animation.fromValue = 0
+            animation.toValue = CGFloat.pi * 2
+            animation.duration = 0.9
+            animation.repeatCount = .infinity
+            animation.timingFunction = CAMediaTimingFunction(name: .linear)
+            animation.isRemovedOnCompletion = false
+            layer.add(animation, forKey: animationKey)
+        } else {
+            layer.removeAnimation(forKey: animationKey)
         }
-        downloadProgressFillView.frame = CGRect(
-            x: 0,
-            y: 0,
-            width: max(Layout.progressHeight, floor(width * fraction)),
-            height: downloadProgressTrackView.bounds.height
-        )
     }
 
     private func applyHoverStyle(animated: Bool) {
-        let shouldRevealBar = isHovering
+        let suppressDownloadsBar = currentDisplayContext == .downloads && isMultiSelectMode
+        let shouldRevealBar = !suppressDownloadsBar && (isHovering || shouldPersistBarVisibility)
+        let shouldShowOutline = isHovering || isSelectionHighlighted
         let targetScale: CGFloat
-        if shouldRevealBar {
+        if isHovering {
             targetScale = isPressingCard ? Self.pressedScale : Self.hoverScale
         } else {
             targetScale = 1.0
@@ -986,13 +1177,13 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             cardView.layer?.transform = CATransform3DMakeScale(targetScale, targetScale, 1)
-            overlayBar.alphaValue = shouldRevealBar ? 0.82 : 0
+            overlayBar.alphaValue = shouldRevealBar ? (isHovering ? 0.92 : 0.84) : 0
             overlayBar.layer?.transform = CATransform3DMakeTranslation(0, shouldRevealBar ? 0 : 4, 0)
             CATransaction.commit()
-            hoverOutlineView.alphaValue = shouldRevealBar ? 1 : 0
+            hoverOutlineView.alphaValue = shouldShowOutline ? 1 : 0
             currentCardScale = targetScale
             currentBarVisibility = shouldRevealBar
-            isHoverOutlineVisible = shouldRevealBar
+            isHoverOutlineVisible = shouldShowOutline
             return
         }
 
@@ -1000,20 +1191,34 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             context.duration = duration
             context.timingFunction = timing
             self.cardView.animator().alphaValue = 1
-            self.overlayBar.animator().alphaValue = shouldRevealBar ? 0.82 : 0
-            self.hoverOutlineView.animator().alphaValue = shouldRevealBar ? 1 : 0
+            self.overlayBar.animator().alphaValue = shouldRevealBar ? (self.isHovering ? 0.92 : 0.84) : 0
+            self.hoverOutlineView.animator().alphaValue = shouldShowOutline ? 1 : 0
         }
 
         applyCardTransform(targetScale: targetScale, duration: duration, timing: timing)
         applyBarTransform(isVisible: shouldRevealBar, duration: duration, timing: timing)
         currentBarVisibility = shouldRevealBar
-        isHoverOutlineVisible = shouldRevealBar
+        isHoverOutlineVisible = shouldShowOutline
+    }
+
+    private func barAccentStyle(for state: BarState) -> SteamWorkshopGlassBarView.AccentStyle {
+        switch state {
+        case .downloading:
+            return .downloading
+        case .queued:
+            return .queued
+        case .ready:
+            return currentDisplayContext == .downloads ? .ready : .neutral
+        case .idle, .failed:
+            return .neutral
+        }
     }
 
     func applyPressedState(_ pressed: Bool) {
         guard isPressingCard != pressed else { return }
         isPressingCard = pressed
         guard isHovering else { return }
+        guard !(currentDisplayContext == .downloads && isMultiSelectMode) else { return }
         applyCardTransform(
             targetScale: pressed ? Self.pressedScale : Self.hoverScale,
             duration: pressed ? UIInteractionAnimation.cardPressDownDuration : UIInteractionAnimation.cardPressUpDuration,
@@ -1166,8 +1371,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         self.prefersCircularPlayBadge = prefersCircularPlayBadge
         applyStatusBadgeAppearance(
             actionKind: currentActionKind,
-            itemTitle: currentTitleText,
-            progressText: nil
+            itemTitle: currentTitleText
         )
         if view.window != nil {
             refreshThemeAwareAppearance()

@@ -22,7 +22,7 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
 
 我管理的不是“一个万能机器人”，而是一条受控流水线：
 
-`Explorer -> Architect -> Protocol Steward / Module Agent -> Gatekeeper`
+`Explorer -> Architect -> Protocol Steward / Module Agent -> Integrator -> Verifier -> Gatekeeper`
 
 ---
 
@@ -55,7 +55,10 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
 - `Architect` 负责判责和拆任务
 - `Protocol Steward` 负责公共层协作协议
 - `Module Agent` 负责各自模块内部实现
+- `Integrator` 负责把多角色输出收口成一次完整交付
+- `Verifier` 负责对照验收标准检查是否真正闭环
 - `Gatekeeper` 负责拒绝违规
+- 所有角色都必须知道团队地图、转交规则和上报路径
 
 谁越位，谁停下。
 
@@ -69,6 +72,7 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
 - 直接按错误方案实现
 - 因为“先做出来”而破坏架构
 - 没审查就合入补丁
+- 被阻塞后既不上报，也不转交
 
 ---
 
@@ -90,6 +94,16 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
   - `InspectorHostActions`
 
 如果机器人给出的方案违背这些事实，我就认为它已经偏航。
+
+除此之外，我还要求团队里每个 Agent 都知道：
+
+- 团队中还有哪些角色
+- 自己遇到边界问题时该找谁
+- 自己遇到阻塞时必须向上报告给谁
+
+统一协作协议文件：
+
+- `docs/agents/collaboration-protocol.md`
 
 ---
 
@@ -215,7 +229,9 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
 
 1. Protocol Steward 改公共协议
 2. 对应 Module Agent 实现模块接入
-3. Gatekeeper 审查二者是否一致
+3. Integrator 收口交付边界
+4. Verifier 检查验收与回归
+5. Gatekeeper 审查是否放行
 
 ---
 
@@ -334,6 +350,8 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
 - `Architect` 不跳过扫描
 - `Module Agent` 不越过自己目录
 - `Protocol Steward` 不替模块写业务
+- `Integrator` 不冒充新的实现者
+- `Verifier` 不在验证时偷偷代修
 - `Gatekeeper` 不装宽松
 
 只要有人越位，短期也许更快，但长期一定会让项目失控。
@@ -416,6 +434,6 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
 - 它会在越界时停下
 - 它会在我说错时纠偏
 - 它会把跨模块协作收束到统一协议
-- 它会把补丁交给 Gatekeeper 审查
+- 它会把补丁先收口、再验证、最后交给 Gatekeeper 审查
 
 只有这样，机器人才能长期成为我的工程能力放大器，而不是不稳定的风险来源。

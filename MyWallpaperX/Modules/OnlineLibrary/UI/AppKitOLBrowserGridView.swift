@@ -132,8 +132,6 @@ final class AppKitOLBrowserContainerView: NSView, ModuleFocusable {
         }
     }()
 
-    // MARK: - 无限加载触发器（collection view footer 模拟 onAppear）
-    private var loadMoreObserver: NSObjectProtocol?
     private var lastLoadedCount = 0
 
     // MARK: - Init
@@ -213,16 +211,15 @@ final class AppKitOLBrowserContainerView: NSView, ModuleFocusable {
         .store(in: &cancellables)
 
         // ModuleFocusable：监听模块激活通知，自动接管焦点
-        NotificationCenter.default.addObserver(
-            forName: .moduleDidBecomeActive,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard let module = notification.userInfo?["module"] as? String,
-                  module == ModuleIdentifier.onlineLibrary.rawValue
-            else { return }
-            self?.requestFocus()
-        }
+        NotificationCenter.default.publisher(for: .moduleDidBecomeActive)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] notification in
+                guard let module = notification.userInfo?["module"] as? String,
+                      module == ModuleIdentifier.onlineLibrary.rawValue
+                else { return }
+                self?.requestFocus()
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - ModuleFocusable

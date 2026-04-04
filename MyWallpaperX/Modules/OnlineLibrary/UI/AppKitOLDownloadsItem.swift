@@ -382,6 +382,7 @@ final class AppKitOLDownloadsItem: NSCollectionViewItem {
         multiSelectBadge.layer?.masksToBounds = true
         multiSelectBadge.isHidden = true
 
+        multiSelectBadgeIcon.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)
         multiSelectBadgeIcon.contentTintColor = .white
         multiSelectBadgeIcon.imageScaling = .scaleProportionallyDown
         multiSelectBadgeIcon.translatesAutoresizingMaskIntoConstraints = false
@@ -457,7 +458,6 @@ final class AppKitOLDownloadsItem: NSCollectionViewItem {
         let (titleSize, metaSize) = fontSizeForWidth(width)
         let pad = max(6, width * 0.05)
         let gap = 2.0
-        let btnBaseSize: CGFloat = 28
 
         if titleLabel.font?.pointSize != titleSize {
             titleLabel.font = .systemFont(ofSize: titleSize, weight: .medium)
@@ -498,6 +498,21 @@ final class AppKitOLDownloadsItem: NSCollectionViewItem {
         checkInitialHoverState()
 
         let multiSelectSize: CGFloat = 24
+        multiSelectBadge.frame = NSRect(
+            x: floor((imageContainer.bounds.width - multiSelectSize) / 2),
+            y: floor((imageContainer.bounds.height - multiSelectSize) / 2),
+            width: multiSelectSize,
+            height: multiSelectSize
+        )
+        multiSelectBadge.layer?.cornerRadius = multiSelectSize / 2
+
+        let multiSelectIconSize: CGFloat = 14
+        multiSelectBadgeIcon.frame = NSRect(
+            x: floor((multiSelectSize - multiSelectIconSize) / 2),
+            y: floor((multiSelectSize - multiSelectIconSize) / 2),
+            width: multiSelectIconSize,
+            height: multiSelectIconSize
+        )
     }
 
     private func checkInitialHoverState() {
@@ -516,19 +531,6 @@ final class AppKitOLDownloadsItem: NSCollectionViewItem {
     private func applyTitleFadeMaskIfNeeded() {
         applyFadeMask(to: titleLabel)
         applyFadeMask(to: metaLabel)
-    }
-
-    private func adaptiveActionTrailingInset(forWidth width: CGFloat, pad: CGFloat) -> CGFloat {
-        switch width {
-        case ..<150:
-            return pad + max(3, width * 0.018)
-        case 150..<210:
-            return pad + max(6, width * 0.035)
-        case 210..<280:
-            return pad + max(10, width * 0.055)
-        default:
-            return pad + max(14, width * 0.075)
-        }
     }
 
     private func applyFadeMask(to label: NSTextField) {

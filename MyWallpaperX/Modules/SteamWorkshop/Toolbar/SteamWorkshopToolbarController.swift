@@ -17,13 +17,17 @@ extension NSToolbarItem.Identifier {
     static let steamSearch = NSToolbarItem.Identifier("ToolbarSteamSearch")
     static let steamDownloadsTitle = NSToolbarItem.Identifier("ToolbarSteamDownloadsTitle")
     static let steamDownloadsReveal = NSToolbarItem.Identifier("ToolbarSteamDownloadsReveal")
+    static let steamDownloadsSelect = NSToolbarItem.Identifier("ToolbarSteamDownloadsSelect")
+    static let steamDownloadsDelete = NSToolbarItem.Identifier("ToolbarSteamDownloadsDelete")
+    static let steamDownloadsInfo = NSToolbarItem.Identifier("ToolbarSteamDownloadsInfo")
+    static let steamDownloadsSort = NSToolbarItem.Identifier("ToolbarSteamDownloadsSort")
     static let steamDownloadsSearch = NSToolbarItem.Identifier("ToolbarSteamDownloadsSearch")
 }
 
 final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
     private enum Title {
         static let browser = "Steam 创意工坊"
-        static let downloads = "Steam 下载页"
+        static let downloads = "Steam 下载"
     }
 
     weak var toolbar: NSToolbar?
@@ -80,9 +84,12 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
         .sidebarTrackingSeparator,
         .steamDownloadsTitle,
         .flexibleSpace,
-        .steamDownloadsReveal,
+        .steamDownloadsSelect,
         .space,
-        .steamRefresh,
+        .steamDownloadsDelete,
+        .steamDownloadsInfo,
+        .steamDownloadsReveal,
+        .steamDownloadsSort,
         .space,
         .steamZoom,
         .space,
@@ -175,6 +182,38 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
             }
             .store(in: &cancellables)
 
+        Publishers.CombineLatest(
+            SteamWorkshopService.shared.$selectedDownloadID,
+            SteamWorkshopService.shared.$downloads
+        )
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _, _ in
+            self?.configureDownloadsInfoItem()
+            self?.configureDownloadsRevealItem()
+            self?.configureDownloadsDeleteItem()
+        }
+        .store(in: &cancellables)
+
+        SteamWorkshopService.shared.$isDownloadsMultiSelectMode
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.configureDownloadsSelectItem()
+                self?.configureDownloadsInfoItem()
+                self?.configureDownloadsRevealItem()
+                self?.configureDownloadsDeleteItem()
+            }
+            .store(in: &cancellables)
+
+        Publishers.CombineLatest(
+            SteamWorkshopService.shared.$downloadsSortMode,
+            SteamWorkshopService.shared.$downloadsSortAscending
+        )
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _, _ in
+            self?.configureDownloadsSortItem()
+        }
+        .store(in: &cancellables)
+
         Publishers.CombineLatest4(
             SteamWorkshopService.shared.$themeFilter,
             SteamWorkshopService.shared.$ageRatingFilter,
@@ -199,6 +238,11 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
 
         if isDownloads {
             configureDownloadsTitleItem()
+            configureDownloadsSelectItem()
+            configureDownloadsDeleteItem()
+            configureDownloadsInfoItem()
+            configureDownloadsRevealItem()
+            configureDownloadsSortItem()
             syncDownloadsSearchField()
         } else {
             titleUpdateHandler?(SteamWorkshopService.shared.browserSectionTitle)
@@ -230,6 +274,18 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
             return searchToolbarItem
         case .steamDownloadsTitle: return downloadsTitleItem
         case .steamDownloadsReveal: return downloadsRevealItem
+        case .steamDownloadsSelect:
+            configureDownloadsSelectItem()
+            return downloadsSelectItem
+        case .steamDownloadsDelete:
+            configureDownloadsDeleteItem()
+            return downloadsDeleteItem
+        case .steamDownloadsInfo:
+            configureDownloadsInfoItem()
+            return downloadsInfoItem
+        case .steamDownloadsSort:
+            configureDownloadsSortItem()
+            return downloadsSortItem
         case .steamDownloadsSearch: return downloadsSearchItem
         default: return nil
         }
@@ -270,13 +326,49 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
 
     lazy var downloadsRevealItem: NSToolbarItem = {
         let item = NSToolbarItem(itemIdentifier: .steamDownloadsReveal)
-        item.label = "打开目录"
-        item.paletteLabel = "打开目录"
-        item.toolTip = "在访达中打开 Steam 下载目录"
+        item.label = "查看文件"
+        item.paletteLabel = "查看文件"
+        item.toolTip = "在访达中显示当前选中的下载项"
         item.autovalidates = false
-        item.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "打开目录")
+        item.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "查看文件")
         item.target = self
         item.action = #selector(handleRevealDownloads)
+        return item
+    }()
+
+    lazy var downloadsDeleteItem: NSToolbarItem = {
+        let item = NSToolbarItem(itemIdentifier: .steamDownloadsDelete)
+        item.label = "删除"
+        item.paletteLabel = "删除"
+        item.toolTip = "删除当前选中的下载项"
+        item.autovalidates = false
+        item.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "删除")
+        item.target = self
+        item.action = #selector(handleDeleteSelectedDownload)
+        return item
+    }()
+
+    lazy var downloadsInfoItem: NSToolbarItem = {
+        let item = NSToolbarItem(itemIdentifier: .steamDownloadsInfo)
+        item.label = "信息"
+        item.paletteLabel = "信息"
+        item.toolTip = "查看详细信息"
+        item.autovalidates = false
+        item.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "信息")
+        item.target = self
+        item.action = #selector(handleShowSelectedDownloadInfo)
+        return item
+    }()
+
+    lazy var downloadsSelectItem: NSToolbarItem = {
+        let item = NSToolbarItem(itemIdentifier: .steamDownloadsSelect)
+        item.label = "选择"
+        item.paletteLabel = "选择"
+        item.toolTip = "进入选择模式"
+        item.autovalidates = false
+        item.image = NSImage(systemSymbolName: "checkmark.circle", accessibilityDescription: "选择")
+        item.target = self
+        item.action = #selector(handleToggleDownloadsSelectMode)
         return item
     }()
 
@@ -286,7 +378,29 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
         item.searchField.placeholderString = "搜索下载项"
         item.searchField.sendsSearchStringImmediately = true
         item.resignsFirstResponderWithCancel = true
-        item.preferredWidthForSearchField = 180
+        item.preferredWidthForSearchField = 165
+        return item
+    }()
+
+    lazy var downloadsSortMenuButton: NSButton = {
+        let button = NSButton(frame: NSRect(x: 0, y: 0, width: 28, height: 28))
+        button.bezelStyle = .texturedRounded
+        button.isBordered = true
+        button.image = NSImage(systemSymbolName: "line.3.horizontal.decrease", accessibilityDescription: "排序")
+        button.imageScaling = .scaleProportionallyDown
+        button.target = self
+        button.action = #selector(handleDownloadsSortAction(_:))
+        button.toolTip = "排序方式"
+        return button
+    }()
+
+    lazy var downloadsSortItem: NSToolbarItem = {
+        let item = NSToolbarItem(itemIdentifier: .steamDownloadsSort)
+        item.label = "排序"
+        item.paletteLabel = "排序"
+        item.toolTip = "排序方式"
+        item.autovalidates = false
+        item.view = downloadsSortMenuButton
         return item
     }()
 
@@ -587,6 +701,44 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
         downloadsTitleItem.toolTip = Title.downloads
     }
 
+    private func configureDownloadsSelectItem() {
+        let isMultiSelectMode = SteamWorkshopService.shared.isDownloadsMultiSelectMode
+        let symbolName = isMultiSelectMode ? "checkmark.circle.fill" : "checkmark.circle"
+        downloadsSelectItem.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "选择")
+        downloadsSelectItem.toolTip = isMultiSelectMode ? "退出选择模式" : "进入选择模式"
+    }
+
+    private func configureDownloadsDeleteItem() {
+        let enabled = isDownloadsMode && SteamWorkshopService.shared.canDeleteSelectedDownload
+        downloadsDeleteItem.isEnabled = enabled
+        downloadsDeleteItem.toolTip = enabled
+            ? "删除当前选中的下载项"
+            : "请先选中一个已下载或失败的项目"
+    }
+
+    private func configureDownloadsInfoItem() {
+        let enabled = isDownloadsMode && SteamWorkshopService.shared.canShowSelectedDownloadInfo
+        downloadsInfoItem.isEnabled = enabled
+        downloadsInfoItem.toolTip = enabled
+            ? "查看当前选中下载项的详细信息"
+            : "请先单选一个下载项"
+    }
+
+    private func configureDownloadsRevealItem() {
+        let enabled = isDownloadsMode && SteamWorkshopService.shared.canRevealSelectedDownload
+        downloadsRevealItem.isEnabled = enabled
+        downloadsRevealItem.toolTip = enabled
+            ? "在访达中显示当前选中的下载项"
+            : "请先单选一个下载项"
+    }
+
+    private func configureDownloadsSortItem() {
+        let service = SteamWorkshopService.shared
+        let direction = service.downloadsSortAscending ? "升序" : "降序"
+        downloadsSortMenuButton.toolTip = "排序方式：\(service.downloadsSortMode.displayName) · \(direction)"
+        downloadsSortItem.toolTip = downloadsSortMenuButton.toolTip
+    }
+
     @objc private func handleSortAction(_ sender: NSPopUpButton) {
         guard !SteamWorkshopService.shared.isBrowsingAuthorWorkshop else {
             syncBrowserContextControls()
@@ -729,7 +881,71 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
     }
 
     @objc private func handleRevealDownloads() {
-        SteamWorkshopService.shared.revealDownloadsDirectory()
+        SteamWorkshopService.shared.revealSelectedDownload()
+        configureDownloadsRevealItem()
+    }
+
+    @objc private func handleDeleteSelectedDownload() {
+        SteamWorkshopService.shared.deleteSelectedDownload()
+        configureDownloadsInfoItem()
+        configureDownloadsRevealItem()
+        configureDownloadsDeleteItem()
+    }
+
+    @objc private func handleToggleDownloadsSelectMode() {
+        SteamWorkshopService.shared.toggleDownloadsMultiSelectMode()
+        configureDownloadsSelectItem()
+        configureDownloadsInfoItem()
+        configureDownloadsRevealItem()
+        configureDownloadsDeleteItem()
+    }
+
+    @objc private func handleShowSelectedDownloadInfo() {
+        SteamWorkshopService.shared.presentSelectedDownloadInfo()
+        configureDownloadsInfoItem()
+    }
+
+    @objc private func handleDownloadsSortAction(_ sender: NSButton) {
+        let service = SteamWorkshopService.shared
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        SteamWorkshopDownloadsSortMode.allCases.forEach { mode in
+            let item = NSMenuItem(title: mode.displayName, action: #selector(handleDownloadsSortModeItem(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = mode.rawValue
+            item.state = service.downloadsSortMode == mode ? .on : .off
+            menu.addItem(item)
+        }
+
+        menu.addItem(.separator())
+
+        let ascendingItem = NSMenuItem(title: "升序", action: #selector(handleDownloadsSortDirectionItem(_:)), keyEquivalent: "")
+        ascendingItem.target = self
+        ascendingItem.representedObject = true
+        ascendingItem.state = service.downloadsSortAscending ? .on : .off
+        menu.addItem(ascendingItem)
+
+        let descendingItem = NSMenuItem(title: "降序", action: #selector(handleDownloadsSortDirectionItem(_:)), keyEquivalent: "")
+        descendingItem.target = self
+        descendingItem.representedObject = false
+        descendingItem.state = service.downloadsSortAscending ? .off : .on
+        menu.addItem(descendingItem)
+
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+    }
+
+    @objc private func handleDownloadsSortModeItem(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let mode = SteamWorkshopDownloadsSortMode(rawValue: rawValue) else { return }
+        SteamWorkshopService.shared.downloadsSortMode = mode
+        configureDownloadsSortItem()
+    }
+
+    @objc private func handleDownloadsSortDirectionItem(_ sender: NSMenuItem) {
+        guard let ascending = sender.representedObject as? Bool else { return }
+        SteamWorkshopService.shared.downloadsSortAscending = ascending
+        configureDownloadsSortItem()
     }
 
     @objc private func handleBrowseAnonymously() {
@@ -795,7 +1011,11 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
             .steamZoom,
             .steamSearch,
             .steamDownloadsTitle,
+            .steamDownloadsSelect,
+            .steamDownloadsDelete,
+            .steamDownloadsInfo,
             .steamDownloadsReveal,
+            .steamDownloadsSort,
             .steamDownloadsSearch,
             .space,
             .flexibleSpace

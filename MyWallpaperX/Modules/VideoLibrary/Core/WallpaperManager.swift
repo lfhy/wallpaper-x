@@ -48,12 +48,28 @@ class WallpaperManager: ObservableObject {
     
     @Published var selectedCategory: Category = .myWallpapers
     @Published var selectedTag: String? = nil
-    @Published var wallpapers: [VideoWallpaper] = []
+    @Published var wallpapers: [VideoWallpaper] = [] {
+        didSet {
+            syncSelectedWallpaperInspectorIfNeeded()
+        }
+    }
     @Published var settings: WallpaperSettings = WallpaperSettings()
-    @Published var selectedWallpaperId: String? = nil
-    @Published var selectedWallpaperIds: Set<String> = []
+    @Published var selectedWallpaperId: String? = nil {
+        didSet {
+            syncSelectedWallpaperInspectorIfNeeded()
+        }
+    }
+    @Published var selectedWallpaperIds: Set<String> = [] {
+        didSet {
+            syncSelectedWallpaperInspectorIfNeeded()
+        }
+    }
     @Published var inspectedWallpaperID: String? = nil
-    @Published var isMultiSelectMode: Bool = false
+    @Published var isMultiSelectMode: Bool = false {
+        didSet {
+            syncSelectedWallpaperInspectorIfNeeded()
+        }
+    }
     @Published var isDragSelecting: Bool = false
     @Published var currentWallpaper: VideoWallpaper? = nil
     @Published var recentlyUsedWallpapers: [VideoWallpaper] = []
@@ -200,17 +216,6 @@ class WallpaperManager: ObservableObject {
         }
         .store(in: &cancellables)
 
-        Publishers.CombineLatest4(
-            $selectedWallpaperId,
-            $selectedWallpaperIds,
-            $isMultiSelectMode,
-            $wallpapers
-        )
-        .sink { [weak self] _, _, _, _ in
-            self?.syncSelectedWallpaperInspectorIfNeeded()
-        }
-        .store(in: &cancellables)
-        
         // 监听当前壁纸变化，自动保存
         $currentWallpaper
         .dropFirst()

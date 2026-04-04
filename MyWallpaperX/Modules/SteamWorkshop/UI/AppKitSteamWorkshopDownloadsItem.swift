@@ -143,7 +143,6 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
     private let titleLabel = SteamWorkshopMarqueeTextView()
     private let metaLabel = SteamWorkshopDownloadsCardTextLineView()
     private let secondaryMetaLabel = SteamWorkshopDownloadsCardTextLineView()
-    private let progressIndicator = NSProgressIndicator()
     private let setAsWallpaperButton = SteamWorkshopDownloadsCardButton(title: "设为壁纸", target: nil, action: nil)
     private let revealButton = SteamWorkshopDownloadsCardButton(title: "显示文件", target: nil, action: nil)
 
@@ -174,8 +173,6 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
         static let buttonGap: CGFloat = 8
         static let interSectionSpacing: CGFloat = 8
         static let textLineGap: CGFloat = 3
-        static let progressGap: CGFloat = 6
-        static let progressHeight: CGFloat = 6
         static let textToButtonsGap: CGFloat = 8
         static let titleLineHeight: CGFloat = 20
         static let metaLineHeight: CGFloat = 14
@@ -190,8 +187,6 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
         let buttonGap: CGFloat
         let interSectionSpacing: CGFloat
         let textLineGap: CGFloat
-        let progressGap: CGFloat
-        let progressHeight: CGFloat
         let textToButtonsGap: CGFloat
         let titleLineHeight: CGFloat
         let metaLineHeight: CGFloat
@@ -226,8 +221,6 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
         titleLabel.text = ""
         metaLabel.text = ""
         secondaryMetaLabel.text = ""
-        progressIndicator.isHidden = true
-        progressIndicator.doubleValue = 0
         onSetAsWallpaper = nil
         onReveal = nil
         onRetry = nil
@@ -271,10 +264,8 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
             height: buttonHeight
         )
 
-        let showsProgress = !progressIndicator.isHidden
-        let progressBlockHeight = showsProgress ? (metrics.progressGap + metrics.progressHeight) : 0
         let textBottom = buttonsY + buttonHeight + metrics.textToButtonsGap
-        let textContainerHeight = metrics.titleLineHeight + metrics.metaLineHeight * 2 + metrics.textLineGap * 2 + progressBlockHeight
+        let textContainerHeight = metrics.titleLineHeight + metrics.metaLineHeight * 2 + metrics.textLineGap * 2
         textContainer.frame = CGRect(
             x: centeredTextInset,
             y: textBottom,
@@ -296,12 +287,6 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
         )
         titleLabel.text = currentTitleText
         titleLabel.setActive(true)
-        progressIndicator.frame = CGRect(
-            x: 0,
-            y: titleLabel.frame.maxY + metrics.progressGap,
-            width: contentWidth,
-            height: metrics.progressHeight
-        )
 
         let previewY = textContainer.frame.maxY + metrics.interSectionSpacing
         let previewHeight = max(0, cardView.bounds.height - Layout.previewInset - Layout.previewTopInset - previewY)
@@ -331,8 +316,6 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
             buttonGap: round(Layout.buttonGap * scale),
             interSectionSpacing: round(Layout.interSectionSpacing * scale),
             textLineGap: round(Layout.textLineGap * scale),
-            progressGap: round(Layout.progressGap * scale),
-            progressHeight: max(4, round(Layout.progressHeight * scale)),
             textToButtonsGap: round(Layout.textToButtonsGap * scale),
             titleLineHeight: round(Layout.titleLineHeight * scale),
             metaLineHeight: round(Layout.metaLineHeight * scale),
@@ -356,7 +339,6 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
 
     func configure(
         record: SteamWorkshopDownloadRecord,
-        downloadProgressFraction: Double?,
         isKeyboardFocused: Bool,
         onSetAsWallpaper: @escaping () -> Void,
         onReveal: @escaping () -> Void,
@@ -372,13 +354,6 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
         currentTitleText = record.title
         metaLabel.text = record.id
         secondaryMetaLabel.text = [record.sizeText, record.statusText].joined(separator: "  ·  ")
-        if case .downloading = record.status, let downloadProgressFraction {
-            progressIndicator.isHidden = false
-            progressIndicator.doubleValue = min(max(downloadProgressFraction, 0), 1) * 100
-        } else {
-            progressIndicator.isHidden = true
-            progressIndicator.doubleValue = 0
-        }
 
         switch record.status {
         case .ready:
@@ -393,6 +368,10 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
             setAsWallpaperButton.title = "重新下载"
             setAsWallpaperButton.isEnabled = true
             setAsWallpaperButton.setAccessibilityLabel("重新下载：\(record.title)")
+        case .queued:
+            setAsWallpaperButton.title = "取消队列"
+            setAsWallpaperButton.isEnabled = true
+            setAsWallpaperButton.setAccessibilityLabel("取消下载队列：\(record.title)")
         case .downloading:
             setAsWallpaperButton.title = "取消下载"
             setAsWallpaperButton.isEnabled = true
@@ -457,15 +436,6 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
         secondaryMetaLabel.font = .systemFont(ofSize: 11, weight: .medium)
         secondaryMetaLabel.textColor = .secondaryLabelColor
         textContainer.addSubview(secondaryMetaLabel)
-
-        progressIndicator.isIndeterminate = false
-        progressIndicator.minValue = 0
-        progressIndicator.maxValue = 100
-        progressIndicator.doubleValue = 0
-        progressIndicator.controlSize = .small
-        progressIndicator.style = .bar
-        progressIndicator.isHidden = true
-        textContainer.addSubview(progressIndicator)
 
         setAsWallpaperButton.normalBackgroundColor = NSColor.systemGreen.blended(withFraction: 0.26, of: .black) ?? .systemGreen
         setAsWallpaperButton.pressedBackgroundColor = setAsWallpaperButton.normalBackgroundColor.blended(withFraction: 0.18, of: .black) ?? setAsWallpaperButton.normalBackgroundColor
@@ -650,7 +620,7 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
             }
         case .failed:
             onRetry?()
-        case .downloading:
+        case .queued, .downloading:
             onCancel?()
         }
     }

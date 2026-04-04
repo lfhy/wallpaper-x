@@ -14,6 +14,7 @@
 - 角色分工
 - 目录职责
 - 公共协议边界
+- 团队协作与升级机制
 - 任务派发方式
 - 审查标准
 
@@ -25,11 +26,15 @@
 
 默认流程：
 
-`Explorer -> Architect -> Protocol Steward / Module Agent -> Gatekeeper`
+`Explorer -> Architect -> Protocol Steward / Module Agent -> Integrator -> Verifier -> Gatekeeper`
 
 如果任务是明显的 macOS 原生 UI 设计问题，可以在 Architect 判责后引入：
 
 `macOS26 System UI Designer`
+
+所有 Agent 的协作、转交、上报规则，统一见：
+
+- [collaboration-protocol.md](/Users/songziqiang/Documents/Development/MyWallpaperX/docs/agents/collaboration-protocol.md)
 
 ---
 
@@ -77,6 +82,30 @@
 - `InspectorHost`
 - 架构文档同步
 
+### 如果你要收口多角色交付
+
+看：
+
+- [integrator/AGENTS.md](/Users/songziqiang/Documents/Development/MyWallpaperX/docs/agents/integrator/AGENTS.md)
+
+适用任务：
+
+- 一个需求拆成了公共层补丁和模块补丁
+- 需要明确当前谁完成了、谁没完成
+- 需要把多个 Agent 的输出拼成一次完整交付
+
+### 如果你要验证是否真的达标
+
+看：
+
+- [verifier/AGENTS.md](/Users/songziqiang/Documents/Development/MyWallpaperX/docs/agents/verifier/AGENTS.md)
+
+适用任务：
+
+- 需要对照验收标准检查是否闭环
+- 需要区分“代码已写”与“用户路径真的可用”
+- 需要在放行前补一层验证
+
 ### 如果你要审查补丁
 
 看：
@@ -100,6 +129,12 @@
 看：
 
 - [review-checklists.md](/Users/songziqiang/Documents/Development/MyWallpaperX/docs/agents/review-checklists.md)
+
+### 如果你想知道团队成员之间怎么协作、何时转交、何时上报
+
+看：
+
+- [collaboration-protocol.md](/Users/songziqiang/Documents/Development/MyWallpaperX/docs/agents/collaboration-protocol.md)
 
 ---
 
@@ -156,7 +191,10 @@
 2. [AGENTS.md](/Users/songziqiang/Documents/Development/MyWallpaperX/docs/agents/AGENTS.md)
 3. [task-dispatch-templates.md](/Users/songziqiang/Documents/Development/MyWallpaperX/docs/agents/task-dispatch-templates.md)
 4. [review-checklists.md](/Users/songziqiang/Documents/Development/MyWallpaperX/docs/agents/review-checklists.md)
-5. 再进入你需要的具体角色文件
+5. [collaboration-protocol.md](/Users/songziqiang/Documents/Development/MyWallpaperX/docs/agents/collaboration-protocol.md)
+6. [integrator/AGENTS.md](/Users/songziqiang/Documents/Development/MyWallpaperX/docs/agents/integrator/AGENTS.md)
+7. [verifier/AGENTS.md](/Users/songziqiang/Documents/Development/MyWallpaperX/docs/agents/verifier/AGENTS.md)
+8. 再进入你需要的具体角色文件
 
 ---
 

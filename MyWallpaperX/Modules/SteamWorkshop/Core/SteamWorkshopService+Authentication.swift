@@ -383,6 +383,11 @@ extension SteamWorkshopService {
                 authStatusMessage = "已验证当前 Steam 会话，下载时会直接复用。"
                 return true
             }
+            if outputIndicatesBenignSteamBootstrap(output) {
+                authSessionState = .unknown
+                authStatusMessage = "SteamCMD 已就绪，下载时会继续复用当前会话。"
+                return true
+            }
             if outputRequestsGuardCode(lowered) || outputRequestsPassword(lowered) || outputIndicatesAuthenticationFailure(output) {
                 authSessionState = .expired
                 authStatusMessage = "当前 Steam 会话需要重新验证。请继续输入账号密码，若 Steam 要求，再输入 Guard 令牌。"
@@ -393,6 +398,11 @@ extension SteamWorkshopService {
             return true
         } catch {
             let lowered = error.localizedDescription.localizedLowercase
+            if outputIndicatesBenignSteamBootstrap(error.localizedDescription) {
+                authSessionState = .unknown
+                authStatusMessage = "SteamCMD 已就绪，下载时会继续复用当前会话。"
+                return true
+            }
             if outputRequestsGuardCode(lowered) || outputRequestsPassword(lowered) || outputIndicatesAuthenticationFailure(error.localizedDescription) {
                 authSessionState = .expired
                 authStatusMessage = "当前 Steam 会话需要重新验证。请继续输入账号密码，若 Steam 要求，再输入 Guard 令牌。"
@@ -666,7 +676,6 @@ extension SteamWorkshopService {
         if fileManager.fileExists(atPath: steamAuthDebugLogURL.path),
            let handle = try? FileHandle(forWritingTo: steamAuthDebugLogURL) {
             defer { try? handle.close() }
-            try? handle.seekToEnd()
             try? handle.write(contentsOf: data)
         } else {
             try? data.write(to: steamAuthDebugLogURL, options: [.atomic])

@@ -343,9 +343,14 @@ extension SILToolbarController {
         }
     }
     @objc func handleInfo() {
-        guard let id = SILService.shared.selectedID,
-              SILService.shared.wallpapers.contains(where: { $0.id == id }) else { return }
-        SILService.shared.presentInspectorForSelectedWallpaper()
+        let service = SILService.shared
+        guard let id = service.selectedID,
+              service.wallpapers.contains(where: { $0.id == id }) else { return }
+        if service.selectedWallpaperForInspector?.id == id {
+            service.dismissSelectedWallpaperInspector()
+        } else {
+            service.presentInspectorForSelectedWallpaper()
+        }
     }
     @objc func handleTag() {
         let svc = SILService.shared

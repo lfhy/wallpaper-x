@@ -49,7 +49,7 @@ extension NSToolbarItem.Identifier {
 final class OnlineLibraryToolbarController: NSObject, NSSearchFieldDelegate {
 
     private enum Title {
-        static let browser = "Pixabay"
+        static let browser = "Pixabay 素材库"
         static let downloads = "Pixabay 下载"
     }
 

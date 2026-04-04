@@ -270,12 +270,12 @@ struct SteamWorkshopItemDetailSheet: View {
                 .frame(maxWidth: .infinity)
 
             Button {
-                service.openAuthorProfilePage(for: currentItem)
+                service.openAuthorWorksPage(for: currentItem)
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "person.crop.circle.fill")
                         .font(.system(size: 14, weight: .semibold))
-                    Text("作者主页")
+                    Text("作者工坊")
                         .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity)
@@ -314,14 +314,14 @@ struct SteamWorkshopItemDetailSheet: View {
 
     @ViewBuilder
     private func detailPrimaryActionButton(downloadRecord: SteamWorkshopDownloadRecord?) -> some View {
-        if service.isDownloading(itemID: item.id) {
+        if service.isDownloading(itemID: item.id) || service.isQueuedForDownload(itemID: item.id) {
             Button {
-                service.cancelActiveDownload()
+                service.cancelDownload(itemID: item.id)
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "hourglass.circle.fill")
                         .font(.system(size: 14, weight: .semibold))
-                    Text("取消下载")
+                    Text(service.isQueuedForDownload(itemID: item.id) ? "取消队列" : "取消下载")
                         .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity)

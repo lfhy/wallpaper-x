@@ -47,19 +47,13 @@ struct OnlineLibraryBrowserView: View {
         .onAppear {
             apiKeyInput = service.apiKey
             triggerInitialSearchIfNeeded()
-            // 监听工具栏「API Key」按钮通知
-            NotificationCenter.default.addObserver(
-                forName: .olShowAPIKeySettings, object: nil, queue: .main
-            ) { [self] _ in
-                apiKeyInput = ""
-                showingAPIKeyEdit = true
-            }
-            // 监听工具栏「清空 API Key」通知
-            NotificationCenter.default.addObserver(
-                forName: .olClearAPIKey, object: nil, queue: .main
-            ) { [self] _ in
-                service.clearAPIKeyAndReset()
-            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .olShowAPIKeySettings)) { _ in
+            apiKeyInput = ""
+            showingAPIKeyEdit = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .olClearAPIKey)) { _ in
+            service.clearAPIKeyAndReset()
         }
         // 点击内容区任意位置时放弃搜索框焦点
         .onTapGesture {
@@ -74,8 +68,8 @@ struct OnlineLibraryBrowserView: View {
             Text(service.downloadError ?? "")
         }
         // OL-04：下载成功 Toast 触发器
-        .onChange(of: service.downloadSuccessMessage) { msg in
-            guard msg != nil else { return }
+        .onChange(of: service.downloadSuccessMessage) {
+            guard service.downloadSuccessMessage != nil else { return }
             showDownloadToast = true
             isToastHovering = false
             scheduleToastDismiss(after: 4)

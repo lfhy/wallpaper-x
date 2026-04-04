@@ -18,6 +18,8 @@
 3. 不允许随意修改 `Core/` 或 `Shared/`
 4. 所有修改必须使用 diff patch 输出
 5. Gatekeeper 默认只审查，不接手业务实现
+6. Gatekeeper 必须知道补丁失败后该回退给谁，而不是只给否决结论
+7. Gatekeeper 必须知道复杂任务在自己之前通常还应经过 `Integrator` 与 `Verifier`
 
 ## 角色职责
 - 审查补丁是否越界
@@ -95,3 +97,12 @@ Gatekeeper 统一输出：
 - 改了统一详情宿主接入却没补齐宿主 / bridge / 模块内容三者关系：`REJECT`
 - 没有 diff patch 只有说明文：`REJECT`
 - 想改 `Core/`、`Shared/` 但没有明确批准：`REJECT`
+
+## 默认回退路径
+- 公共层缺失：回退给 `Protocol Steward`
+- 模块内越界或缺补丁：回退给对应 `Module Agent`
+- 多补丁尚未收口或交付边界不清：回退给 `Integrator`
+- 验收标准未补齐或用户路径未验证：回退给 `Verifier`
+- 职责拆分错误、产品策略冲突、敏感层争议：回退给 `Architect`
+- 协作协议见：
+  - `docs/agents/collaboration-protocol.md`

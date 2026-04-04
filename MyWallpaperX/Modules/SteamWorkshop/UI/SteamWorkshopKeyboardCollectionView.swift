@@ -6,10 +6,13 @@ protocol SteamWorkshopKeyboardDelegate: AnyObject {
 
 final class SteamWorkshopKeyboardCollectionView: NSCollectionView {
     weak var keyboardDelegate: SteamWorkshopKeyboardDelegate?
+    var onBackgroundLeftClick: (() -> Void)?
+    var primaryClickHandler: ((IndexPath) -> Bool)?
     var cardPressStateHandler: ((IndexPath, Bool) -> Void)?
     private var pressedCardIndexPath: IndexPath?
     private var pressedCardTimestamp: TimeInterval = 0
     private var pendingPressReleaseWorkItem: DispatchWorkItem?
+    private var lastPrimaryClickIndexPath: IndexPath?
 
     override func mouseDown(with event: NSEvent) {
         pendingPressReleaseWorkItem?.cancel()
@@ -17,10 +20,15 @@ final class SteamWorkshopKeyboardCollectionView: NSCollectionView {
 
         if event.type == .leftMouseDown {
             let point = convert(event.locationInWindow, from: nil)
-            if let indexPath = indexPathForItem(at: point) {
+            let indexPath = indexPathForItem(at: point)
+            lastPrimaryClickIndexPath = indexPath
+            if let indexPath {
                 pressedCardIndexPath = indexPath
                 pressedCardTimestamp = ProcessInfo.processInfo.systemUptime
                 cardPressStateHandler?(indexPath, true)
+                if primaryClickHandler?(indexPath) == true {
+                    return
+                }
             }
         }
 
@@ -45,6 +53,11 @@ final class SteamWorkshopKeyboardCollectionView: NSCollectionView {
                 DispatchQueue.main.asyncAfter(deadline: .now() + remaining, execute: releaseWork)
             }
         }
+        let point = convert(event.locationInWindow, from: nil)
+        if lastPrimaryClickIndexPath == nil, indexPathForItem(at: point) == nil {
+            onBackgroundLeftClick?()
+        }
+        lastPrimaryClickIndexPath = nil
     }
 
     override func keyDown(with event: NSEvent) {

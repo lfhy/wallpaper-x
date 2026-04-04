@@ -153,11 +153,16 @@ extension WallpaperManager {
         // 主线程只做模型收口和当前播放切换，不在这里碰后台文件系统。
         guard !paths.isEmpty else { return }
 
+        let currentWallpaperID = currentWallpaper?.id
         let normalizedCurrentPath = currentWallpaper.map { normalizedPath($0.path) }
         let wasCurrentRemoved = normalizedCurrentPath.map { paths.contains($0) } ?? false
 
         // 删除前先在当前排序列表中找到临近的跳转目标，删除后列表里就找不到了。
         let nextSelectionID = resolveNextSelectionID(removedIDs: removedIDs)
+        let nextPlaybackWallpaperID = resolveNextPlaybackWallpaperID(
+            removedIDs: removedIDs,
+            currentWallpaperID: currentWallpaperID
+        )
 
         removeWallpapersFromCollections(paths)
 
@@ -169,7 +174,7 @@ extension WallpaperManager {
         saveWallpapers()
 
         if wasCurrentRemoved {
-            if let nextWallpaper = wallpapers.first {
+            if let nextWallpaper = nextPlaybackWallpaperID.flatMap({ nextWallpaperAfterRemoval(withID: $0) }) {
                 setAsWallpaper(nextWallpaper)
             } else {
                 WallpaperEngine.shared.stopPlayback()
@@ -180,13 +185,70 @@ extension WallpaperManager {
     private func resolveNextSelectionID(removedIDs: Set<String>) -> String? {
         // 在删除发生前的已排序列表中，找到当前选中项，取其后继（优先）或前驱作为跳转目标。
         guard let selectedID = selectedWallpaperId, removedIDs.contains(selectedID) else { return nil }
-        let selectionKey = currentSelectionContext.scrollPersistenceKey
-        let source = currentSelectionContext.sourceWallpapers(from: self)
+        return resolveAdjacentWallpaperID(
+            anchoredAt: selectedID,
+            removedIDs: removedIDs,
+            preferredContext: currentSelectionContext
+        )
+    }
+
+    private func resolveNextPlaybackWallpaperID(
+        removedIDs: Set<String>,
+        currentWallpaperID: String?
+    ) -> String? {
+        guard let currentWallpaperID, removedIDs.contains(currentWallpaperID) else { return nil }
+        return resolveAdjacentWallpaperID(
+            anchoredAt: currentWallpaperID,
+            removedIDs: removedIDs,
+            preferredContext: currentSelectionContext,
+            fallbackContext: playbackSourceContext
+        )
+    }
+
+    private func resolveAdjacentWallpaperID(
+        anchoredAt wallpaperID: String,
+        removedIDs: Set<String>,
+        preferredContext: WallpaperSelectionContext,
+        fallbackContext: WallpaperSelectionContext? = nil
+    ) -> String? {
+        if let resolved = resolveAdjacentWallpaperID(
+            anchoredAt: wallpaperID,
+            removedIDs: removedIDs,
+            within: preferredContext
+        ) {
+            return resolved
+        }
+
+        if let fallbackContext,
+           fallbackContext != preferredContext,
+           let resolved = resolveAdjacentWallpaperID(
+                anchoredAt: wallpaperID,
+                removedIDs: removedIDs,
+                within: fallbackContext
+           ) {
+            return resolved
+        }
+
+        let next = wallpapers.first { $0.id != wallpaperID && !removedIDs.contains($0.id) }
+        return next?.id
+    }
+
+    private func resolveAdjacentWallpaperID(
+        anchoredAt wallpaperID: String,
+        removedIDs: Set<String>,
+        within context: WallpaperSelectionContext
+    ) -> String? {
+        let source = context.sourceWallpapers(from: self)
+        let selectionKey = context.scrollPersistenceKey
         let sorted = sortedWallpapers(source.isEmpty ? wallpapers : source, selectionKey: selectionKey)
-        guard let currentIndex = sorted.firstIndex(where: { $0.id == selectedID }) else { return nil }
+        guard let currentIndex = sorted.firstIndex(where: { $0.id == wallpaperID }) else { return nil }
         let next = sorted[(currentIndex + 1)...].first(where: { !removedIDs.contains($0.id) })
         let prev = sorted[..<currentIndex].last(where: { !removedIDs.contains($0.id) })
         return (next ?? prev)?.id
+    }
+
+    private func nextWallpaperAfterRemoval(withID wallpaperID: String) -> VideoWallpaper? {
+        wallpapers.first { $0.id == wallpaperID }
     }
 
     func removeWallpapersFromCollections(_ paths: Set<String>) {
