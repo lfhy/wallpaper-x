@@ -116,6 +116,8 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
 我的标准开场是：
 
 ```text
+发送人：Architect
+
 先按 AGENTS 体系执行，不要直接改代码。
 先做：
 1. Explorer 扫描
@@ -127,6 +129,7 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
 当前现象：
 期望结果：
 验收标准：
+执行完毕后，必须回报给 Architect。
 ```
 
 这样做的目的，是强制机器人先进入“管理模式”，而不是立刻进入“编码冲动模式”。
@@ -148,6 +151,8 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
 - 先由 Architect 确认确实是模块内问题
 - 然后只交给对应 Module Agent
 - 不允许顺手动公共层
+- 下发指令时必须写明 `发送人：Architect` 与 `接收人：对应角色`
+- 执行完成后必须回报给 Architect，未回报前不视为完成交接
 
 #### B. 公共协议任务
 
@@ -163,6 +168,8 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
 - 先由 Architect 判定“触达公共层”
 - 再由 Protocol Steward 修改公共层
 - 最后让对应 Module Agent 对接模块内部
+- 下发指令时必须写明 `发送人：Architect` 与 `接收人：对应角色`
+- 执行完成后必须回报给 Architect，未回报前不视为完成交接
 
 #### C. 架构风险任务
 
@@ -232,6 +239,18 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
 3. Integrator 收口交付边界
 4. Verifier 检查验收与回归
 5. Gatekeeper 审查是否放行
+
+并且我要求：
+
+- 我发给任何角色的任务指令，必须明确写出 `发送人：Architect` 与 `接收人：对应角色`
+- 每个角色执行完毕后，必须向 Architect 回报，不允许只向下一角色口头转交
+- 未经 Architect 收到回报并确认，不视为当前环节完成
+- 回报内容至少必须包含：
+  - `职责判断`
+  - `变更文件`
+  - `关键对齐点`
+  - `风险与阻塞`
+  - `是否可进入下一角色`
 
 ---
 
@@ -387,37 +406,52 @@ review-checklists.md/task-dispatch-templates.md这两份文档是你的辅助执
 ### 10.1 任务启动口令
 
 ```text
+发送人：Architect
+
 先按 AGENTS 流程执行，不要直接改代码。
 先给我 Explorer Report 和 Architect 决策。
+执行完毕后，必须回报给 Architect。
 ```
 
 ### 10.2 公共层任务口令
 
 ```text
+发送人：Architect
+
 这是公共协议接入任务。
 先由 Architect 判断，再转 Protocol Steward。
 模块 Agent 不得直接扩散修改公共层。
+执行完毕后，必须回报给 Architect。
 ```
 
 ### 10.3 模块任务口令
 
 ```text
+发送人：Architect
+
 如果这是模块内问题，只允许对应 Module Agent 改本模块目录。
 不要顺手改 App / Shell / Shared / docs。
+执行完毕后，必须回报给 Architect。
 ```
 
 ### 10.4 风险拦截口令
 
 ```text
+发送人：Architect
+
 如果存在越界、错误设计或无权限修改，禁止执行。
 先输出【越界风险】或【方案纠偏】。
+执行完毕后，必须回报给 Architect。
 ```
 
 ### 10.5 审查口令
 
 ```text
+发送人：Architect
+
 进入 Gatekeeper 审查模式。
 先判定是否违反架构红线，再决定是否放行。
+执行完毕后，必须回报给 Architect。
 ```
 
 ---

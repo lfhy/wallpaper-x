@@ -183,29 +183,40 @@ extension SteamWorkshopService {
         selectedDownloadIDs = selectedDownloadIDs.filter { id in
             downloads.contains(where: { $0.id == id })
         }
+        syncDownloadsInspectorSelectionIfNeeded()
     }
 
     func selectDownload(itemID: String?) {
-        guard selectedDownloadID != itemID else { return }
-        selectedDownloadID = itemID
-        if !isDownloadsMultiSelectMode {
-            selectedDownloadIDs = itemID.map { [$0] } ?? []
-        }
+        let nextSelectedIDs = !isDownloadsMultiSelectMode
+            ? (itemID.map { [$0] } ?? [])
+            : selectedDownloadIDs
+        applyDownloadSelectionState(
+            primaryID: itemID,
+            selectedIDs: nextSelectedIDs,
+            forceSingleSelection: !isDownloadsMultiSelectMode
+        )
     }
 
     func replaceSelectedDownloads(with ids: Set<String>, primaryID: String? = nil) {
         let sanitized = ids.filter { id in downloads.contains(where: { $0.id == id }) }
-        selectedDownloadIDs = sanitized
+        let resolvedPrimaryID: String?
         if isDownloadsMultiSelectMode {
             if let primaryID, sanitized.contains(primaryID) {
-                selectedDownloadID = primaryID
+                resolvedPrimaryID = primaryID
             } else {
-                selectedDownloadID = sanitized.first
+                resolvedPrimaryID = sanitized.first
             }
         } else {
-            selectedDownloadID = primaryID ?? sanitized.first
-            selectedDownloadIDs = selectedDownloadID.map { [$0] } ?? []
+            resolvedPrimaryID = primaryID ?? sanitized.first
         }
+        let resolvedSelectedIDs = isDownloadsMultiSelectMode
+            ? sanitized
+            : (resolvedPrimaryID.map { [$0] } ?? [])
+        applyDownloadSelectionState(
+            primaryID: resolvedPrimaryID,
+            selectedIDs: resolvedSelectedIDs,
+            forceSingleSelection: !isDownloadsMultiSelectMode
+        )
     }
 
     func toggleDownloadsMultiSelectMode() {
@@ -220,18 +231,26 @@ extension SteamWorkshopService {
         isDownloadsMultiSelectMode = true
         selectedDownloadID = nil
         selectedDownloadIDs.removeAll()
+        syncDownloadsInspectorSelectionIfNeeded()
     }
 
     func exitDownloadsMultiSelectMode() {
         isDownloadsMultiSelectMode = false
         selectedDownloadID = nil
         selectedDownloadIDs.removeAll()
+        syncDownloadsInspectorSelectionIfNeeded()
     }
 
     func deleteSelectedDownload() {
         let targetIDs = Array(effectiveSelectedDownloadIDs)
         guard !targetIDs.isEmpty else { return }
         deleteDownloads(itemIDs: targetIDs)
+    }
+
+    func selectAllDownloads() {
+        guard canSelectAllDownloads else { return }
+        let ids = Set(filteredDownloads.map(\.id))
+        replaceSelectedDownloads(with: ids, primaryID: selectedDownloadID ?? filteredDownloads.first?.id)
     }
 
     func revealSelectedDownload() {
@@ -242,10 +261,95 @@ extension SteamWorkshopService {
     func presentSelectedDownloadInfo() {
         guard let record = selectedDownloadRecord else { return }
         let item = record.displayItemForToolbar
-        if selectedBrowserItem?.id == item.id {
-            dismissItemDetail()
+        if selectedDownloadInspectorItem?.id == item.id {
+            dismissDownloadInspector()
         } else {
-            presentItemDetail(item)
+            presentDownloadInspector(item)
+        }
+    }
+
+    func presentDownloadInfo(for itemID: String) {
+        guard let record = latestDownloadRecord(for: itemID) else { return }
+        let item = resolvedDownloadInspectorItem(for: record)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if self.selectedDownloadInspectorItem?.id == item.id {
+                self.dismissDownloadInspector()
+            } else {
+                self.presentDownloadInspector(item)
+            }
+        }
+    }
+
+    func dismissDownloadInspector() {
+        selectedItemDetailTask?.cancel()
+        selectedItemDetailTask = nil
+        selectedDownloadInspectorItem = nil
+        selectedDownloadDetailItem = nil
+        selectedDownloadDetailError = nil
+        isRefreshingSelectedDownloadDetailItem = false
+    }
+
+    func clearDownloadSelectionAndInspector() {
+        selectedDownloadID = nil
+        selectedDownloadIDs.removeAll()
+        syncDownloadsInspectorSelectionIfNeeded()
+    }
+
+    func syncDownloadsInspectorSelectionIfNeeded() {
+        guard !isDownloadsMultiSelectMode,
+              let record = selectedDownloadRecord else {
+            dismissDownloadInspector()
+            return
+        }
+
+        guard selectedDownloadInspectorItem != nil else {
+            return
+        }
+
+        let item = resolvedDownloadInspectorItem(for: record)
+        if selectedDownloadInspectorItem?.id == item.id {
+            selectedDownloadInspectorItem = item
+            selectedDownloadDetailItem = item
+            return
+        }
+        presentDownloadInspector(item)
+    }
+
+    private func presentDownloadInspector(_ item: SteamWorkshopBrowserItem) {
+        selectedDownloadInspectorItem = item
+        selectedDownloadDetailItem = item
+        selectedDownloadDetailError = nil
+        currentWorkshopItemID = item.id
+        currentPageTitle = item.title
+        statusMessage = "已加载 \(item.title)"
+        refreshSelectedDownloadInspectorDetailIfNeeded(forceRefresh: needsDetailRefresh(for: item))
+    }
+
+    private func resolvedDownloadInspectorItem(for record: SteamWorkshopDownloadRecord) -> SteamWorkshopBrowserItem {
+        if let detailItem = selectedDownloadDetailItem,
+           detailItem.id == record.id {
+            return detailItem
+        }
+        return record.displayItemForToolbar
+    }
+
+    private func applyDownloadSelectionState(
+        primaryID: String?,
+        selectedIDs: Set<String>,
+        forceSingleSelection: Bool
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let normalizedSelectedIDs = forceSingleSelection
+                ? (primaryID.map { [$0] } ?? [])
+                : selectedIDs
+            guard self.selectedDownloadID != primaryID || self.selectedDownloadIDs != normalizedSelectedIDs else {
+                return
+            }
+            self.selectedDownloadID = primaryID
+            self.selectedDownloadIDs = normalizedSelectedIDs
+            self.syncDownloadsInspectorSelectionIfNeeded()
         }
     }
 
@@ -295,13 +399,11 @@ extension SteamWorkshopService {
         if selectedDownloadID == itemID {
             selectedDownloadID = nil
         }
-        if selectedBrowserItem?.id == itemID {
-            dismissItemDetail()
-        }
         selectedDownloadIDs.remove(itemID)
         if !isDownloadsMultiSelectMode {
             selectedDownloadIDs = selectedDownloadID.map { [$0] } ?? []
         }
+        syncDownloadsInspectorSelectionIfNeeded()
         return true
     }
 

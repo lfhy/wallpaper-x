@@ -515,6 +515,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     private var currentDisplayContext: DisplayContext = .browser
     private var currentBarState: BarState = .idle
     private var shouldPersistBarVisibility = false
+    private var currentDebugID = ""
 
     private enum ActionKind {
         case download
@@ -605,6 +606,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         currentDisplayContext = .browser
         currentBarState = .idle
         shouldPersistBarVisibility = false
+        currentDebugID = ""
         cardView.layer?.transform = CATransform3DIdentity
         overlayBar.alphaValue = 0
         hoverOutlineView.alphaValue = 0
@@ -635,6 +637,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         self.onSetAsWallpaper = onSetAsWallpaper
         self.onCancelDownload = onCancelDownload
         currentDisplayContext = displayContext
+        currentDebugID = item.id
         prefersCircularPlayBadge = false
         applyContent(
             item: item,
@@ -667,6 +670,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         self.onSetAsWallpaper = onSetAsWallpaper
         self.onCancelDownload = onCancelDownload
         currentDisplayContext = displayContext
+        currentDebugID = item.id
         prefersCircularPlayBadge = false
         applyContent(
             item: item,
@@ -705,14 +709,20 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
 
         let iconSize = metrics.iconButtonSize
         let barMidY = floor((overlayBar.bounds.height - iconSize) * 0.5)
-        detailButton.frame = CGRect(x: metrics.barEdgeInset, y: barMidY, width: iconSize, height: iconSize)
+        let statusBadgeX = overlayBar.bounds.width - iconSize - metrics.barEdgeInset
         statusBadgeButton.frame = CGRect(
-            x: overlayBar.bounds.width - iconSize - metrics.barEdgeInset,
+            x: statusBadgeX,
             y: barMidY,
             width: iconSize,
             height: iconSize
         )
-
+        let detailButtonX = metrics.barEdgeInset
+        detailButton.frame = CGRect(
+            x: detailButtonX,
+            y: barMidY,
+            width: iconSize,
+            height: iconSize
+        )
         let marqueeX = detailButton.frame.maxX + metrics.barSpacing
         let marqueeWidth = max(24, statusBadgeButton.frame.minX - metrics.barSpacing - marqueeX)
         titleMarqueeView.frame = CGRect(
@@ -721,6 +731,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             width: max(24, marqueeWidth - metrics.marqueeSideInset * 2),
             height: overlayBar.bounds.height
         )
+        statusBadgeButton.ensureLayerAnchorCentered()
 
         let badgeSize = max(22, min(28, cardView.bounds.width * 0.12))
         let badgeOrigin: CGPoint
@@ -768,7 +779,10 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
 
     override func mouseDown(with event: NSEvent) {
         super.mouseDown(with: event)
-        syncHoverState(with: event, animated: true)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
     }
 
     private func applyContent(
@@ -791,7 +805,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         let displayTitle = resolvedDisplayTitle(item: item, downloadRecord: downloadRecord, barState: barState)
         currentTitleText = item.title
         titleMarqueeView.text = displayTitle
-        detailButton.setAccessibilityLabel("查看详情：\(item.title)")
+        detailButton.setAccessibilityLabel("详细信息：\(item.title)")
 
         currentActionKind = resolvedActionKind(
             downloadRecord: downloadRecord,
@@ -842,9 +856,9 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
 
         switch barState {
         case .downloading:
-            return "下载中/\(sizeText)"
+            return "下载中  ·  \(sizeText)"
         case .queued:
-            return "队列中/\(sizeText)"
+            return "等待下载  ·  \(sizeText)"
         case .idle, .ready, .failed:
             return item.title
         }
@@ -1043,7 +1057,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         overlayBar.wantsLayer = true
         cardView.addSubview(overlayBar)
 
-        detailButton.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "详情")
+        detailButton.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "详细信息")
         detailButton.target = self
         detailButton.action = #selector(handleOpen)
         overlayBar.addSubview(detailButton)
@@ -1137,13 +1151,14 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
 
     private func updateStatusBadgeAnimation() {
         guard let layer = statusBadgeButton.layer else { return }
+        statusBadgeButton.ensureLayerAnchorCentered()
         let animationKey = "steam.status.spin"
         let shouldSpin = currentActionKind == .cancel && currentBarState == .downloading
         if shouldSpin {
             guard layer.animation(forKey: animationKey) == nil else { return }
             let animation = CABasicAnimation(keyPath: "transform.rotation.z")
             animation.fromValue = 0
-            animation.toValue = CGFloat.pi * 2
+            animation.toValue = -CGFloat.pi * 2
             animation.duration = 0.9
             animation.repeatCount = .infinity
             animation.timingFunction = CAMediaTimingFunction(name: .linear)
@@ -1166,10 +1181,16 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         }
 
         refreshThemeAwareAppearance()
-        let duration = shouldRevealBar
+        let cardDuration = isHovering
             ? UIInteractionAnimation.cardHoverExpandDuration
             : UIInteractionAnimation.cardHoverCollapseDuration
-        let timing = shouldRevealBar
+        let cardTiming = isHovering
+            ? UIInteractionAnimation.cardEnterTiming
+            : UIInteractionAnimation.cardExitTiming
+        let barDuration = shouldRevealBar
+            ? UIInteractionAnimation.cardHoverExpandDuration
+            : UIInteractionAnimation.cardHoverCollapseDuration
+        let barTiming = shouldRevealBar
             ? UIInteractionAnimation.cardEnterTiming
             : UIInteractionAnimation.cardExitTiming
 
@@ -1188,15 +1209,15 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         }
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = duration
-            context.timingFunction = timing
+            context.duration = barDuration
+            context.timingFunction = barTiming
             self.cardView.animator().alphaValue = 1
             self.overlayBar.animator().alphaValue = shouldRevealBar ? (self.isHovering ? 0.92 : 0.84) : 0
             self.hoverOutlineView.animator().alphaValue = shouldShowOutline ? 1 : 0
         }
 
-        applyCardTransform(targetScale: targetScale, duration: duration, timing: timing)
-        applyBarTransform(isVisible: shouldRevealBar, duration: duration, timing: timing)
+        applyCardTransform(targetScale: targetScale, duration: cardDuration, timing: cardTiming)
+        applyBarTransform(isVisible: shouldRevealBar, duration: barDuration, timing: barTiming)
         currentBarVisibility = shouldRevealBar
         isHoverOutlineVisible = shouldShowOutline
     }
@@ -1230,7 +1251,6 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         guard let layer = cardView.layer else { return }
         ensureCardAnchorCenteredIfNeeded()
         guard abs(currentCardScale - targetScale) > 0.001 else { return }
-
         let fromScale = (layer.presentation()?.value(forKeyPath: "transform.scale") as? CGFloat) ?? currentCardScale
         let animation = CABasicAnimation(keyPath: "transform.scale")
         animation.fromValue = fromScale
@@ -1274,7 +1294,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         }
 
         let cacheKey = steamWorkshopPreviewCacheKey(for: url)
-        if let cached = SteamWorkshopPreviewImageCache.shared.cachedImage(forKey: cacheKey) {
+        if let cached = SteamWorkshopPreviewImageCache.shared.cachedOrDiskImage(forKey: cacheKey) {
             previewImageView.image = cached
             updatePreviewImageFrame()
             return

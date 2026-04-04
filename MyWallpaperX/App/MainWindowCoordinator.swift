@@ -9,6 +9,7 @@ import AppKit
 enum MainWindowCoordinator {
     private static var mainWindowController: MainWindowController?
     private static var wallpaperManager: WallpaperManager = .shared
+    private static var isSteamDownloadsMode = false
 
     // MARK: - 当前激活模块
 
@@ -43,7 +44,7 @@ enum MainWindowCoordinator {
  case .onlineLibrary:
  return OnlineDownloadsBridge.shared.isActive
  case .steamWorkshop:
- return false
+ return isSteamDownloadsMode
  }
  }
 
@@ -55,7 +56,7 @@ enum MainWindowCoordinator {
  case .onlineLibrary:
  return OnlineDownloadsBridge.shared.isActive && OnlineDownloadsBridge.shared.isMultiSelectMode
  case .steamWorkshop:
- return false
+ return isSteamDownloadsMode && SteamWorkshopService.shared.canSelectAllDownloads
  }
  }
 
@@ -200,7 +201,9 @@ enum MainWindowCoordinator {
                 OnlineDownloadsBridge.shared.showInfo()
             }
         case .steamWorkshop:
-            break
+            if isSteamDownloadsMode {
+                SteamWorkshopService.shared.presentSelectedDownloadInfo()
+            }
         }
     }
 
@@ -214,7 +217,7 @@ enum MainWindowCoordinator {
         case .onlineLibrary:
             return OnlineDownloadsBridge.shared.isActive && OnlineDownloadsBridge.shared.hasSingleSelection
         case .steamWorkshop:
-            return false
+            return isSteamDownloadsMode && SteamWorkshopService.shared.canShowSelectedDownloadInfo
         }
     }
 
@@ -231,7 +234,9 @@ enum MainWindowCoordinator {
                 OnlineDownloadsBridge.shared.toggleMultiSelect()
             }
         case .steamWorkshop:
-            break
+            if isSteamDownloadsMode {
+                SteamWorkshopService.shared.toggleDownloadsMultiSelectMode()
+            }
         }
     }
 
@@ -254,7 +259,9 @@ enum MainWindowCoordinator {
                 OnlineDownloadsBridge.shared.selectAll()
             }
         case .steamWorkshop:
-            break
+            if isSteamDownloadsMode {
+                SteamWorkshopService.shared.selectAllDownloads()
+            }
         }
     }
 
@@ -283,7 +290,9 @@ enum MainWindowCoordinator {
                 OnlineDownloadsBridge.shared.deleteSelected()
             }
         case .steamWorkshop:
-            break
+            if isSteamDownloadsMode {
+                SteamWorkshopService.shared.deleteSelectedDownload()
+            }
         }
     }
 
@@ -296,7 +305,7 @@ enum MainWindowCoordinator {
         case .onlineLibrary:
             return OnlineDownloadsBridge.shared.isActive && OnlineDownloadsBridge.shared.hasAnySelection
         case .steamWorkshop:
-            return false
+            return isSteamDownloadsMode && SteamWorkshopService.shared.canDeleteSelectedDownload
         }
     }
 
@@ -328,7 +337,9 @@ enum MainWindowCoordinator {
                 OnlineLibraryService.shared.refresh()
             }
         case .steamWorkshop:
-            SteamWorkshopService.shared.revealDownloadsDirectory()
+            if isSteamDownloadsMode {
+                SteamWorkshopService.shared.revealSelectedDownload()
+            }
         }
     }
 
@@ -345,7 +356,7 @@ enum MainWindowCoordinator {
             }
             return true
         case .steamWorkshop:
-            return SteamWorkshopService.shared.downloadsCount > 0
+            return isSteamDownloadsMode && SteamWorkshopService.shared.canRevealSelectedDownload
         }
     }
 
@@ -387,6 +398,7 @@ enum MainWindowCoordinator {
         self.wallpaperManager = wallpaperManager
         observeOnlineVideoReadyToPlay()
         observeSteamWorkshopVideoReadyToPlay()
+        observeSteamWorkshopModeChanges()
     }
 
     /// 监听在线库下载完成通知，中转给视频库执行静默导入并播放。
@@ -419,6 +431,19 @@ enum MainWindowCoordinator {
                 presentingIn: nil,
                 context: .steamPlayback
             )
+        }
+    }
+
+    /// 监听 Steam 浏览/下载子页面切换，保证主菜单分发与当前工具栏语义一致。
+    private static func observeSteamWorkshopModeChanges() {
+        NotificationCenter.default.addObserver(
+            forName: .steamWorkshopModeDidChange,
+            object: nil,
+            queue: .main
+        ) { notification in
+            let enabled = notification.userInfo?["enabled"] as? Bool ?? false
+            let isDownloads = notification.userInfo?["isDownloads"] as? Bool ?? false
+            isSteamDownloadsMode = enabled && isDownloads
         }
     }
 

@@ -31,9 +31,9 @@ private struct SteamWorkshopDownloadsContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .inspectorHostBridge(
             module: .steamWorkshop,
-            selectedItem: service.selectedBrowserItem,
+            selectedItem: service.selectedDownloadInspectorItem,
             makePresentation: { item in
-                let subtitle = item.author.isEmpty ? service.currentPageTitle : item.author
+                let subtitle = item.author.isEmpty ? "Steam 下载" : item.author
                 return .infoPanel(
                     cardID: item.id,
                     title: item.title,
@@ -43,7 +43,7 @@ private struct SteamWorkshopDownloadsContentView: View {
                 )
             },
             onSelectionCleared: {
-                service.dismissItemDetail()
+                service.clearDownloadSelectionAndInspector()
             },
             content: { item in
                 SteamWorkshopItemDetailSheet(item: item)
@@ -54,7 +54,7 @@ private struct SteamWorkshopDownloadsContentView: View {
         }
         .onDisappear {
             InspectorHostActions.postClose(module: .steamWorkshop)
-            service.dismissItemDetail()
+            service.dismissDownloadInspector()
         }
         .overlay {
             if service.isLoginSheetPresented {

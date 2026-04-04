@@ -6,6 +6,9 @@ struct SteamWorkshopItemDetailSheet: View {
     @ObservedObject private var service = SteamWorkshopService.shared
 
     private var currentItem: SteamWorkshopBrowserItem {
+        if let selected = service.selectedDownloadDetailItem, selected.id == item.id {
+            return selected
+        }
         if let selected = service.selectedBrowserItem, selected.id == item.id {
             return selected
         }
@@ -25,10 +28,16 @@ struct SteamWorkshopItemDetailSheet: View {
     }
 
     private var isRefreshingDetail: Bool {
-        service.isRefreshingSelectedBrowserItem && service.selectedBrowserItem?.id == item.id
+        if service.selectedDownloadInspectorItem?.id == item.id {
+            return service.isRefreshingSelectedDownloadDetailItem
+        }
+        return service.isRefreshingSelectedBrowserItem && service.selectedBrowserItem?.id == item.id
     }
 
     private var currentDetailError: String? {
+        if service.selectedDownloadInspectorItem?.id == item.id {
+            return service.selectedDownloadDetailError
+        }
         guard service.selectedBrowserItem?.id == item.id else { return nil }
         return service.selectedBrowserItemError
     }

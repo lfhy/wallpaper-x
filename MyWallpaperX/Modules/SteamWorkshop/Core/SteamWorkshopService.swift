@@ -99,8 +99,12 @@ final class SteamWorkshopService: ObservableObject {
     @Published var selectedDownloadID: String?
     @Published var selectedDownloadIDs: Set<String> = []
     @Published var downloadError: String?
+    @Published var selectedDownloadInspectorItem: SteamWorkshopBrowserItem?
+    @Published var selectedDownloadDetailItem: SteamWorkshopBrowserItem?
     @Published var selectedBrowserItem: SteamWorkshopBrowserItem?
+    @Published var isRefreshingSelectedDownloadDetailItem = false
     @Published private(set) var isRefreshingSelectedBrowserItem = false
+    @Published var selectedDownloadDetailError: String?
     @Published var selectedBrowserItemError: String?
     @Published var requiresLogin: Bool = true
     @Published var isAnonymousBrowsing = false
@@ -144,7 +148,7 @@ final class SteamWorkshopService: ObservableObject {
     var activeDownloadProcess: Process?
     var activeDownloadTask: Task<Void, Never>?
     var activeDownloadWasCancelled = false
-    private var selectedItemDetailTask: Task<Void, Never>?
+    var selectedItemDetailTask: Task<Void, Never>?
     private var discoveryBrowseSnapshot: SteamWorkshopDiscoveryBrowseSnapshot?
     private var currentBrowserScrollOffsetY: CGFloat = 0
     private var savedDiscoveryQueryBeforeAuthorBrowse: String?
@@ -367,6 +371,10 @@ final class SteamWorkshopService: ObservableObject {
 
     var canRevealSelectedDownload: Bool {
         !isDownloadsMultiSelectMode && selectedDownloadRecord != nil
+    }
+
+    var canSelectAllDownloads: Bool {
+        isDownloadsMultiSelectMode && !filteredDownloads.isEmpty
     }
 
     func downloadRecord(for itemID: String) -> SteamWorkshopDownloadRecord? {
@@ -1187,7 +1195,7 @@ final class SteamWorkshopService: ObservableObject {
         }
     }
 
-    private func needsDetailRefresh(for item: SteamWorkshopBrowserItem) -> Bool {
+    func needsDetailRefresh(for item: SteamWorkshopBrowserItem) -> Bool {
         item.detailFields.isEmpty
         || item.fileSizeText == nil
         || item.resolutionText == nil
@@ -1234,6 +1242,49 @@ final class SteamWorkshopService: ObservableObject {
                     guard let self, self.selectedBrowserItem?.id == item.id else { return }
                     self.isRefreshingSelectedBrowserItem = false
                     self.selectedBrowserItemError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func refreshSelectedDownloadInspectorDetailIfNeeded(forceRefresh: Bool) {
+        guard let item = selectedDownloadInspectorItem else { return }
+        if !forceRefresh && !needsDetailRefresh(for: item) {
+            return
+        }
+
+        selectedItemDetailTask?.cancel()
+        isRefreshingSelectedDownloadDetailItem = true
+        selectedDownloadDetailError = nil
+
+        let stub = SteamWorkshopBrowseStub(
+            id: item.id,
+            title: item.title,
+            author: item.author,
+            authorProfileURL: item.authorProfileURL,
+            authorWorkshopURL: item.authorWorkshopURL,
+            hasAdultContent: item.hasAdultContent,
+            summary: item.summary,
+            previewImageURL: item.previewImageURL
+        )
+
+        selectedItemDetailTask = Task(priority: .userInitiated) { [weak self] in
+            do {
+                let refreshed = try await Self.fetchWorkshopItem(stub: stub)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self, self.selectedDownloadInspectorItem?.id == item.id else { return }
+                    self.selectedDownloadDetailItem = refreshed
+                    self.mergeBrowserItem(refreshed)
+                    self.isRefreshingSelectedDownloadDetailItem = false
+                    self.selectedDownloadDetailError = nil
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self, self.selectedDownloadInspectorItem?.id == item.id else { return }
+                    self.isRefreshingSelectedDownloadDetailItem = false
+                    self.selectedDownloadDetailError = error.localizedDescription
                 }
             }
         }

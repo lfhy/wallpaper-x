@@ -166,7 +166,6 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
 
-        log("setup footerItemID=\(Self.footerItemID)")
         collectionView.collectionViewLayout = flowLayout
         collectionView.dataSource = dataSource
         collectionView.delegate = self
@@ -261,8 +260,6 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             guard let previous = previousItemsByID[id], let current = itemsByID[id] else { return false }
             return previous != current
         }
-        log("applyItems count=\(items.count) changed=\(changedIDs.count)")
-
         let structureUnchanged = previousOrderedIDs == orderedIDs && previousFooterState == footerState
         if structureUnchanged {
             if !changedIDs.isEmpty {
@@ -284,10 +281,9 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             snapshot.appendItems([Self.footerItemID], toSection: .status)
         }
         isApplyingSnapshot = true
-        dataSource.apply(snapshot, animatingDifferences: true) { [weak self] in
+        dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self else { return }
             self.isApplyingSnapshot = false
-            self.log("snapshot applied count=\(self.displayIDs.count) changed=\(changedIDs.count)")
             if !changedIDs.isEmpty {
                 self.reloadVisibleItems()
             }
@@ -371,12 +367,9 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         let contentHeight = documentView.frame.height
         let viewportHeight = scrollView.contentView.bounds.height
         let offsetY = scrollView.contentView.bounds.origin.y
-        guard contentHeight > 0, viewportHeight > 0 else {
-            log("checkLoadMore skip reason=zeroMetrics offsetY=\(offsetY) contentHeight=\(contentHeight) viewportHeight=\(viewportHeight)")
-            return
-        }
-        if contentHeight - offsetY - viewportHeight < 180 {
-            log("checkLoadMore trigger offsetY=\(offsetY) contentHeight=\(contentHeight) viewportHeight=\(viewportHeight) itemCount=\(orderedIDs.count)")
+        guard contentHeight > 0, viewportHeight > 0 else { return }
+        let preloadDistance = max(480, viewportHeight * 1.5)
+        if contentHeight - offsetY - viewportHeight < preloadDistance {
             service.loadMoreBrowserItemsIfNeeded()
         }
     }
@@ -463,15 +456,10 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         let stateChanged = newState != footerState
         footerState = newState
         updateLayoutItemSize()
-        log(
-            "refreshFooterState prev=\(previousState.logLabel) new=\(newState.logLabel) forceReload=\(forceReload) " +
-            "isApplyingSnapshot=\(isApplyingSnapshot) isLoadingMore=\(service.isLoadingMoreBrowserItems) hasMore=\(service.hasMoreBrowserItems) itemCount=\(orderedIDs.count)"
-        )
-        
         guard stateChanged || forceReload else { return }
         let visibilityChanged = previousState == .hidden || newState == .hidden
         if stateChanged && visibilityChanged {
-            scheduleFooterSnapshotRefresh(reason: "visibilityChanged prev=\(previousState.logLabel) new=\(newState.logLabel)")
+            scheduleFooterSnapshotRefresh()
             return
         }
         configureVisibleFooterIfNeeded()
@@ -488,9 +476,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
     }
 
     private func configureVisibleFooterIfNeeded() {
-        let footerItems = collectionView.visibleItems().compactMap { $0 as? AppKitSteamWorkshopBrowserFooterItem }
-        log("configureVisibleFooterIfNeeded visibleCount=\(footerItems.count) state=\(footerState.logLabel)")
-        footerItems.forEach {
+        collectionView.visibleItems().compactMap { $0 as? AppKitSteamWorkshopBrowserFooterItem }.forEach {
             $0.configure(
                 text: footerState == .loading ? "正在加载更多项目…" : "没有更多内容了",
                 showsProgress: footerState == .loading
@@ -498,14 +484,12 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         }
     }
 
-    private func scheduleFooterSnapshotRefresh(reason: String) {
+    private func scheduleFooterSnapshotRefresh() {
         pendingFooterSnapshotRefresh = true
-        log("scheduleFooterSnapshotRefresh reason=\(reason)")
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             guard self.pendingFooterSnapshotRefresh else { return }
             guard !self.isApplyingSnapshot else {
-                self.log("defer footer snapshot refresh because snapshot is still applying")
                 return
             }
             self.pendingFooterSnapshotRefresh = false
@@ -542,10 +526,6 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         guard let cell = item as? AppKitSteamWorkshopBrowserItem else { return }
         configureCell(cell, for: id)
         prioritizeVisibleItemsForHydration()
-    }
-
-    private func log(_ message: String) {
-        _ = message
     }
 }
 

@@ -19,6 +19,8 @@
 4. 所有修改必须使用 diff patch 输出
 5. Explorer 默认不改文件，只输出扫描结论
 6. Explorer 必须知道团队中至少存在 `Architect`、`Protocol Steward`、`Integrator`、`Verifier`、`Gatekeeper` 与各 `Module Agent`
+7. 若任务由 Architect 下发，必须识别 `发送人：Architect` 与 `接收人：Explorer`
+8. 执行完成后必须先回报给 `Architect`，未回报前不视为完成交接
 
 ## 角色职责
 - 梳理任务涉及的文件、模块、通知、菜单、焦点与工具栏触点
@@ -68,6 +70,8 @@
 
 ## 输入格式
 Explorer 接收输入时，至少应包含：
+- `发送人`
+- `接收人`
 - `任务目标`
 - `目标目录或模块`
 - `当前症状或想要新增的能力`
@@ -90,6 +94,13 @@ Explorer 统一输出：
 - 需要 Architect 决策的问题：
 ```
 
+若任务由 Architect 下发，回报内容至少必须包含：
+- `职责判断`
+- `扫描范围`
+- `关键事实`
+- `风险与阻塞`
+- `是否可进入下一角色`
+
 ## 违规处理机制
 - 若被要求直接写代码：拒绝，并要求转给 Architect 或对应 Module Agent
 - 若发现跨模块直接调用方案：标记为高风险并要求回到 Notification 中转
@@ -99,6 +110,7 @@ Explorer 统一输出：
 ## 默认转交与上报
 - Explorer 的默认接收方是 `Architect`
 - Explorer 不负责决定最终实施者
+- 若任务由 Architect 下发，必须先回报 `Architect`，再由 Architect 判断是否转下一角色
 - 一旦发现跨模块、公共层、产品策略或职责不清问题，必须输出：
   - `【向上报告】`
   - 或 `【转交建议】`

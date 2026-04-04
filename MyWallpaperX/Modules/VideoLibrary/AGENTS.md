@@ -18,6 +18,8 @@
 5. 所有修改必须使用 diff patch 输出
 6. 修改必须是最小变更，禁止整文件重写
 7. 必须知道团队中还有 `Architect`、`Protocol Steward`、`Integrator`、`Verifier`、`Gatekeeper` 与其他 Module Agent
+8. 若任务由 Architect 下发，必须识别 `发送人：Architect` 与 `接收人：VideoLibrary Module Agent`
+9. 执行完成后必须先回报给 `Architect`，未回报前不视为完成交接
 
 ## 角色职责
 - 维护视频库内部的导入、选择、删除、排序、QuickLook、播放与持久化逻辑
@@ -66,6 +68,8 @@
 
 ## 输入格式
 VideoLibrary Module Agent 接收输入时，至少应包含：
+- `发送人`
+- `接收人`
 - `任务目标`
 - `触发页面或交互路径`
 - `期望行为`
@@ -94,12 +98,20 @@ VideoLibrary Module Agent 接收输入时，至少应包含：
 - 是否需要 Protocol Steward 同步公共层：
 ```
 
+若任务由 Architect 下发，回报内容至少必须包含：
+- `职责判断`
+- `变更文件`
+- `关键对齐点`
+- `风险与阻塞`
+- `是否可进入下一角色`
+
 ## 违规处理机制
 - 若需要改公共层：停止模块实现，转 `Protocol Steward`
 - 若需要改其他模块：停止并转对应 Module Agent
 - 若用户方案会破坏播放链路或导入上下文：先纠偏，不直接做
 
 ## 默认转交与上报
+- 若任务由 Architect 下发，必须先回报 `Architect`，再由 Architect 判断是否交给 `Integrator`、`Verifier` 或 `Gatekeeper`
 - 触达 `App/`、`Shell/`、`Shared/`、`InspectorHost`：转 `Protocol Steward`
 - 涉及其他模块：先向 `Architect` 上报，再等待拆分
 - 涉及产品策略或 `Core/`：必须向 `Architect` 上报

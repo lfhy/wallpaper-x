@@ -102,7 +102,7 @@ struct SteamWorkshopDownloadRecord: Identifiable, Equatable {
     var statusText: String {
         switch status {
         case .queued:
-            return "队列中"
+            return "等待下载"
         case .downloading:
             return "下载中"
         case .ready:

@@ -58,7 +58,7 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
 
     private lazy var collectionView: SteamWorkshopKeyboardCollectionView = {
         let cv = SteamWorkshopKeyboardCollectionView()
-        cv.isSelectable = true
+        cv.isSelectable = false
         cv.allowsEmptySelection = true
         cv.backgroundColors = [.clear]
         cv.translatesAutoresizingMaskIntoConstraints = false
@@ -70,6 +70,9 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
         }
         cv.primaryClickHandler = { [weak self] indexPath in
             self?.handlePrimaryClick(at: indexPath) ?? false
+        }
+        cv.contextMenuProvider = { [weak self] indexPath in
+            self?.makeContextMenu(for: indexPath)
         }
         cv.onBackgroundLeftClick = { [weak self] in
             self?.handleBackgroundClick()
@@ -256,7 +259,7 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
             isMultiSelectMode: service.isDownloadsMultiSelectMode,
             isKeyboardFocused: service.effectiveSelectedDownloadIDs.contains(record.id),
             onOpen: { [weak self] in
-                self?.onOpen(displayItem)
+                self?.presentDownloadDetail(for: record.id)
             },
             onAuthor: { [weak self] in
                 self?.onReveal(record)
@@ -419,12 +422,78 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
         service.selectDownload(itemID: nil)
     }
 
+    private func makeContextMenu(for indexPath: IndexPath?) -> NSMenu? {
+        if let indexPath,
+           indexPath.item >= 0,
+           indexPath.item < orderedIDs.count {
+            let id = orderedIDs[indexPath.item]
+            keyboardFocusedID = id
+            if service.isDownloadsMultiSelectMode {
+                if !service.selectedDownloadIDs.contains(id) {
+                    service.replaceSelectedDownloads(with: [id], primaryID: id)
+                }
+            } else if service.selectedDownloadID != id {
+                service.selectDownload(itemID: id)
+            }
+            reloadKeyboardFocus(previous: nil, next: id)
+        }
+
+        let selection = service.effectiveSelectedDownloadIDs
+        guard !selection.isEmpty else { return nil }
+
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        if !service.isDownloadsMultiSelectMode,
+           let record = service.selectedDownloadRecord {
+            if record.status == .ready, record.isPlayable {
+                let setItem = NSMenuItem(title: "设为壁纸", action: #selector(contextSetAsWallpaper), keyEquivalent: "")
+                setItem.target = self
+                setItem.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: "设为壁纸")
+                menu.addItem(setItem)
+            } else if case .failed = record.status {
+                let retryItem = NSMenuItem(title: "重新下载", action: #selector(contextRetryDownload), keyEquivalent: "")
+                retryItem.target = self
+                retryItem.image = NSImage(systemSymbolName: "square.and.arrow.down", accessibilityDescription: "重新下载")
+                menu.addItem(retryItem)
+            } else if record.status == .queued || record.status == .downloading {
+                let cancelItem = NSMenuItem(title: "取消下载", action: #selector(contextCancelDownload), keyEquivalent: "")
+                cancelItem.target = self
+                cancelItem.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "取消下载")
+                menu.addItem(cancelItem)
+            }
+
+            let infoItem = NSMenuItem(title: "信息", action: #selector(contextShowInfo), keyEquivalent: "")
+            infoItem.target = self
+            infoItem.isEnabled = service.canShowSelectedDownloadInfo
+            infoItem.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "信息")
+            menu.addItem(infoItem)
+
+            let revealItem = NSMenuItem(title: "查看文件", action: #selector(contextRevealItem), keyEquivalent: "")
+            revealItem.target = self
+            revealItem.isEnabled = service.canRevealSelectedDownload
+            revealItem.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "查看文件")
+            menu.addItem(revealItem)
+            menu.addItem(.separator())
+        }
+
+        let deleteItem = NSMenuItem(title: "删除", action: #selector(contextDeleteSelected), keyEquivalent: "")
+        deleteItem.target = self
+        deleteItem.isEnabled = service.canDeleteSelectedDownload
+        deleteItem.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "删除")
+        menu.addItem(deleteItem)
+        return menu
+    }
+
     private func handlePrimaryClick(at indexPath: IndexPath) -> Bool {
         guard indexPath.item >= 0, indexPath.item < orderedIDs.count else { return true }
         let id = orderedIDs[indexPath.item]
-
         if !service.isDownloadsMultiSelectMode {
-            return service.selectedDownloadID == id
+            let previousID = keyboardFocusedID
+            keyboardFocusedID = id
+            reloadKeyboardFocus(previous: previousID, next: id)
+            service.selectDownload(itemID: id)
+            return true
         }
 
         var selectedIDs = service.selectedDownloadIDs
@@ -465,42 +534,31 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
     }
 
     private func reloadKeyboardFocus(previous: String?, next: String?) {
-        var indexPaths = Set<IndexPath>()
-        if let prev = previous, let path = indexPathForItemID(prev) {
-            indexPaths.insert(path)
-        }
-        if let nextID = next, let path = indexPathForItemID(nextID) {
-            indexPaths.insert(path)
-        }
-        guard !indexPaths.isEmpty else { return }
-        collectionView.reloadItems(at: indexPaths)
+        updateKeyboardFocusItem(withID: previous, focused: false)
+        updateKeyboardFocusItem(withID: next, focused: true)
     }
 
     private func applySelection() {
         let selectedIndexPaths = Set(collectionView.selectionIndexPaths)
-        if service.isDownloadsMultiSelectMode {
-            guard !selectedIndexPaths.isEmpty else { return }
-            isApplyingSelectionSnapshot = true
-            collectionView.deselectItems(at: selectedIndexPaths)
-            isApplyingSelectionSnapshot = false
-            return
-        }
-        let selectedIDs = service.effectiveSelectedDownloadIDs
-        guard !selectedIDs.isEmpty else {
-            if !selectedIndexPaths.isEmpty {
-                isApplyingSelectionSnapshot = true
-                collectionView.deselectItems(at: selectedIndexPaths)
-                isApplyingSelectionSnapshot = false
-            }
-            return
-        }
+        guard !selectedIndexPaths.isEmpty else { return }
+        isApplyingSelectionSnapshot = true
+        collectionView.deselectItems(at: selectedIndexPaths)
+        isApplyingSelectionSnapshot = false
+    }
 
-        let desiredIndexPaths = Set(selectedIDs.compactMap(indexPathForItemID))
-        if selectedIndexPaths != desiredIndexPaths {
-            isApplyingSelectionSnapshot = true
-            collectionView.selectItems(at: desiredIndexPaths, scrollPosition: [])
-            isApplyingSelectionSnapshot = false
+    private func presentDownloadDetail(for id: String) {
+        guard recordsByID[id] != nil else { return }
+        service.presentDownloadInfo(for: id)
+    }
+
+    private func updateKeyboardFocusItem(withID id: String?, focused: Bool) {
+        guard let id else { return }
+        if let item = cellForItemID(id) {
+            item.setKeyboardFocus(focused)
+            return
         }
+        guard let indexPath = indexPathForItemID(id) else { return }
+        collectionView.reloadItems(at: Set([indexPath]))
     }
 }
 
@@ -566,5 +624,40 @@ extension AppKitSteamWorkshopDownloadsContainerView: NSCollectionViewDelegateFlo
         keyboardFocusedID = remainingIDs.contains(previousID ?? "") ? previousID : remainingIDs.first
         service.replaceSelectedDownloads(with: remainingIDs, primaryID: keyboardFocusedID)
         reloadKeyboardFocus(previous: previousID, next: keyboardFocusedID)
+    }
+}
+
+extension AppKitSteamWorkshopDownloadsContainerView {
+    @objc private func contextSetAsWallpaper() {
+        guard let record = service.selectedDownloadRecord, record.status == .ready, record.isPlayable else { return }
+        onSetAsWallpaper(record)
+    }
+
+    @objc private func contextRetryDownload() {
+        guard let record = service.selectedDownloadRecord else { return }
+        guard case .failed = record.status else { return }
+        service.downloadWorkshopItem(id: record.id, pageTitle: record.title)
+    }
+
+    @objc private func contextCancelDownload() {
+        guard let record = service.selectedDownloadRecord else { return }
+        switch record.status {
+        case .queued, .downloading:
+            service.cancelDownload(itemID: record.id)
+        case .ready, .failed:
+            break
+        }
+    }
+
+    @objc private func contextShowInfo() {
+        service.presentSelectedDownloadInfo()
+    }
+
+    @objc private func contextRevealItem() {
+        service.revealSelectedDownload()
+    }
+
+    @objc private func contextDeleteSelected() {
+        service.deleteSelectedDownload()
     }
 }

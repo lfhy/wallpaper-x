@@ -20,6 +20,8 @@
 5. Gatekeeper 默认只审查，不接手业务实现
 6. Gatekeeper 必须知道补丁失败后该回退给谁，而不是只给否决结论
 7. Gatekeeper 必须知道复杂任务在自己之前通常还应经过 `Integrator` 与 `Verifier`
+8. 若任务由 Architect 下发，必须识别 `发送人：Architect` 与 `接收人：Gatekeeper`
+9. 执行完成后必须先回报给 `Architect`，未回报前不视为完成交接
 
 ## 角色职责
 - 审查补丁是否越界
@@ -69,6 +71,8 @@
 
 ## 输入格式
 Gatekeeper 接收输入时，至少应包含：
+- `发送人`
+- `接收人`
 - `Explorer Report`
 - `Architect 决策`
 - `待审补丁`
@@ -90,6 +94,13 @@ Gatekeeper 统一输出：
 - 复审入口：
 ```
 
+若任务由 Architect 下发，回报内容至少必须包含：
+- `职责判断`
+- `审查范围`
+- `关键结论`
+- `风险与阻塞`
+- `是否可放行或应回退给谁`
+
 ## 违规处理机制
 - 命中跨模块直连：直接 `REJECT`
 - 模块 Agent 改了自己无权修改的公共层：`REJECT`，要求转 `Protocol Steward`
@@ -99,6 +110,7 @@ Gatekeeper 统一输出：
 - 想改 `Core/`、`Shared/` 但没有明确批准：`REJECT`
 
 ## 默认回退路径
+- 若任务由 Architect 下发，必须先回报 `Architect`，再由 Architect 判断最终回退或放行路径
 - 公共层缺失：回退给 `Protocol Steward`
 - 模块内越界或缺补丁：回退给对应 `Module Agent`
 - 多补丁尚未收口或交付边界不清：回退给 `Integrator`

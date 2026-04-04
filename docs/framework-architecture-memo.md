@@ -158,7 +158,9 @@ func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
 **当前菜单接入原则（新模块接入时参考）：**
 - 视频库与图片库接入完整菜单集。
 - Pixabay 在线库浏览页只接入搜索与刷新；已下载项页面通过 Bridge 接入信息、多选、全选、删除、查看文件、预览、设为壁纸。
-- Steam 当前只接入搜索、缩放与“查看文件（打开下载目录）”；不接入菜单多选、全选、删除、信息、QuickLook 与 Return 设为壁纸。
+- Steam 浏览页当前接入搜索与缩放；Steam 下载页已接入搜索、缩放、进入/退出多选、全选、删除、信息、查看文件。
+- Steam 下载页的“查看文件”统一为“对当前单选项在访达中显示”；无选中项或处于多选模式时，菜单与工具栏统一禁用，不再退回“打开下载目录”。
+- Steam 下载页的“信息”统一为 toggle 语义：当前单选项 Inspector 已打开时，再次触发同一入口会关闭。
 
 **`validateMenuItem` 中导入菜单项处理规范：**
 ```swift
@@ -194,7 +196,7 @@ final class XxxCollectionView: NSCollectionView, GridCollectionViewProtocol {
 
 ⚠️ **特例**（已更新）：OnlineLibrary（Pixabay 在线库）已于 2026-03-31 从纯 SwiftUI `LazyVGrid` 迁移到 AppKit `NSCollectionView`（`AppKitOLBrowserGridView` / `AppKitOLBrowserContainerView`），并已接入 `ModuleFocusable`。当前 Pixabay 在线库浏览页与已下载项页面均通过容器视图监听 `moduleDidBecomeActive` 自动接管焦点。`BoxSelectionState` 和框选功能在线库暂不需要，不视为违规。
 
-⚠️ **Steam 模块当前状态**（2026-04-03）：`SteamWorkshop` 已完成路由、侧边栏、工具栏、菜单与焦点协议接入。浏览页为原生 AppKit 网格，详情采用分阶段补水；登录与下载仍围绕 App 内置 `SteamCMDRuntime.bundle` 中的 `steamcmd.sh`。下载成品统一落地到 `~/Movies/MyWallpaperX/创意工坊`，下载页扫描该目录并保留关键元数据。更细的 Steam 工具栏形态与数据源说明见后文 §六、§十。
+⚠️ **Steam 模块当前状态**（2026-04-05）：`SteamWorkshop` 已完成路由、侧边栏、工具栏、菜单、Inspector 与焦点协议接入。浏览页为原生 AppKit 网格，详情通过统一 `InspectorHost` 展示；登录与下载仍围绕 App 内置 `SteamCMDRuntime.bundle` 中的 `steamcmd.sh`。下载成品统一落地到 `~/Movies/MyWallpaperX/创意工坊`，下载页扫描该目录并保留关键元数据。当前 Steam 浏览页的公共能力以搜索、缩放和浏览上下文工具栏控件为主；Steam 下载页的真实公共能力包括：搜索、缩放、进入/退出多选、全选、删除、信息 toggle、查看文件（在访达中显示当前单选项）。QuickLook 仍未接入。更细的 Steam 工具栏形态与数据源说明见后文 §六、§十。
 
 ### 3.6 模块焦点管理（AppKit 模块必须实现）
 

@@ -108,16 +108,20 @@
   - `~/Movies/MyWallpaperX/创意工坊`
 
 ## Current Menu / Shortcut Reality
-- Steam 模块当前仍不接入：
+- Steam 浏览页当前已接入：
+  - `Cmd+F` 搜索
+  - 缩放快捷键
+- Steam 下载页当前已接入：
+  - `Cmd+F` 搜索
+  - 缩放快捷键
   - 菜单多选
   - 菜单全选
   - 菜单删除
+  - 菜单“查看文件”对当前单选下载项执行“在访达中显示”，无选中项或处于多选模式时禁用
+  - 菜单“信息”为 toggle 语义：当前单选项 Inspector 已打开时，再次触发同一入口会关闭
+- Steam 模块当前仍不接入：
   - QuickLook
   - Return 直接设为壁纸
-- Steam 模块当前已接入：
-  - `Cmd+F` 搜索
-  - 缩放快捷键
-  - “查看文件”统一打开下载目录
 - Steam 下载页的“设为壁纸”走通知中转到视频库静默导入并播放，不通过视频库菜单命令直接路由。
 
 ## Confirmed Historical Findings

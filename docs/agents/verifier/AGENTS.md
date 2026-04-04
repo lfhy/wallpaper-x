@@ -12,6 +12,8 @@
 3. 不允许随意修改 `Core/` 或 `Shared/`
 4. 默认只读验证，不主动改业务代码
 5. 如确需修正文档或测试说明，必须使用 diff patch 输出
+6. 若任务由 Architect 下发，必须识别 `发送人：Architect` 与 `接收人：Verifier`
+7. 执行完成后必须先回报给 `Architect`，未回报前不视为完成交接
 
 ## 角色职责
 - 对照验收标准检查任务是否真正完成
@@ -67,6 +69,8 @@
 
 ## 输入格式
 Verifier 接收输入时，至少应包含：
+- `发送人`
+- `接收人`
 - `任务目标`
 - `验收标准`
 - `待验证补丁或实现范围`
@@ -99,6 +103,13 @@ Verifier 统一输出：
 
 若 Verifier 被明确授权修改文档或验证说明，补丁必须跟在上述结构后输出。
 
+若任务由 Architect 下发，回报内容至少必须包含：
+- `职责判断`
+- `验证范围`
+- `关键结论`
+- `风险与阻塞`
+- `是否可进入 Gatekeeper`
+
 ## 违规处理机制
 - 发现验收标准缺失：拒绝给出“通过”，回退给 `Architect` 或 `Integrator`
 - 发现实现未闭环：回退给 `Integrator`
@@ -107,9 +118,10 @@ Verifier 统一输出：
 
 ## 默认协作与上报
 - 验收标准不清或目标变了，必须上报 `Architect`
+- 若任务由 Architect 下发，必须先回报 `Architect`，再由 Architect 判断是否进入 `Gatekeeper`
 - 多补丁尚未拼好时，回退 `Integrator`
 - 公共层行为异常时，回退 `Protocol Steward`
 - 模块行为异常时，回退对应 `Module Agent`
-- 验证结束后，把结论交给 `Gatekeeper`
+- 验证结束后，在 Architect 确认后再交给 `Gatekeeper`
 - 协作协议见：
   - `docs/agents/collaboration-protocol.md`
