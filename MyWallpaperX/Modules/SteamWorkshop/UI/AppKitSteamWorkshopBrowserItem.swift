@@ -486,6 +486,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     private let hoverOutlineView = NSView()
     private let previewContainer = NSView()
     private let previewImageView = NSImageView()
+    private let previewPlaceholderView = SteamWorkshopPreviewPlaceholderView()
     private let multiSelectBadgeView = NSView()
     private let multiSelectBadgeIcon = NSImageView()
     private let overlayBarShadowView = NSView()
@@ -493,9 +494,12 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     private let detailButton = SteamWorkshopOverlayIconButton()
     private let titleMarqueeView = SteamWorkshopMarqueeTextView()
     private let statusBadgeButton = SteamWorkshopOverlayIconButton()
+    private let statusSpinner = NSProgressIndicator()
 
     private var imageTask: Task<Void, Never>?
+    private var previewRetryTask: Task<Void, Never>?
     private var currentPreviewURL: URL?
+    private var currentDownloadVideoURL: URL?
     private var currentTitleText = ""
     private var onOpen: (() -> Void)?
     private var onAuthor: (() -> Void)?
@@ -586,6 +590,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         imageTask?.cancel()
         imageTask = nil
         currentPreviewURL = nil
+        currentDownloadVideoURL = nil
         currentTitleText = ""
         titleMarqueeView.text = ""
         previewImageView.image = nil
@@ -614,6 +619,9 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         overlayBar.setScanAnimationEnabled(false)
         overlayBar.applyAccentStyle(.neutral, animated: false)
         statusBadgeButton.layer?.removeAnimation(forKey: "steam.status.spin")
+        statusSpinner.stopAnimation(nil)
+        statusSpinner.isHidden = true
+        previewRetryTask?.cancel()
         refreshThemeAwareAppearance()
     }
 
@@ -637,6 +645,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         self.onSetAsWallpaper = onSetAsWallpaper
         self.onCancelDownload = onCancelDownload
         currentDisplayContext = displayContext
+        currentDownloadVideoURL = downloadRecord?.videoURL
         currentDebugID = item.id
         prefersCircularPlayBadge = false
         applyContent(
@@ -647,7 +656,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             isMultiSelectMode: isMultiSelectMode,
             isKeyboardFocused: isKeyboardFocused
         )
-        loadPreview(from: item.previewImageURL)
+        loadPreview(from: item.previewImageURL, fallbackVideoURL: currentDownloadVideoURL)
     }
 
     func configureMetadataOnly(
@@ -670,6 +679,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         self.onSetAsWallpaper = onSetAsWallpaper
         self.onCancelDownload = onCancelDownload
         currentDisplayContext = displayContext
+        currentDownloadVideoURL = downloadRecord?.videoURL
         currentDebugID = item.id
         prefersCircularPlayBadge = false
         applyContent(
@@ -715,6 +725,10 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             y: barMidY,
             width: iconSize,
             height: iconSize
+        )
+        statusSpinner.frame = statusBadgeButton.frame.insetBy(
+            dx: max(4, iconSize * 0.2),
+            dy: max(4, iconSize * 0.2)
         )
         let detailButtonX = metrics.barEdgeInset
         detailButton.frame = CGRect(
@@ -930,7 +944,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         )
         statusBadgeButton.iconTintColor = tintColor
         statusBadgeButton.setAccessibilityLabel(accessibilityLabel)
-        updateStatusBadgeAnimation()
+        updateStatusBadgeLoadingIndicator()
     }
 
     private func metrics(for cardSize: CGSize) -> Metrics {
@@ -1032,6 +1046,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         previewImageView.imageAlignment = .alignCenter
         previewImageView.animates = true
         previewContainer.addSubview(previewImageView)
+        previewContainer.addSubview(previewPlaceholderView)
 
         multiSelectBadgeView.wantsLayer = true
         multiSelectBadgeView.layer?.cornerRadius = 12
@@ -1068,6 +1083,12 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         statusBadgeButton.action = #selector(handleStatusAction)
         overlayBar.addSubview(statusBadgeButton)
 
+        statusSpinner.style = .spinning
+        statusSpinner.controlSize = .small
+        statusSpinner.isDisplayedWhenStopped = false
+        statusSpinner.isHidden = true
+        overlayBar.addSubview(statusSpinner)
+
         refreshThemeAwareAppearance()
     }
 
@@ -1094,7 +1115,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         hoverOutlineView.layer?.borderColor = (isSelectionHighlighted ? selectedOutlineColor : hoverOutlineColor).cgColor
         hoverOutlineView.layer?.borderWidth = isSelectionHighlighted ? 1.6 : 1
 
-        previewContainer.layer?.backgroundColor = NSColor.clear.cgColor
+        previewContainer.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.14).cgColor
 
         let showsSelectionBadge = currentDisplayContext == .downloads && isMultiSelectMode
         multiSelectBadgeView.isHidden = !showsSelectionBadge
@@ -1146,26 +1167,18 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         statusBadgeButton.borderWidth = 0
         statusBadgeButton.iconTintColor = fixedForeground
         statusBadgeButton.appearance = overlayBar.appearance
-        updateStatusBadgeAnimation()
+        updateStatusBadgeLoadingIndicator()
     }
 
-    private func updateStatusBadgeAnimation() {
-        guard let layer = statusBadgeButton.layer else { return }
-        statusBadgeButton.ensureLayerAnchorCentered()
-        let animationKey = "steam.status.spin"
+    private func updateStatusBadgeLoadingIndicator() {
         let shouldSpin = currentActionKind == .cancel && currentBarState == .downloading
         if shouldSpin {
-            guard layer.animation(forKey: animationKey) == nil else { return }
-            let animation = CABasicAnimation(keyPath: "transform.rotation.z")
-            animation.fromValue = 0
-            animation.toValue = -CGFloat.pi * 2
-            animation.duration = 0.9
-            animation.repeatCount = .infinity
-            animation.timingFunction = CAMediaTimingFunction(name: .linear)
-            animation.isRemovedOnCompletion = false
-            layer.add(animation, forKey: animationKey)
+            statusBadgeButton.image = nil
+            statusSpinner.isHidden = false
+            statusSpinner.startAnimation(nil)
         } else {
-            layer.removeAnimation(forKey: animationKey)
+            statusSpinner.stopAnimation(nil)
+            statusSpinner.isHidden = true
         }
     }
 
@@ -1282,32 +1295,155 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         CATransaction.commit()
     }
 
-    private func loadPreview(from url: URL?) {
-        guard currentPreviewURL != url else { return }
-        currentPreviewURL = url
+    private func loadPreview(from url: URL?, fallbackVideoURL: URL?) {
+        let requestURL = url ?? fallbackVideoURL
+        guard currentPreviewURL != requestURL || previewImageView.image == nil else { return }
+        currentPreviewURL = requestURL
         imageTask?.cancel()
+        previewRetryTask?.cancel()
+
+        if let url, url.isFileURL {
+            loadLocalPreview(from: url, fallbackVideoURL: fallbackVideoURL)
+            return
+        }
 
         guard let url else {
+            if let fallbackVideoURL {
+                loadGeneratedDownloadPreview(from: fallbackVideoURL)
+                return
+            }
             previewImageView.image = nil
+            previewPlaceholderView.setState(.unavailable)
             updatePreviewImageFrame()
             return
         }
 
         let cacheKey = steamWorkshopPreviewCacheKey(for: url)
-        if let cached = SteamWorkshopPreviewImageCache.shared.cachedOrDiskImage(forKey: cacheKey) {
+        if !SteamWorkshopPreviewRequestCoordinator.shared.shouldBypassCachedImage(forKey: cacheKey),
+           let cached = SteamWorkshopPreviewImageCache.shared.cachedOrDiskImage(forKey: cacheKey),
+           !steamWorkshopPreviewImageLooksSuspicious(cached) {
             previewImageView.image = cached
+            previewPlaceholderView.setState(.hidden)
+            SteamWorkshopPreviewRequestCoordinator.shared.clearCachedImageSuspicion(forKey: cacheKey)
+            updatePreviewImageFrame()
+            return
+        }
+        if let cached = SteamWorkshopPreviewImageCache.shared.cachedOrDiskImage(forKey: cacheKey),
+           steamWorkshopPreviewImageLooksSuspicious(cached) {
+            SteamWorkshopPreviewRequestCoordinator.shared.markCachedImageSuspicious(forKey: cacheKey)
+        }
+
+        previewImageView.image = nil
+        previewPlaceholderView.setState(.loading)
+        updatePreviewImageFrame()
+        loadPreviewImage(url: url, cacheKey: cacheKey)
+    }
+
+    private func loadLocalPreview(from localURL: URL, fallbackVideoURL: URL?) {
+        if FileManager.default.fileExists(atPath: localURL.path),
+           let image = NSImage(contentsOf: localURL),
+           !steamWorkshopPreviewImageLooksSuspicious(image) {
+            previewImageView.image = image
+            previewPlaceholderView.setState(.hidden)
+            updatePreviewImageFrame()
+            return
+        }
+
+        if let fallbackVideoURL {
+            loadGeneratedDownloadPreview(from: fallbackVideoURL)
+            return
+        }
+
+        previewImageView.image = nil
+        previewPlaceholderView.setState(.unavailable)
+        updatePreviewImageFrame()
+    }
+
+    private func loadGeneratedDownloadPreview(from videoURL: URL) {
+        if let cached = SteamWorkshopDownloadThumbnailPipeline.shared.cachedThumbnail(for: videoURL) {
+            previewImageView.image = cached
+            previewPlaceholderView.setState(.hidden)
             updatePreviewImageFrame()
             return
         }
 
         previewImageView.image = nil
+        previewPlaceholderView.setState(.loading)
         updatePreviewImageFrame()
+
+        SteamWorkshopDownloadThumbnailPipeline.shared.generateThumbnail(for: videoURL) { [weak self] image in
+            guard let self, self.currentPreviewURL == videoURL else { return }
+            if let image {
+                self.previewImageView.image = image
+                self.previewPlaceholderView.setState(.hidden)
+            } else {
+                self.previewImageView.image = nil
+                self.previewPlaceholderView.setState(.unavailable)
+            }
+            self.updatePreviewImageFrame()
+        }
+    }
+
+    private func loadPreviewImage(url: URL, cacheKey: String) {
+        if SteamWorkshopPreviewRequestCoordinator.shared.shouldBypassCachedImage(forKey: cacheKey) {
+            imageTask = Task { [weak self] in
+                guard let self else { return }
+                let data = await SteamWorkshopPreviewRequestCoordinator.shared.loadData(
+                    from: url,
+                    priority: .visible,
+                    ignoringBackoff: true
+                )
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard self.currentPreviewURL == url else { return }
+                    self.applyResolvedPreviewImage(data.flatMap(NSImage.init(data:)), url: url, cacheKey: cacheKey)
+                }
+            }
+            return
+        }
+
         SteamWorkshopPreviewImageCache.shared.loadImageData(forKey: cacheKey, loader: {
-            try? Data(contentsOf: url)
+            SteamWorkshopPreviewRequestCoordinator.shared.loadDataSynchronously(
+                from: url,
+                priority: .visible
+            )
         }) { [weak self] image in
             guard let self, self.currentPreviewURL == url else { return }
-            self.previewImageView.image = image
-            self.updatePreviewImageFrame()
+            self.applyResolvedPreviewImage(image, url: url, cacheKey: cacheKey)
+        }
+    }
+
+    private func applyResolvedPreviewImage(_ image: NSImage?, url: URL, cacheKey: String) {
+        if let image, !steamWorkshopPreviewImageLooksSuspicious(image) {
+            previewImageView.image = image
+            previewPlaceholderView.setState(.hidden)
+            SteamWorkshopPreviewRequestCoordinator.shared.clearCachedImageSuspicion(forKey: cacheKey)
+            updatePreviewImageFrame()
+            return
+        }
+
+        previewImageView.image = nil
+        SteamWorkshopPreviewRequestCoordinator.shared.markCachedImageSuspicious(forKey: cacheKey)
+        schedulePreviewRetry(url: url, cacheKey: cacheKey)
+        updatePreviewImageFrame()
+    }
+
+    private func schedulePreviewRetry(url: URL, cacheKey: String) {
+        previewRetryTask?.cancel()
+        let retryDelay = SteamWorkshopPreviewRequestCoordinator.shared.nextRetryDelay(for: url, priority: .visible) ?? 2.5
+        guard retryDelay < 20 else {
+            previewPlaceholderView.setState(.unavailable)
+            return
+        }
+        previewPlaceholderView.setState(.retrying)
+        previewRetryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(0.5, retryDelay + 0.25) * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.currentPreviewURL == url else { return }
+                self.previewPlaceholderView.setState(.loading)
+                self.loadPreviewImage(url: url, cacheKey: cacheKey)
+            }
         }
     }
 
@@ -1320,8 +1456,10 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             containerBounds.height > 0
         else {
             previewImageView.frame = .zero
+            previewPlaceholderView.frame = .zero
             return
         }
+        previewPlaceholderView.frame = containerBounds
         guard
             let image = previewImageView.image,
             image.size.width.isFinite,

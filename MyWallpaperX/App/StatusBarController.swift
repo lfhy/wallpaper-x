@@ -11,9 +11,10 @@ import AppKit
 final class StatusBarController: NSObject, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var didSetupStatusBar = false
+    private var isMenuOpen = false
     private let wallpaperManager: WallpaperManager = .shared
 
-    // 状态栏动态刷新定时器（每 2 秒更新一次图标上的 CPU%）
+    // 状态栏动态刷新定时器（每 2 秒更新一次图标上的 GPU%）
     private var iconRefreshTimer: DispatchSourceTimer?
 
     private lazy var menu: NSMenu = {
@@ -35,36 +36,41 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         // 状态栏图标只初始化一次，避免重复创建导致菜单 / target 丢失。
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         guard let button = statusItem?.button else { return }
-        // 首次用默认图标，定时器起来后会换成动态 CPU% 图标
+        // 首次用默认图标，定时器起来后会换成动态 GPU% 图标
         button.image = NSImage(systemSymbolName: "play.rectangle.fill", accessibilityDescription: "Wallpaper Control")
         statusItem?.menu = menu
+        SystemMonitor.shared.refreshRuntimeStats()
         rebuildMenu()
+        updateStatusBarIcon()
         startIconRefreshTimer()
     }
 
     // MARK: - 状态栏图标动态刷新
 
     private func startIconRefreshTimer() {
-        // 首次采样（建立基线，第一次 CPU 差值为 0 属正常）
-        SystemMonitor.shared.refresh()
+        // 首次采样（建立基线，第一次差值为 0 属正常）
+        SystemMonitor.shared.refreshRuntimeStats()
 
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 2.0, repeating: 2.0, leeway: .milliseconds(200))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
-            SystemMonitor.shared.refresh()
+            SystemMonitor.shared.refreshRuntimeStats()
             self.updateStatusBarIcon()
+            if self.isMenuOpen {
+                self.rebuildMenu()
+            }
         }
         iconRefreshTimer = timer
         timer.resume()
     }
 
-    /// 将 CPU% 渲染到状态栏图标（等宽数字，16pt）
+    /// 将 GPU% 渲染到状态栏图标（加粗等宽数字，保持轻量可读）
     private func updateStatusBarIcon() {
-        let pct = Int((SystemMonitor.shared.stats.cpuUsage * 100).rounded())
+        let pct = Int(((SystemMonitor.shared.stats.gpuUsage ?? 0) * 100).rounded())
         let label = String(format: "%d%%", pct)
 
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .bold)
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: NSColor.labelColor
@@ -86,8 +92,16 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
     
     func menuNeedsUpdate(_ menu: NSMenu) {
-        // 菜单内容每次打开都重新计算，保证图标标题与当前播放 / 静音状态一致。
+        // 菜单打开时先用最近一次采样结果重建，避免展开瞬间被同步采样拖慢。
         rebuildMenu()
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        isMenuOpen = true
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        isMenuOpen = false
     }
     
     private func rebuildMenu() {
@@ -95,23 +109,15 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.removeAllItems()
 
         // ── 系统状态监控区 ──────────────────────────────────────
-        // menuNeedsUpdate 每次打开菜单都触发，刷新一次数据即可
-        SystemMonitor.shared.refresh()
         let s = SystemMonitor.shared.stats
 
-        // 第一行：CPU + 内存
-        var line1 = "CPU \(s.cpuUsageString)   内存 \(s.memUsedString) / \(s.memTotalString)"
-        if let t = s.cpuTempString { line1 += "   \(t)" }
+        // 第一行：CPU + GPU 负载
+        let line1 = "CPU \(s.cpuUsageString)   GPU \(s.gpuUsageString)"
         menu.addItem(makeInfoItem(title: line1, systemImageName: "cpu"))
 
-        // 第二行：GPU（有数据才显示）
-        var gpuParts: [String] = []
-        let gpuStr = s.gpuUsageString
-        if gpuStr != "–" { gpuParts.append("GPU \(gpuStr)") }
-        if let t = s.gpuTempString { gpuParts.append(t) }
-        if !gpuParts.isEmpty {
-            menu.addItem(makeInfoItem(title: gpuParts.joined(separator: "   "), systemImageName: "memorychip"))
-        }
+        // 第二行：内存
+        let memoryLine = "内存 \(s.memUsedString) / \(s.memTotalString)"
+        menu.addItem(makeInfoItem(title: memoryLine, systemImageName: "memorychip"))
 
         // 第三行：网络
         let netLine = "↑ \(s.netUpString)   ↓ \(s.netDownString)"

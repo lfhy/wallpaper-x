@@ -65,7 +65,10 @@ extension SteamWorkshopService {
         return SteamWorkshopBrowseStubPage(stubs: ordered, hasMore: hasMore)
     }
 
-    static func fetchWorkshopItems(stubs: [SteamWorkshopBrowseStub]) async throws -> [SteamWorkshopBrowserItem] {
+    static func fetchWorkshopItems(
+        stubs: [SteamWorkshopBrowseStub],
+        requestPriority: SteamWorkshopDetailRequestPriority = .background
+    ) async throws -> [SteamWorkshopBrowserItem] {
         guard !stubs.isEmpty else { return [] }
         var itemsByID: [String: SteamWorkshopBrowserItem] = [:]
         var unresolvedStubs: [SteamWorkshopBrowseStub] = []
@@ -85,7 +88,10 @@ extension SteamWorkshopService {
             }
         }
 
-        let detailsByID = try await fetchPublishedFileDetails(ids: unresolvedStubs.map(\.id))
+        let detailsByID = try await fetchPublishedFileDetails(
+            ids: unresolvedStubs.map(\.id),
+            requestPriority: requestPriority
+        )
         let missingIDs = unresolvedStubs.map(\.id).filter { detailsByID[$0] == nil }
         if !missingIDs.isEmpty {
             NSLog(
@@ -100,7 +106,8 @@ extension SteamWorkshopService {
                 let item = try await fetchWorkshopItem(
                     stub: stub,
                     officialDetail: detail,
-                    allowHTMLFallback: false
+                    allowHTMLFallback: false,
+                    requestPriority: requestPriority
                 )
                 itemsByID[stub.id] = item
                 continue
@@ -110,12 +117,13 @@ extension SteamWorkshopService {
                 let item = try await fetchWorkshopItem(
                     stub: stub,
                     officialDetail: nil,
-                    allowHTMLFallback: true
+                    allowHTMLFallback: true,
+                    requestPriority: requestPriority
                 )
                 itemsByID[stub.id] = item
             } catch {
                 let fallback = fallbackBrowserItem(from: stub)
-                let enrichedFallback = try await enrichPreviewKind(for: fallback)
+                let enrichedFallback = try await enrichPreviewKind(for: fallback, requestPriority: requestPriority)
                 itemsByID[stub.id] = enrichedFallback
             }
         }
@@ -131,7 +139,10 @@ extension SteamWorkshopService {
         while startIndex < uncachedStubs.count {
             let endIndex = min(startIndex + Constants.detailPrefetchBatchSize, uncachedStubs.count)
             let batch = Array(uncachedStubs[startIndex..<endIndex])
-            let detailsByID = try await fetchPublishedFileDetails(ids: batch.map(\.id))
+            let detailsByID = try await fetchPublishedFileDetails(
+                ids: batch.map(\.id),
+                requestPriority: .background
+            )
             for stub in batch {
                 guard let detail = detailsByID[stub.id], detailRepresentsVideo(detail) else { continue }
                 let item = await item(from: detail, stub: stub)
@@ -147,11 +158,12 @@ extension SteamWorkshopService {
     static func fetchWorkshopItem(
         stub: SteamWorkshopBrowseStub,
         officialDetail: SteamWorkshopPublishedFileDetail? = nil,
-        allowHTMLFallback: Bool = true
+        allowHTMLFallback: Bool = true,
+        requestPriority: SteamWorkshopDetailRequestPriority = .background
     ) async throws -> SteamWorkshopBrowserItem {
         if let cached = loadDetailCache(id: stub.id) {
             let merged = await applyingCachedAuthorNameIfPossible(to: mergeStub(stub, into: cached))
-            let enriched = try await enrichPreviewKind(for: merged)
+            let enriched = try await enrichPreviewKind(for: merged, requestPriority: requestPriority)
             if enriched != cached {
                 saveDetailCache(item: enriched)
             }
@@ -161,7 +173,10 @@ extension SteamWorkshopService {
         let detail = if let officialDetail {
             officialDetail
         } else {
-            try await fetchPublishedFileDetails(ids: [stub.id])[stub.id]
+            try await fetchPublishedFileDetails(
+                ids: [stub.id],
+                requestPriority: requestPriority
+            )[stub.id]
         }
 
         var resolvedItem: SteamWorkshopBrowserItem
@@ -178,7 +193,10 @@ extension SteamWorkshopService {
 
         if allowHTMLFallback, shouldSupplementWithHTML(item: resolvedItem) {
             do {
-                let htmlItem = try await fetchWorkshopItemFromHTML(stub: stub)
+                let htmlItem = try await fetchWorkshopItemFromHTML(
+                    stub: stub,
+                    requestPriority: requestPriority
+                )
                 await saveAuthorNameIfPossible(
                     htmlItem.author,
                     creatorID: detail?.creator,
@@ -192,14 +210,17 @@ extension SteamWorkshopService {
         }
 
         let merged = mergeStub(stub, into: resolvedItem)
-        let enriched = try await enrichPreviewKind(for: merged)
+        let enriched = try await enrichPreviewKind(for: merged, requestPriority: requestPriority)
         saveDetailCache(item: enriched)
         return enriched
     }
 
-    static func fetchWorkshopItemFromHTML(stub: SteamWorkshopBrowseStub) async throws -> SteamWorkshopBrowserItem {
+    static func fetchWorkshopItemFromHTML(
+        stub: SteamWorkshopBrowseStub,
+        requestPriority: SteamWorkshopDetailRequestPriority = .background
+    ) async throws -> SteamWorkshopBrowserItem {
         let detailURL = makeDetailURL(id: stub.id)
-        let html = try await fetchHTML(url: detailURL)
+        let html = try await fetchHTML(url: detailURL, requestPriority: requestPriority)
         let parsed = parseDetailPage(html: html, fallbackID: stub.id)
         if let workshopTypeText = parsed.workshopTypeText,
            !workshopTypeText.localizedCaseInsensitiveContains("video") {
@@ -240,7 +261,10 @@ extension SteamWorkshopService {
         )
     }
 
-    static func fetchPublishedFileDetails(ids: [String]) async throws -> [String: SteamWorkshopPublishedFileDetail] {
+    static func fetchPublishedFileDetails(
+        ids: [String],
+        requestPriority: SteamWorkshopDetailRequestPriority = .background
+    ) async throws -> [String: SteamWorkshopPublishedFileDetail] {
         let normalizedIDs = Array(NSOrderedSet(array: ids.filter { !$0.isEmpty })) as? [String] ?? []
         guard !normalizedIDs.isEmpty else { return [:] }
 
@@ -256,7 +280,9 @@ extension SteamWorkshopService {
         })
         request.httpBody = formItems.joined(separator: "&").data(using: .utf8)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await SteamWorkshopDetailRequestScheduler.shared.run(priority: requestPriority) {
+            try await URLSession.shared.data(for: request)
+        }
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
@@ -402,14 +428,19 @@ extension SteamWorkshopService {
         )
     }
 
-    static func fetchHTML(url: URL) async throws -> String {
+    static func fetchHTML(
+        url: URL,
+        requestPriority: SteamWorkshopDetailRequestPriority = .background
+    ) async throws -> String {
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) MyWallpaperX/1.0", forHTTPHeaderField: "User-Agent")
         request.setValue("zh-CN,zh;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
         request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         request.setValue("no-cache", forHTTPHeaderField: "Pragma")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await SteamWorkshopDetailRequestScheduler.shared.run(priority: requestPriority) {
+            try await URLSession.shared.data(for: request)
+        }
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
@@ -428,7 +459,10 @@ extension SteamWorkshopService {
         return html
     }
 
-    static func enrichPreviewKind(for item: SteamWorkshopBrowserItem) async throws -> SteamWorkshopBrowserItem {
+    static func enrichPreviewKind(
+        for item: SteamWorkshopBrowserItem,
+        requestPriority: SteamWorkshopDetailRequestPriority = .background
+    ) async throws -> SteamWorkshopBrowserItem {
         if item.previewAssetKind != .unknown {
             return item
         }
@@ -436,7 +470,7 @@ extension SteamWorkshopService {
             return item
         }
 
-        let mimeType = try? await fetchPreviewMimeType(url: previewImageURL)
+        let mimeType = try? await fetchPreviewMimeType(url: previewImageURL, requestPriority: requestPriority)
         let previewKind: SteamWorkshopPreviewAssetKind
         switch mimeType?.lowercased() {
         case let value? where value.contains("gif"):
@@ -449,12 +483,17 @@ extension SteamWorkshopService {
         return withPreviewKind(previewKind, item: item)
     }
 
-    static func fetchPreviewMimeType(url: URL) async throws -> String? {
+    static func fetchPreviewMimeType(
+        url: URL,
+        requestPriority: SteamWorkshopDetailRequestPriority = .background
+    ) async throws -> String? {
         var request = URLRequest(url: url)
         request.httpMethod = "HEAD"
         request.timeoutInterval = 15
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) MyWallpaperX/1.0", forHTTPHeaderField: "User-Agent")
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await SteamWorkshopDetailRequestScheduler.shared.run(priority: requestPriority) {
+            try await URLSession.shared.data(for: request)
+        }
         guard let http = response as? HTTPURLResponse, (200..<400).contains(http.statusCode) else {
             throw URLError(.badServerResponse)
         }

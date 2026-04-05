@@ -175,6 +175,7 @@ struct SteamWorkshopItemDetailSheet: View {
             SteamWorkshopPreviewSurface(
                 itemID: currentItem.id,
                 previewImageURL: currentItem.previewImageURL,
+                fallbackVideoURL: latestDownloadRecord?.videoURL,
                 previewAssetKind: currentItem.previewAssetKind
             )
             .frame(maxWidth: .infinity)
@@ -612,6 +613,7 @@ private struct SteamWorkshopFooterButtonStyle: ButtonStyle {
 private struct SteamWorkshopPreviewSurface: View {
     let itemID: String
     let previewImageURL: URL?
+    let fallbackVideoURL: URL?
     let previewAssetKind: SteamWorkshopPreviewAssetKind
 
     var body: some View {
@@ -628,7 +630,15 @@ private struct SteamWorkshopPreviewSurface: View {
             if let previewImageURL {
                 SteamWorkshopCachedPreviewImage(
                     itemID: itemID,
-                    url: previewImageURL
+                    url: previewImageURL,
+                    fallbackVideoURL: fallbackVideoURL
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            } else if let fallbackVideoURL {
+                SteamWorkshopCachedPreviewImage(
+                    itemID: itemID,
+                    url: fallbackVideoURL,
+                    fallbackVideoURL: fallbackVideoURL
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
@@ -647,6 +657,7 @@ private struct SteamWorkshopPreviewSurface: View {
 private struct SteamWorkshopCachedPreviewImage: NSViewRepresentable {
     let itemID: String
     let url: URL
+    let fallbackVideoURL: URL?
 
     func makeNSView(context: Context) -> SteamWorkshopPreviewImageContainerView {
         SteamWorkshopPreviewImageContainerView()
@@ -656,14 +667,39 @@ private struct SteamWorkshopCachedPreviewImage: NSViewRepresentable {
         guard context.coordinator.currentURL != url else { return }
         context.coordinator.currentURL = url
 
+        if url.isFileURL {
+            if FileManager.default.fileExists(atPath: url.path),
+               let image = NSImage(contentsOf: url),
+               !steamWorkshopPreviewImageLooksSuspicious(image) {
+                nsView.setImage(image)
+                return
+            }
+
+            if let fallbackVideoURL {
+                nsView.setLoadingState(.loading)
+                SteamWorkshopDownloadThumbnailPipeline.shared.generateThumbnail(for: fallbackVideoURL) { image in
+                    guard context.coordinator.currentURL == url else { return }
+                    nsView.setImage(image)
+                }
+                return
+            }
+
+            nsView.setImage(nil)
+            return
+        }
+
         let cacheKey = steamWorkshopPreviewCacheKey(for: url)
         if let cached = SteamWorkshopPreviewImageCache.shared.cachedOrDiskImage(forKey: cacheKey) {
             nsView.setImage(cached)
             return
         }
 
+        nsView.setLoadingState(.loading)
         SteamWorkshopPreviewImageCache.shared.loadImageData(forKey: cacheKey, loader: {
-            return try? Data(contentsOf: url)
+            SteamWorkshopPreviewRequestCoordinator.shared.loadDataSynchronously(
+                from: url,
+                priority: .userInitiated
+            )
         }) { image in
             guard context.coordinator.currentURL == url else { return }
             nsView.setImage(image)
@@ -681,6 +717,7 @@ private struct SteamWorkshopCachedPreviewImage: NSViewRepresentable {
 
 private final class SteamWorkshopPreviewImageContainerView: NSView {
     private let imageView = NSImageView()
+    private let placeholderView = SteamWorkshopPreviewPlaceholderView()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -699,6 +736,7 @@ private final class SteamWorkshopPreviewImageContainerView: NSView {
         imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.imageAlignment = .alignCenter
         addSubview(imageView)
+        addSubview(placeholderView)
     }
 
     override func layout() {
@@ -708,15 +746,22 @@ private final class SteamWorkshopPreviewImageContainerView: NSView {
 
     func setImage(_ image: NSImage?) {
         imageView.image = image
+        placeholderView.setState(image == nil ? .retrying : .hidden)
         updateImageFrame()
+    }
+
+    func setLoadingState(_ state: SteamWorkshopPreviewPlaceholderView.State) {
+        placeholderView.setState(state)
     }
 
     private func updateImageFrame() {
         let containerBounds = bounds
         guard containerBounds.width > 0, containerBounds.height > 0 else {
             imageView.frame = .zero
+            placeholderView.frame = .zero
             return
         }
+        placeholderView.frame = containerBounds
         guard let image = imageView.image, image.size.width > 0, image.size.height > 0 else {
             imageView.frame = containerBounds
             return
@@ -724,12 +769,7 @@ private final class SteamWorkshopPreviewImageContainerView: NSView {
 
         let widthScale = containerBounds.width / image.size.width
         let heightScale = containerBounds.height / image.size.height
-        let scale: CGFloat
-        if image.size.width < containerBounds.width || image.size.height < containerBounds.height {
-            scale = max(widthScale, heightScale)
-        } else {
-            scale = min(widthScale, heightScale)
-        }
+        let scale = max(widthScale, heightScale)
         let fittedWidth = image.size.width * scale
         let fittedHeight = image.size.height * scale
         imageView.frame = CGRect(

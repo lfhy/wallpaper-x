@@ -43,12 +43,14 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
 
     private enum FooterState: Equatable {
         case hidden
+        case ready
         case loading
         case exhausted
 
         var logLabel: String {
             switch self {
             case .hidden: return "hidden"
+            case .ready: return "ready"
             case .loading: return "loading"
             case .exhausted: return "exhausted"
             }
@@ -56,6 +58,8 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
     }
 
     private static let footerItemID = "__steam_workshop_grid_footer__"
+    private static let footerReadyMessage = "继续下滑以加载更多项目。"
+    private static let footerExhaustedMessage = "已到达当前可抓取内容底部。受 Steam 官方页面可见性与分页限制影响，部分作品可能无法完整抓取；如需核对，请以 Steam 官方网页为准。"
 
     private let service: SteamWorkshopService
     var onOpen: (SteamWorkshopBrowserItem) -> Void
@@ -111,7 +115,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             if id == Self.footerItemID {
                 let item = AppKitSteamWorkshopBrowserFooterItem()
                 item.configure(
-                    text: self.footerState == .loading ? "正在加载更多项目…" : "没有更多内容了",
+                    text: self.footerText(for: self.footerState),
                     showsProgress: self.footerState == .loading
                 )
                 return item
@@ -310,7 +314,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             if id == Self.footerItemID {
                 guard let footerItem = collectionView.item(at: indexPath) as? AppKitSteamWorkshopBrowserFooterItem else { continue }
                 footerItem.configure(
-                    text: footerState == .loading ? "正在加载更多项目…" : "没有更多内容了",
+                    text: footerText(for: footerState),
                     showsProgress: footerState == .loading
                 )
                 continue
@@ -368,7 +372,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         let viewportHeight = scrollView.contentView.bounds.height
         let offsetY = scrollView.contentView.bounds.origin.y
         guard contentHeight > 0, viewportHeight > 0 else { return }
-        let preloadDistance = max(480, viewportHeight * 1.5)
+        let preloadDistance = max(720, viewportHeight * 2.5)
         if contentHeight - offsetY - viewportHeight < preloadDistance {
             service.loadMoreBrowserItemsIfNeeded()
         }
@@ -398,7 +402,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
                 return id
             }
         guard !visibleIDs.isEmpty else { return }
-        let prioritized = Array(visibleIDs.prefix(10))
+        let prioritized = Array(visibleIDs.prefix(16))
         guard prioritized != lastPrioritizedVisibleIDs else { return }
         lastPrioritizedVisibleIDs = prioritized
         service.prioritizeVisibleBrowserItemIDs(prioritized)
@@ -469,6 +473,9 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         if service.isLoadingMoreBrowserItems {
             return .loading
         }
+        if service.hasMoreBrowserItems, !orderedIDs.isEmpty {
+            return .ready
+        }
         if !service.hasMoreBrowserItems, !orderedIDs.isEmpty {
             return .exhausted
         }
@@ -478,9 +485,22 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
     private func configureVisibleFooterIfNeeded() {
         collectionView.visibleItems().compactMap { $0 as? AppKitSteamWorkshopBrowserFooterItem }.forEach {
             $0.configure(
-                text: footerState == .loading ? "正在加载更多项目…" : "没有更多内容了",
+                text: footerText(for: footerState),
                 showsProgress: footerState == .loading
             )
+        }
+    }
+
+    private func footerText(for state: FooterState) -> String {
+        switch state {
+        case .hidden:
+            return ""
+        case .ready:
+            return Self.footerReadyMessage
+        case .loading:
+            return "正在加载更多项目…"
+        case .exhausted:
+            return Self.footerExhaustedMessage
         }
     }
 
@@ -504,7 +524,8 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         if id == Self.footerItemID {
             let inset = flowLayout.sectionInset
             let width = max(120, bounds.width - inset.left - inset.right)
-            return NSSize(width: floor(width), height: 40)
+            let height: CGFloat = footerState == .exhausted ? 52 : 40
+            return NSSize(width: floor(width), height: height)
         }
         return flowLayout.itemSize
     }
@@ -517,7 +538,7 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
         guard let id = dataSource.itemIdentifier(for: indexPath) else { return }
         if id == Self.footerItemID {
             (item as? AppKitSteamWorkshopBrowserFooterItem)?.configure(
-                text: footerState == .loading ? "正在加载更多项目…" : "没有更多内容了",
+                text: footerText(for: footerState),
                 showsProgress: footerState == .loading
             )
             return

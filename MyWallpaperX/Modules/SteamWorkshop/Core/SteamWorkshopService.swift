@@ -18,10 +18,12 @@ final class SteamWorkshopService: ObservableObject {
         static let detailBase = "https://steamcommunity.com/sharedfiles/filedetails/"
         static let publishedFileDetailsAPI = "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/"
         static let authorWorkshopPageSize = 30
-        static let detailHydrationBatchSize = 12
-        static let detailHydrationInterBatchDelayNanoseconds: UInt64 = 700_000_000
-        static let detailPrefetchBatchSize = 8
-        static let detailPrefetchInterBatchDelayNanoseconds: UInt64 = 1_100_000_000
+        static let detailHydrationBatchSize = 4
+        static let detailHydrationInterBatchDelayNanoseconds: UInt64 = 1_300_000_000
+        static let detailPrefetchBatchSize = 2
+        static let detailPrefetchInterBatchDelayNanoseconds: UInt64 = 2_000_000_000
+        static let browserInteractionDeferralInterval: TimeInterval = 1.2
+        static let detailRequestDeferralInterval: TimeInterval = 4.0
         static let bundledSteamBundleName = "SteamCMDRuntime.bundle"
         static let bundledSteamRootName = "Steam"
         static let bundledSteamMetadataName = "runtime-metadata.json"
@@ -125,10 +127,13 @@ final class SteamWorkshopService: ObservableObject {
     private var browserDetailHydrationTask: Task<Void, Never>?
     private var browserNextPage = 1
     private var prefetchedBrowserPageKeys = Set<String>()
+    private var prefetchedBrowserPages: [String: SteamWorkshopBrowseStubPage] = [:]
     private var pendingBrowserDetailStubs: [SteamWorkshopBrowseStub] = []
     private var pendingBrowserDetailStubIDs = Set<String>()
     private var browserDetailRetryCounts: [String: Int] = [:]
     private var prioritizedVisibleBrowserItemIDs: [String] = []
+    private var lastPreviewPrefetchIDs: [String] = []
+    private var backgroundDetailDeferralUntil: Date = .distantPast
     let defaults = UserDefaults.standard
     var loginProcess: Process?
     var loginInputHandle: FileHandle?
@@ -242,6 +247,8 @@ final class SteamWorkshopService: ObservableObject {
             .appendingPathComponent("MyWallpaperX", isDirectory: true)
             .appendingPathComponent("创意工坊", isDirectory: true)
     }
+
+    var exportedVideosRootURL: URL { libraryRootURL }
 
     var cacheDirectoryURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -414,6 +421,8 @@ final class SteamWorkshopService: ObservableObject {
         let normalized = Array(NSOrderedSet(array: ids.filter { !$0.isEmpty })) as? [String] ?? []
         guard normalized != prioritizedVisibleBrowserItemIDs else { return }
         prioritizedVisibleBrowserItemIDs = normalized
+        noteUserBrowsingActivity()
+        prefetchBrowserPreviewImages(aroundVisibleIDs: normalized)
         guard !normalized.isEmpty, pendingBrowserDetailStubs.count > 1 else { return }
 
         let prioritizedSet = Set(normalized)
@@ -458,6 +467,17 @@ final class SteamWorkshopService: ObservableObject {
         let categoryFilter = self.categoryFilter
         let page = browserNextPage
         let expectedNavigationVersion = navigationVersion
+        let prefetchKey = browserPagePrefetchKey(
+            context: browseContext,
+            source: source,
+            query: query,
+            trendingWindow: trendingWindow,
+            themeFilter: themeFilter,
+            ageRatingFilter: ageRatingFilter,
+            resolutionFilter: resolutionFilter,
+            categoryFilter: categoryFilter,
+            page: page
+        )
 
         logBrowserDebug(
             "loadMore start context=\(browseContext.title) page=\(page) query=\(query) currentCount=\(browserItems.count) hasMore=\(hasMoreBrowserItems)"
@@ -466,17 +486,22 @@ final class SteamWorkshopService: ObservableObject {
 
         Task(priority: .userInitiated) { [weak self] in
             do {
-                let pageResult = try await Self.fetchWorkshopStubPage(
-                    context: browseContext,
-                    source: source,
-                    query: query,
-                    trendingWindow: trendingWindow,
-                    themeFilter: themeFilter,
-                    ageRatingFilter: ageRatingFilter,
-                    resolutionFilter: resolutionFilter,
-                    categoryFilter: categoryFilter,
-                    page: page
-                )
+                let pageResult: SteamWorkshopBrowseStubPage
+                if let prefetched = await MainActor.run(body: { self?.prefetchedBrowserPages.removeValue(forKey: prefetchKey) }) {
+                    pageResult = prefetched
+                } else {
+                    pageResult = try await Self.fetchWorkshopStubPage(
+                        context: browseContext,
+                        source: source,
+                        query: query,
+                        trendingWindow: trendingWindow,
+                        themeFilter: themeFilter,
+                        ageRatingFilter: ageRatingFilter,
+                        resolutionFilter: resolutionFilter,
+                        categoryFilter: categoryFilter,
+                        page: page
+                    )
+                }
                 let stubs = pageResult.stubs
                 let seededItems = stubs.map(Self.seededBrowserItem)
                 guard !Task.isCancelled else { return }
@@ -487,6 +512,7 @@ final class SteamWorkshopService: ObservableObject {
                     let fallbackItems = seededItems
                         .filter { !existingIDs.contains($0.id) }
                     self.browserItems.append(contentsOf: fallbackItems)
+                    self.prefetchBrowserPreviewImages(for: fallbackItems, limit: 36)
                     self.browserNextPage = page + 1
                     self.hasMoreBrowserItems = pageResult.hasMore
                     self.isLoadingMoreBrowserItems = false
@@ -514,7 +540,8 @@ final class SteamWorkshopService: ObservableObject {
                         ageRatingFilter: ageRatingFilter,
                         resolutionFilter: resolutionFilter,
                         categoryFilter: categoryFilter,
-                        page: self.browserNextPage
+                        page: self.browserNextPage,
+                        lookaheadDepth: 1
                     )
                 }
             } catch {
@@ -557,6 +584,7 @@ final class SteamWorkshopService: ObservableObject {
     }
 
     func presentItemDetail(_ item: SteamWorkshopBrowserItem) {
+        prioritizeUserRequestedDetail()
         let resolvedItem = browserItems.first(where: { $0.id == item.id }) ?? item
         selectedBrowserItem = resolvedItem
         selectedBrowserItemError = nil
@@ -808,6 +836,7 @@ final class SteamWorkshopService: ObservableObject {
         hasMoreBrowserItems = true
         isLoadingMoreBrowserItems = false
         prefetchedBrowserPageKeys.removeAll()
+        prefetchedBrowserPages.removeAll()
         let browseContext = self.browseContext
         let source = self.source
         let query = browserQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -832,6 +861,7 @@ final class SteamWorkshopService: ObservableObject {
             categoryFilter: categoryFilter
         ) {
             browserItems = cached.items
+            prefetchBrowserPreviewImages(for: cached.items, limit: 48)
             browserState = .loaded
             hasMoreBrowserItems = cached.items.count >= pageSize
             browserNextPage = max(2, (cached.items.count / pageSize) + 1)
@@ -869,6 +899,7 @@ final class SteamWorkshopService: ObservableObject {
                     guard let self else { return }
                     guard self.browseContext == browseContext else { return }
                     self.browserItems = seededItems
+                    self.prefetchBrowserPreviewImages(for: seededItems, limit: 48)
                     self.browserState = .loaded
                     self.hasMoreBrowserItems = pageResult.hasMore
                     self.browserNextPage = 2
@@ -904,7 +935,8 @@ final class SteamWorkshopService: ObservableObject {
                         ageRatingFilter: ageRatingFilter,
                         resolutionFilter: resolutionFilter,
                         categoryFilter: categoryFilter,
-                        page: self.browserNextPage
+                        page: self.browserNextPage,
+                        lookaheadDepth: 1
                     )
                 }
             } catch {
@@ -926,6 +958,57 @@ final class SteamWorkshopService: ObservableObject {
 
     private func logBrowserDebug(_ message: String) {
         _ = message
+    }
+
+    internal func noteUserBrowsingActivity() {
+        let candidate = Date().addingTimeInterval(Constants.browserInteractionDeferralInterval)
+        if candidate > backgroundDetailDeferralUntil {
+            backgroundDetailDeferralUntil = candidate
+        }
+    }
+
+    internal func prioritizeUserRequestedDetail() {
+        backgroundDetailDeferralUntil = Date().addingTimeInterval(Constants.detailRequestDeferralInterval)
+    }
+
+    internal func shouldDeferBackgroundDetailWork() -> Bool {
+        Date() < backgroundDetailDeferralUntil
+            || isRefreshingSelectedBrowserItem
+            || isRefreshingSelectedDownloadDetailItem
+    }
+
+    private func prefetchBrowserPreviewImages(aroundVisibleIDs ids: [String]) {
+        guard !ids.isEmpty, !displayedBrowserItems.isEmpty else { return }
+        let items = displayedBrowserItems
+        let indexByID = Dictionary(uniqueKeysWithValues: items.enumerated().map { ($0.element.id, $0.offset) })
+        let visibleIndexes = ids.compactMap { indexByID[$0] }.sorted()
+        guard let firstVisibleIndex = visibleIndexes.first,
+              let lastVisibleIndex = visibleIndexes.last else { return }
+        let startIndex = max(0, firstVisibleIndex - 24)
+        let endIndex = min(items.count - 1, lastVisibleIndex + 48)
+        guard startIndex <= endIndex else { return }
+        prefetchBrowserPreviewImages(for: Array(items[startIndex...endIndex]), limit: 72)
+    }
+
+    private func prefetchBrowserPreviewImages(for items: [SteamWorkshopBrowserItem], limit: Int) {
+        guard !items.isEmpty, limit > 0 else { return }
+        let candidates = items.compactMap { item -> (String, URL)? in
+            guard let url = item.previewImageURL else { return nil }
+            return (item.id, url)
+        }
+        let ids = Array(candidates.prefix(limit).map(\.0))
+        guard ids != lastPreviewPrefetchIDs else { return }
+        lastPreviewPrefetchIDs = ids
+
+        for (_, url) in candidates.prefix(limit) {
+            let cacheKey = steamWorkshopPreviewCacheKey(for: url)
+            SteamWorkshopPreviewImageCache.shared.prefetch(forKey: cacheKey) {
+                guard let data = SteamWorkshopPreviewRequestCoordinator.shared.prefetchDataSynchronously(from: url) else {
+                    return nil
+                }
+                return NSImage(data: data)
+            }
+        }
     }
 
     func outputIndicatesAuthenticationFailure(_ output: String) -> Bool {
@@ -1123,6 +1206,12 @@ final class SteamWorkshopService: ObservableObject {
         }
 
         while !Task.isCancelled {
+            let shouldDefer = await MainActor.run { self.shouldDeferBackgroundDetailWork() }
+            if shouldDefer {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                continue
+            }
+
             let stubs: [SteamWorkshopBrowseStub] = await MainActor.run {
                 guard self.navigationVersion == navigationVersion, self.browseContext == context else {
                     self.pendingBrowserDetailStubs.removeAll()
@@ -1141,7 +1230,10 @@ final class SteamWorkshopService: ObservableObject {
             guard !stubs.isEmpty else { break }
 
             do {
-                let items = try await Self.fetchWorkshopItems(stubs: stubs)
+                let items = try await Self.fetchWorkshopItems(
+                    stubs: stubs,
+                    requestPriority: .background
+                )
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard self.navigationVersion == navigationVersion, self.browseContext == context else { return }
@@ -1227,7 +1319,10 @@ final class SteamWorkshopService: ObservableObject {
 
         selectedItemDetailTask = Task(priority: .userInitiated) { [weak self] in
             do {
-                let refreshed = try await Self.fetchWorkshopItem(stub: stub)
+                let refreshed = try await Self.fetchWorkshopItem(
+                    stub: stub,
+                    requestPriority: .userInitiated
+                )
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard let self, self.selectedBrowserItem?.id == item.id else { return }
@@ -1270,7 +1365,10 @@ final class SteamWorkshopService: ObservableObject {
 
         selectedItemDetailTask = Task(priority: .userInitiated) { [weak self] in
             do {
-                let refreshed = try await Self.fetchWorkshopItem(stub: stub)
+                let refreshed = try await Self.fetchWorkshopItem(
+                    stub: stub,
+                    requestPriority: .userInitiated
+                )
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard let self, self.selectedDownloadInspectorItem?.id == item.id else { return }
@@ -1299,10 +1397,21 @@ final class SteamWorkshopService: ObservableObject {
         ageRatingFilter: SteamWorkshopAgeRatingFilter,
         resolutionFilter: SteamWorkshopResolutionFilter,
         categoryFilter: SteamWorkshopCategoryFilter,
-        page: Int
+        page: Int,
+        lookaheadDepth: Int = 0
     ) {
         guard page > 1 else { return }
-        let key = "\(context.cacheKeyComponent)|\(source.rawValue)|\(trendingWindow.rawValue)|\(themeFilter.rawValue)|\(ageRatingFilter.rawValue)|\(resolutionFilter.rawValue)|\(categoryFilter.rawValue)|\(query)|\(page)"
+        let key = browserPagePrefetchKey(
+            context: context,
+            source: source,
+            query: query,
+            trendingWindow: trendingWindow,
+            themeFilter: themeFilter,
+            ageRatingFilter: ageRatingFilter,
+            resolutionFilter: resolutionFilter,
+            categoryFilter: categoryFilter,
+            page: page
+        )
         guard prefetchedBrowserPageKeys.insert(key).inserted else { return }
 
         Task(priority: .utility) {
@@ -1319,8 +1428,54 @@ final class SteamWorkshopService: ObservableObject {
             ), !pageResult.stubs.isEmpty else {
                 return
             }
+            await MainActor.run {
+                guard self.browseContext == context,
+                      self.source == source,
+                      self.browserQuery.trimmingCharacters(in: .whitespacesAndNewlines) == query,
+                      self.trendingWindow == trendingWindow,
+                      self.themeFilter == themeFilter,
+                      self.ageRatingFilter == ageRatingFilter,
+                      self.resolutionFilter == resolutionFilter,
+                      self.categoryFilter == categoryFilter else {
+                    return
+                }
+                self.prefetchedBrowserPages[key] = pageResult
+                let seededItems = pageResult.stubs.map(Self.seededBrowserItem)
+                self.prefetchBrowserPreviewImages(for: seededItems, limit: 36)
+            }
+            let shouldDeferDetailPrefetch = await MainActor.run { self.shouldDeferBackgroundDetailWork() }
+            guard !shouldDeferDetailPrefetch else { return }
             try? await Self.prewarmDetailCache(for: pageResult.stubs)
+            guard lookaheadDepth > 0, pageResult.hasMore else { return }
+            await MainActor.run {
+                self.prefetchUpcomingBrowserPageIfNeeded(
+                    context: context,
+                    source: source,
+                    query: query,
+                    trendingWindow: trendingWindow,
+                    themeFilter: themeFilter,
+                    ageRatingFilter: ageRatingFilter,
+                    resolutionFilter: resolutionFilter,
+                    categoryFilter: categoryFilter,
+                    page: page + 1,
+                    lookaheadDepth: lookaheadDepth - 1
+                )
+            }
         }
+    }
+
+    private func browserPagePrefetchKey(
+        context: SteamWorkshopBrowseContext,
+        source: SteamWorkshopSource,
+        query: String,
+        trendingWindow: SteamWorkshopTrendingWindow,
+        themeFilter: SteamWorkshopThemeFilter,
+        ageRatingFilter: SteamWorkshopAgeRatingFilter,
+        resolutionFilter: SteamWorkshopResolutionFilter,
+        categoryFilter: SteamWorkshopCategoryFilter,
+        page: Int
+    ) -> String {
+        "\(context.cacheKeyComponent)|\(source.rawValue)|\(trendingWindow.rawValue)|\(themeFilter.rawValue)|\(ageRatingFilter.rawValue)|\(resolutionFilter.rawValue)|\(categoryFilter.rawValue)|\(query)|\(page)"
     }
 
     private func loadBrowserCache(
@@ -1416,8 +1571,16 @@ final class SteamWorkshopService: ObservableObject {
         detailCacheDirectoryURL().appendingPathComponent("\(id).json")
     }
 
-    static func downloadMetadataFileURL(for directory: URL) -> URL {
+    static func legacyDownloadMetadataFileURL(for directory: URL) -> URL {
         directory.appendingPathComponent(".mywallpaperx-steam-metadata.json")
+    }
+
+    func downloadMetadataIndexDirectoryURL() -> URL {
+        libraryRootURL.appendingPathComponent(".mywallpaperx-steam-metadata", isDirectory: true)
+    }
+
+    func downloadMetadataFileURL(for itemID: String) -> URL {
+        downloadMetadataIndexDirectoryURL().appendingPathComponent("\(itemID).json")
     }
 
     static func loadDetailCache(id: String) -> SteamWorkshopBrowserItem? {
@@ -1440,37 +1603,23 @@ final class SteamWorkshopService: ObservableObject {
 
     func buildInstalledRecord(at directory: URL) -> SteamWorkshopDownloadRecord? {
         let projectURL = directory.appendingPathComponent("project.json")
-        let project = try? JSONDecoder().decode(SteamWorkshopProject.self, from: Data(contentsOf: projectURL))
-        let previewURL = project?.preview.flatMap { preview in
-            let url = directory.appendingPathComponent(preview)
-            return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        let metadataURL = Self.legacyDownloadMetadataFileURL(for: directory)
+        guard FileManager.default.fileExists(atPath: projectURL.path)
+                || FileManager.default.fileExists(atPath: metadataURL.path) else {
+            return nil
         }
-        let videoURL = resolveVideoURL(in: directory, preferredFileName: project?.file)
-        let attributes = try? directory.resourceValues(forKeys: [.contentModificationDateKey])
-        let updatedAt = attributes?.contentModificationDate ?? Date()
-        let title = project?.title?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let description = project?.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let tags = project?.tags ?? []
-        let sizeText = videoURL.flatMap { fileSizeText(for: $0) } ?? "未知大小"
+        let project = try? JSONDecoder().decode(SteamWorkshopProject.self, from: Data(contentsOf: projectURL))
         let identifier = project?.workshopid ?? directory.lastPathComponent
-        let browserItem = loadDownloadMetadataItem(at: directory, id: identifier)
-
-        return SteamWorkshopDownloadRecord(
-            id: identifier,
-            title: title?.isEmpty == false ? title! : "Workshop #\(identifier)",
-            description: description,
-            tags: tags,
-            folderURL: directory,
-            previewURL: previewURL,
-            videoURL: videoURL,
-            updatedAt: updatedAt,
-            sizeText: sizeText,
-            status: .ready,
-            browserItem: browserItem
+        let metadata = loadDownloadMetadataSnapshot(legacyDirectory: directory, id: identifier)
+        return buildInstalledRecord(
+            from: metadata,
+            legacyDirectory: directory,
+            fallbackProject: project,
+            fallbackIdentifier: identifier
         )
     }
 
-    private func resolveVideoURL(in directory: URL, preferredFileName: String?) -> URL? {
+    func resolveVideoURL(in directory: URL, preferredFileName: String?) -> URL? {
         if let preferredFileName {
             let preferredURL = directory.appendingPathComponent(preferredFileName)
             if FileManager.default.fileExists(atPath: preferredURL.path) {
@@ -1509,7 +1658,8 @@ final class SteamWorkshopService: ObservableObject {
                 tags: previous.tags,
                 folderURL: previous.folderURL,
                 previewURL: previous.previewURL,
-                videoURL: previous.videoURL,
+                sourceVideoURL: previous.sourceVideoURL,
+                exportedVideoURL: previous.exportedVideoURL,
                 updatedAt: Date(),
                 sizeText: sizeText ?? previous.sizeText,
                 status: status,
@@ -1527,7 +1677,8 @@ final class SteamWorkshopService: ObservableObject {
                 tags: [],
                 folderURL: folderURL,
                 previewURL: nil,
-                videoURL: nil,
+                sourceVideoURL: nil,
+                exportedVideoURL: nil,
                 updatedAt: Date(),
                 sizeText: sizeText ?? "等待下载",
                 status: status,
@@ -1537,13 +1688,127 @@ final class SteamWorkshopService: ObservableObject {
         )
     }
 
-    private func loadDownloadMetadataItem(at directory: URL, id: String) -> SteamWorkshopBrowserItem? {
-        let metadataURL = Self.downloadMetadataFileURL(for: directory)
+    func buildInstalledRecord(
+        from metadata: SteamWorkshopDownloadMetadataSnapshot?,
+        legacyDirectory: URL?,
+        fallbackProject: SteamWorkshopProject?,
+        fallbackIdentifier: String
+    ) -> SteamWorkshopDownloadRecord? {
+        let identifier = metadata?.item.id ?? fallbackProject?.workshopid ?? fallbackIdentifier
+        let resolvedLegacyDirectory: URL? = {
+            if let legacyFolderURL = metadata?.legacyFolderURL,
+               FileManager.default.fileExists(atPath: legacyFolderURL.path) {
+                return legacyFolderURL
+            }
+            if let legacyDirectory,
+               FileManager.default.fileExists(atPath: legacyDirectory.path) {
+                return legacyDirectory
+            }
+            return nil
+        }()
+
+        let previewURL: URL? = {
+            if let previewRelativePath = metadata?.previewRelativePath,
+               let resolvedLegacyDirectory {
+                let candidate = resolvedLegacyDirectory.appendingPathComponent(previewRelativePath)
+                if FileManager.default.fileExists(atPath: candidate.path) {
+                    return candidate
+                }
+            }
+            if let preview = fallbackProject?.preview,
+               let resolvedLegacyDirectory {
+                let candidate = resolvedLegacyDirectory.appendingPathComponent(preview)
+                if FileManager.default.fileExists(atPath: candidate.path) {
+                    return candidate
+                }
+            }
+            return nil
+        }()
+
+        let sourceVideoURL: URL? = {
+            if let sourceVideoRelativePath = metadata?.sourceVideoRelativePath,
+               let resolvedLegacyDirectory {
+                let candidate = resolvedLegacyDirectory.appendingPathComponent(sourceVideoRelativePath)
+                if FileManager.default.fileExists(atPath: candidate.path) {
+                    return candidate
+                }
+            }
+            if let resolvedLegacyDirectory {
+                return resolveVideoURL(in: resolvedLegacyDirectory, preferredFileName: fallbackProject?.file)
+            }
+            return nil
+        }()
+
+        let exportedVideoURL = metadata?.exportedVideoURL.flatMap { url in
+            FileManager.default.fileExists(atPath: url.path) ? url : nil
+        }
+        let effectiveVideoURL = exportedVideoURL ?? sourceVideoURL
+        guard metadata != nil || effectiveVideoURL != nil else {
+            return nil
+        }
+
+        let updatedAt: Date = {
+            if let effectiveVideoURL,
+               let values = try? effectiveVideoURL.resourceValues(forKeys: [.contentModificationDateKey]),
+               let date = values.contentModificationDate {
+                return date
+            }
+            if let resolvedLegacyDirectory,
+               let values = try? resolvedLegacyDirectory.resourceValues(forKeys: [.contentModificationDateKey]),
+               let date = values.contentModificationDate {
+                return date
+            }
+            return Date()
+        }()
+
+        let title = fallbackProject?.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let description = fallbackProject?.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let tags = fallbackProject?.tags ?? []
+        let sizeText = effectiveVideoURL.flatMap { fileSizeText(for: $0) } ?? "未知大小"
+        let browserItem = metadata?.item ?? browserItemForDownload(id: identifier)
+
+        let browserTitle = browserItem?.title.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        return SteamWorkshopDownloadRecord(
+            id: identifier,
+            title: title?.isEmpty == false ? title! : (browserTitle.isEmpty ? "Workshop #\(identifier)" : browserTitle),
+            description: description.isEmpty ? (browserItem?.descriptionText ?? "") : description,
+            tags: tags.isEmpty ? (browserItem?.tags ?? []) : tags,
+            folderURL: resolvedLegacyDirectory ?? effectiveVideoURL?.deletingLastPathComponent() ?? libraryRootURL,
+            previewURL: previewURL,
+            sourceVideoURL: sourceVideoURL,
+            exportedVideoURL: exportedVideoURL,
+            updatedAt: updatedAt,
+            sizeText: sizeText,
+            status: .ready,
+            browserItem: browserItem
+        )
+    }
+
+    private func loadDownloadMetadataSnapshot(legacyDirectory: URL?, id: String) -> SteamWorkshopDownloadMetadataSnapshot? {
+        let metadataURL = downloadMetadataFileURL(for: id)
         if let data = try? Data(contentsOf: metadataURL),
            let snapshot = try? JSONDecoder().decode(SteamWorkshopDownloadMetadataSnapshot.self, from: data) {
-            return snapshot.item
+            return snapshot
         }
-        return browserItemForDownload(id: id)
+
+        if let legacyDirectory {
+            let metadataURL = Self.legacyDownloadMetadataFileURL(for: legacyDirectory)
+            if let data = try? Data(contentsOf: metadataURL),
+               let snapshot = try? JSONDecoder().decode(SteamWorkshopDownloadMetadataSnapshot.self, from: data) {
+                return snapshot
+            }
+        }
+
+        guard let item = browserItemForDownload(id: id) else { return nil }
+        return SteamWorkshopDownloadMetadataSnapshot(
+            fetchedAt: .distantPast,
+            item: item,
+            sourceVideoRelativePath: nil,
+            previewRelativePath: nil,
+            exportedVideoURL: nil,
+            legacyFolderURL: legacyDirectory
+        )
     }
 
     func browserItemForDownload(id: String) -> SteamWorkshopBrowserItem? {

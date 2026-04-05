@@ -57,11 +57,17 @@ final class SystemMonitor {
 
     /// 刷新所有指标，写入 `stats`。在 main thread 调用安全（I/O 开销极小）。
     func refresh() {
+        refreshRuntimeStats()
+        readSMCTemperatures(into: &stats)
+    }
+
+    /// 刷新状态栏运行时指标。
+    /// 只覆盖 CPU / 内存 / 网络 / GPU，避免高频刷新时反复访问 SMC。
+    func refreshRuntimeStats() {
         stats.cpuUsage  = readCPUUsage()
         readMemory(into: &stats)
         readNetwork(into: &stats)
         stats.gpuUsage  = readGPUUsage()
-        readSMCTemperatures(into: &stats)
     }
 
     // MARK: - CPU 使用率

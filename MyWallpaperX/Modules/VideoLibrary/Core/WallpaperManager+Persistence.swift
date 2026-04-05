@@ -75,6 +75,7 @@ extension WallpaperManager {
         // 没有旧数据时 wallpapers 保持空数组，loadSampleData 会注入内置示例。
         if let legacyWallpapers: [VideoWallpaper] = loadCodableValue(forKey: wallpapersKey) {
             wallpapers = deduplicatedWallpapersByPath(legacyWallpapers)
+            scheduleMissingIndexedSourceFilesScan()
         }
 
         // 后台异步加载 SQLite 索引，完成后回主线程替换。
@@ -86,7 +87,8 @@ extension WallpaperManager {
             case .success(let sqliteWallpapers) where !sqliteWallpapers.isEmpty:
                 let deduped = self.deduplicatedWallpapersByPath(sqliteWallpapers)
                 self.wallpapers = deduped
- self.scanForMissingMetadata()
+                self.scanForMissingMetadata()
+                self.scheduleMissingIndexedSourceFilesScan()
                 // SQLite 加载成功后清理旧 UserDefaults 冗余数据。
                 UserDefaults.standard.removeObject(forKey: self.wallpapersKey)
                 // 后台补填 fileSize（供「按大小排序」使用），避免主线程磁盘 I/O。
@@ -121,6 +123,33 @@ extension WallpaperManager {
                 break
             }
         }
+    }
+
+    func scheduleMissingIndexedSourceFilesScan() {
+        missingIndexedSourceScanWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            let snapshot = self.wallpapers
+            guard !snapshot.isEmpty else { return }
+
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self else { return }
+                let missingWallpapers = snapshot.filter { !self.normalizedSourcePathExists($0.path) }
+                guard !missingWallpapers.isEmpty else { return }
+
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.purgeMissingIndexedWallpapersFromLibrary(
+                        missingWallpapers,
+                        notifyUser: true
+                    )
+                }
+            }
+        }
+
+        missingIndexedSourceScanWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: workItem)
     }
 
     func deduplicatedWallpapersByPath(_ source: [VideoWallpaper]) -> [VideoWallpaper] {
@@ -393,6 +422,8 @@ extension WallpaperManager {
         pendingManualNavigationWorkItem = nil
         missingIndexedAlertWorkItem?.cancel()
         missingIndexedAlertWorkItem = nil
+        missingIndexedSourceScanWorkItem?.cancel()
+        missingIndexedSourceScanWorkItem = nil
 
         clearSelectionState()
         selectedCategory = .myWallpapers

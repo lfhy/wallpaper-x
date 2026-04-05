@@ -140,6 +140,7 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
     private let textContainer = NSView()
     private let buttonsContainer = NSView()
     private let previewImageView = NSImageView()
+    private let previewPlaceholderView = SteamWorkshopPreviewPlaceholderView()
     private let titleLabel = SteamWorkshopMarqueeTextView()
     private let metaLabel = SteamWorkshopDownloadsCardTextLineView()
     private let secondaryMetaLabel = SteamWorkshopDownloadsCardTextLineView()
@@ -147,6 +148,7 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
     private let revealButton = SteamWorkshopDownloadsCardButton(title: "显示文件", target: nil, action: nil)
 
     private var imageTask: Task<Void, Never>?
+    private var previewRetryTask: Task<Void, Never>?
     private var currentPreviewURL: URL?
     private var onSetAsWallpaper: (() -> Void)?
     private var onReveal: (() -> Void)?
@@ -215,8 +217,10 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
         super.prepareForReuse()
         imageTask?.cancel()
         imageTask = nil
+        previewRetryTask?.cancel()
         currentPreviewURL = nil
         previewImageView.image = nil
+        previewPlaceholderView.setState(.hidden)
         currentTitleText = ""
         titleLabel.text = ""
         metaLabel.text = ""
@@ -423,6 +427,7 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
         previewImageView.imageScaling = .scaleProportionallyUpOrDown
         previewImageView.imageAlignment = .alignCenter
         previewContainer.addSubview(previewImageView)
+        previewContainer.addSubview(previewPlaceholderView)
 
         titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         titleLabel.textColor = .labelColor
@@ -556,34 +561,102 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
     }
 
     private func loadPreview(from url: URL?) {
-        guard currentPreviewURL != url else { return }
+        guard currentPreviewURL != url || previewImageView.image == nil else { return }
         currentPreviewURL = url
         previewImageView.animates = true
         imageTask?.cancel()
+        previewRetryTask?.cancel()
 
         guard let url else {
             previewImageView.image = nil
+            previewPlaceholderView.setState(.unavailable)
             updatePreviewImageFrame()
             return
         }
 
         let cacheKey = steamWorkshopPreviewCacheKey(for: url)
-        if let cached = SteamWorkshopPreviewImageCache.shared.cachedImage(forKey: cacheKey) {
+        if !SteamWorkshopPreviewRequestCoordinator.shared.shouldBypassCachedImage(forKey: cacheKey),
+           let cached = SteamWorkshopPreviewImageCache.shared.cachedOrDiskImage(forKey: cacheKey),
+           !steamWorkshopPreviewImageLooksSuspicious(cached) {
             previewImageView.image = cached
+            previewPlaceholderView.setState(.hidden)
+            SteamWorkshopPreviewRequestCoordinator.shared.clearCachedImageSuspicion(forKey: cacheKey)
+            updatePreviewImageFrame()
+            return
+        }
+        if let cached = SteamWorkshopPreviewImageCache.shared.cachedOrDiskImage(forKey: cacheKey),
+           steamWorkshopPreviewImageLooksSuspicious(cached) {
+            SteamWorkshopPreviewRequestCoordinator.shared.markCachedImageSuspicious(forKey: cacheKey)
+        }
+
+        previewImageView.image = nil
+        previewPlaceholderView.setState(.loading)
+        updatePreviewImageFrame()
+        loadPreviewImage(url: url, cacheKey: cacheKey)
+    }
+
+    private func loadPreviewImage(url: URL, cacheKey: String) {
+        if SteamWorkshopPreviewRequestCoordinator.shared.shouldBypassCachedImage(forKey: cacheKey) {
+            imageTask = Task { [weak self] in
+                guard let self else { return }
+                let data = await SteamWorkshopPreviewRequestCoordinator.shared.loadData(
+                    from: url,
+                    priority: .visible,
+                    ignoringBackoff: true
+                )
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard self.currentPreviewURL == url else { return }
+                    self.applyResolvedPreviewImage(data.flatMap(NSImage.init(data:)), url: url, cacheKey: cacheKey)
+                }
+            }
+            return
+        }
+
+        SteamWorkshopPreviewImageCache.shared.loadImageData(forKey: cacheKey, loader: {
+            SteamWorkshopPreviewRequestCoordinator.shared.loadDataSynchronously(
+                from: url,
+                priority: .visible
+            )
+        }) { [weak self] image in
+            guard let self else { return }
+            guard self.currentPreviewURL == url else { return }
+            self.applyResolvedPreviewImage(image, url: url, cacheKey: cacheKey)
+        }
+    }
+
+    private func applyResolvedPreviewImage(_ image: NSImage?, url: URL, cacheKey: String) {
+        if let image, !steamWorkshopPreviewImageLooksSuspicious(image) {
+            previewImageView.animates = true
+            previewImageView.image = image
+            previewPlaceholderView.setState(.hidden)
+            SteamWorkshopPreviewRequestCoordinator.shared.clearCachedImageSuspicion(forKey: cacheKey)
             updatePreviewImageFrame()
             return
         }
 
         previewImageView.image = nil
+        SteamWorkshopPreviewRequestCoordinator.shared.markCachedImageSuspicious(forKey: cacheKey)
+        schedulePreviewRetry(url: url, cacheKey: cacheKey)
         updatePreviewImageFrame()
-        SteamWorkshopPreviewImageCache.shared.loadImageData(forKey: cacheKey, loader: {
-            try? Data(contentsOf: url)
-        }) { [weak self] image in
-            guard let self else { return }
-            guard self.currentPreviewURL == url else { return }
-            self.previewImageView.animates = true
-            self.previewImageView.image = image
-            self.updatePreviewImageFrame()
+    }
+
+    private func schedulePreviewRetry(url: URL, cacheKey: String) {
+        previewRetryTask?.cancel()
+        let retryDelay = SteamWorkshopPreviewRequestCoordinator.shared.nextRetryDelay(for: url, priority: .visible) ?? 2.5
+        guard retryDelay < 20 else {
+            previewPlaceholderView.setState(.unavailable)
+            return
+        }
+        previewPlaceholderView.setState(.retrying)
+        previewRetryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(0.5, retryDelay + 0.25) * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.currentPreviewURL == url else { return }
+                self.previewPlaceholderView.setState(.loading)
+                self.loadPreviewImage(url: url, cacheKey: cacheKey)
+            }
         }
     }
 
@@ -591,8 +664,10 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
         let containerBounds = previewContainer.bounds
         guard containerBounds.width > 0, containerBounds.height > 0 else {
             previewImageView.frame = .zero
+            previewPlaceholderView.frame = .zero
             return
         }
+        previewPlaceholderView.frame = containerBounds
         guard let image = previewImageView.image, image.size.width > 0, image.size.height > 0 else {
             previewImageView.frame = containerBounds
             return

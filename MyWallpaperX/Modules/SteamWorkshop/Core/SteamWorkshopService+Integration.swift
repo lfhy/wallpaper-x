@@ -24,7 +24,7 @@ extension SteamWorkshopService {
     }
 
     func revealItem(_ record: SteamWorkshopDownloadRecord) {
-        NSWorkspace.shared.activateFileViewerSelecting([record.folderURL])
+        NSWorkspace.shared.activateFileViewerSelecting([record.videoURL ?? record.folderURL])
     }
 
     func setAsWallpaper(_ record: SteamWorkshopDownloadRecord) {

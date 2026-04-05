@@ -49,6 +49,10 @@ struct SteamWorkshopProject: Decodable {
 struct SteamWorkshopDownloadMetadataSnapshot: Codable {
     let fetchedAt: Date
     let item: SteamWorkshopBrowserItem
+    let sourceVideoRelativePath: String?
+    let previewRelativePath: String?
+    let exportedVideoURL: URL?
+    let legacyFolderURL: URL?
 }
 
 struct SteamWorkshopDetailParseResult {

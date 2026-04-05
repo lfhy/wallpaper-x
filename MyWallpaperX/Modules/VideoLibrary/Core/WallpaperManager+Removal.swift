@@ -149,6 +149,33 @@ extension WallpaperManager {
         return failures
     }
 
+    func purgeMissingIndexedWallpapersFromLibrary(
+        _ wallpapersToPurge: [VideoWallpaper],
+        notifyUser: Bool
+    ) {
+        let uniqueWallpapers = wallpapersToPurge.reduce(into: [String: VideoWallpaper]()) { result, wallpaper in
+            result[normalizedPath(wallpaper.path)] = wallpaper
+        }
+        let matchedWallpapers = uniqueWallpapers.values.filter { wallpaper in
+            wallpapers.contains(where: { $0.id == wallpaper.id })
+        }
+        guard !matchedWallpapers.isEmpty else { return }
+
+        let removedIDs = Set(matchedWallpapers.map(\.id))
+        let removalPaths = Set(matchedWallpapers.map { normalizedPath($0.path) })
+        let titles = matchedWallpapers.map(\.displayTitle).sorted()
+
+        for wallpaper in matchedWallpapers {
+            removeDerivedAssets(for: removalRecord(for: wallpaper))
+        }
+
+        applyLibraryRemoval(paths: removalPaths, removedIDs: removedIDs)
+
+        if notifyUser {
+            presentAutoRemovedMissingIndexedFilesAlert(titles: titles)
+        }
+    }
+
     func applyLibraryRemoval(paths: Set<String>, removedIDs: Set<String>) {
         // 主线程只做模型收口和当前播放切换，不在这里碰后台文件系统。
         guard !paths.isEmpty else { return }

@@ -118,6 +118,7 @@ class WallpaperManager: ObservableObject {
     var missingIndexedFilePaths = Set<String>()
     var pendingMissingIndexedTitles = Set<String>()
     var missingIndexedAlertWorkItem: DispatchWorkItem?
+    var missingIndexedSourceScanWorkItem: DispatchWorkItem?
     var wallpapersAutoSaveWorkItem: DispatchWorkItem?
     var recentWallpapersAutoSaveWorkItem: DispatchWorkItem?
     var settingsAutoSaveWorkItem: DispatchWorkItem?

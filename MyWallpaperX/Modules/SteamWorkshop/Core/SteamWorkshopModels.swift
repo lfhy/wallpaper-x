@@ -93,11 +93,24 @@ struct SteamWorkshopDownloadRecord: Identifiable, Equatable {
     let tags: [String]
     let folderURL: URL
     let previewURL: URL?
-    let videoURL: URL?
+    let sourceVideoURL: URL?
+    let exportedVideoURL: URL?
     let updatedAt: Date
     let sizeText: String
     let status: Status
     let browserItem: SteamWorkshopBrowserItem?
+
+    var videoURL: URL? {
+        if let exportedVideoURL,
+           FileManager.default.fileExists(atPath: exportedVideoURL.path) {
+            return exportedVideoURL
+        }
+        if let sourceVideoURL,
+           FileManager.default.fileExists(atPath: sourceVideoURL.path) {
+            return sourceVideoURL
+        }
+        return nil
+    }
 
     var statusText: String {
         switch status {

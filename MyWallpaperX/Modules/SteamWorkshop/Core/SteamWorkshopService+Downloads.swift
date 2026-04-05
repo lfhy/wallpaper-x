@@ -146,11 +146,17 @@ extension SteamWorkshopService {
     func reloadInstalledItems() {
         let fileManager = FileManager.default
         let root = libraryRootURL
-        guard let directories = try? fileManager.contentsOfDirectory(
+        let directories = (try? fileManager.contentsOfDirectory(
             at: root,
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]
-        ) else {
+        )) ?? []
+        let metadataFiles = (try? fileManager.contentsOfDirectory(
+            at: downloadMetadataIndexDirectoryURL(),
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        if directories.isEmpty && metadataFiles.isEmpty {
             downloads = downloads.filter {
                 if case .queued = $0.status { return true }
                 if case .downloading = $0.status { return true }
@@ -161,9 +167,25 @@ extension SteamWorkshopService {
         }
 
         var records: [SteamWorkshopDownloadRecord] = []
-        for directory in directories where directory.hasDirectoryPath {
-            guard let record = buildInstalledRecord(at: directory) else { continue }
+        var seenIDs = Set<String>()
+        for metadataFile in metadataFiles where metadataFile.pathExtension == "json" {
+            let itemID = metadataFile.deletingPathExtension().lastPathComponent
+            guard let data = try? Data(contentsOf: metadataFile),
+                  let snapshot = try? JSONDecoder().decode(SteamWorkshopDownloadMetadataSnapshot.self, from: data),
+                  let record = buildInstalledRecord(
+                    from: snapshot,
+                    legacyDirectory: snapshot.legacyFolderURL,
+                    fallbackProject: nil,
+                    fallbackIdentifier: itemID
+                  ) else { continue }
             records.append(record)
+            seenIDs.insert(record.id)
+        }
+        for directory in directories where directory.hasDirectoryPath {
+            guard let record = buildInstalledRecord(at: directory),
+                  seenIDs.contains(record.id) == false else { continue }
+            records.append(record)
+            seenIDs.insert(record.id)
         }
 
         let transient = downloads.filter { record in
@@ -317,6 +339,7 @@ extension SteamWorkshopService {
     }
 
     private func presentDownloadInspector(_ item: SteamWorkshopBrowserItem) {
+        prioritizeUserRequestedDetail()
         selectedDownloadInspectorItem = item
         selectedDownloadDetailItem = item
         selectedDownloadDetailError = nil
@@ -387,9 +410,21 @@ extension SteamWorkshopService {
         }
 
         let fileManager = FileManager.default
-        if fileManager.fileExists(atPath: record.folderURL.path) {
+        if let exportedVideoURL = record.exportedVideoURL,
+           fileManager.fileExists(atPath: exportedVideoURL.path) {
+            try? fileManager.removeItem(at: exportedVideoURL)
+        }
+        if let snapshot = loadExistingDownloadMetadataSnapshot(at: record.folderURL),
+           let legacyFolderURL = snapshot.legacyFolderURL,
+           fileManager.fileExists(atPath: legacyFolderURL.path),
+           legacyFolderURL != libraryRootURL {
+            try? fileManager.removeItem(at: legacyFolderURL)
+        } else if fileManager.fileExists(atPath: record.folderURL.path),
+                  record.folderURL != libraryRootURL,
+                  record.folderURL.lastPathComponent == itemID {
             try? fileManager.removeItem(at: record.folderURL)
         }
+        try? fileManager.removeItem(at: downloadMetadataFileURL(for: itemID))
 
         downloads.removeAll { $0.id == itemID }
         queuedDownloadRequests.removeAll { $0.id == itemID }
@@ -712,9 +747,146 @@ extension SteamWorkshopService {
 
     private func persistDownloadMetadataIfPossible(for id: String, targetURL: URL) {
         guard let item = browserItemForDownload(id: id) else { return }
-        let snapshot = SteamWorkshopDownloadMetadataSnapshot(fetchedAt: Date(), item: item)
+        let existingSnapshot = loadExistingDownloadMetadataSnapshot(at: targetURL)
+        try? FileManager.default.createDirectory(at: downloadMetadataIndexDirectoryURL(), withIntermediateDirectories: true)
+        let sourceVideoURL = resolveVideoURL(in: targetURL, preferredFileName: nil)
+        let previewRelativePath = resolvePreviewRelativePath(in: targetURL)
+        let exportedVideoURL = sourceVideoURL.flatMap {
+            exportPrimaryVideoIfPossible(
+                for: id,
+                title: item.title,
+                sourceVideoURL: $0,
+                previousExportedVideoURL: existingSnapshot?.exportedVideoURL
+            )
+        }
+        let sourceVideoRelativePath = sourceVideoURL.map { url in
+            let basePath = targetURL.standardizedFileURL.path
+            let filePath = url.standardizedFileURL.path
+            if filePath.hasPrefix(basePath + "/") {
+                return String(filePath.dropFirst(basePath.count + 1))
+            }
+            return url.lastPathComponent
+        }
+        let snapshot = SteamWorkshopDownloadMetadataSnapshot(
+            fetchedAt: Date(),
+            item: item,
+            sourceVideoRelativePath: sourceVideoRelativePath,
+            previewRelativePath: previewRelativePath,
+            exportedVideoURL: exportedVideoURL,
+            legacyFolderURL: targetURL
+        )
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        try? data.write(to: Self.downloadMetadataFileURL(for: targetURL), options: [.atomic])
+        try? data.write(to: downloadMetadataFileURL(for: id), options: Data.WritingOptions.atomic)
+    }
+
+    private func loadExistingDownloadMetadataSnapshot(at directory: URL) -> SteamWorkshopDownloadMetadataSnapshot? {
+        let identifier = directory.lastPathComponent
+        let indexedURL = downloadMetadataFileURL(for: identifier)
+        if let data = try? Data(contentsOf: indexedURL),
+           let snapshot = try? JSONDecoder().decode(SteamWorkshopDownloadMetadataSnapshot.self, from: data) {
+            return snapshot
+        }
+        let legacyURL = Self.legacyDownloadMetadataFileURL(for: directory)
+        guard let data = try? Data(contentsOf: legacyURL),
+              let snapshot = try? JSONDecoder().decode(SteamWorkshopDownloadMetadataSnapshot.self, from: data) else {
+            return nil
+        }
+        return snapshot
+    }
+
+    private func resolvePreviewRelativePath(in directory: URL) -> String? {
+        let projectURL = directory.appendingPathComponent("project.json")
+        let project = try? JSONDecoder().decode(SteamWorkshopProject.self, from: Data(contentsOf: projectURL))
+        if let preview = project?.preview {
+            let candidate = directory.appendingPathComponent(preview)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return preview
+            }
+        }
+        let candidates = ["preview.jpg", "preview.jpeg", "preview.png", "preview.gif"]
+        for candidateName in candidates {
+            let candidate = directory.appendingPathComponent(candidateName)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return candidateName
+            }
+        }
+        return nil
+    }
+
+    private func exportPrimaryVideoIfPossible(
+        for id: String,
+        title: String,
+        sourceVideoURL: URL,
+        previousExportedVideoURL: URL?
+    ) -> URL? {
+        let fileManager = FileManager.default
+        try? fileManager.createDirectory(at: exportedVideosRootURL, withIntermediateDirectories: true)
+
+        let sanitizedBaseName = sanitizedExportFileName(from: title).isEmpty
+            ? "Workshop-\(id)"
+            : sanitizedExportFileName(from: title)
+        let destinationURL = uniqueExportURL(
+            baseName: sanitizedBaseName,
+            pathExtension: sourceVideoURL.pathExtension,
+            preferredExistingURL: previousExportedVideoURL
+        )
+
+        let shouldReplaceExisting = previousExportedVideoURL == destinationURL
+            || destinationURL == previousExportedVideoURL
+        if let previousExportedVideoURL,
+           previousExportedVideoURL != destinationURL,
+           fileManager.fileExists(atPath: previousExportedVideoURL.path) {
+            try? fileManager.removeItem(at: previousExportedVideoURL)
+        }
+
+        if fileManager.fileExists(atPath: destinationURL.path), shouldReplaceExisting {
+            try? fileManager.removeItem(at: destinationURL)
+        }
+
+        if !fileManager.fileExists(atPath: destinationURL.path) {
+            do {
+                try fileManager.copyItem(at: sourceVideoURL, to: destinationURL)
+            } catch {
+                appendSteamAuthDebugLog("DOWNLOAD EXPORT FAILED: id=\(id), error=\(sanitizeSteamOutput(error.localizedDescription))")
+                return previousExportedVideoURL.flatMap { fileManager.fileExists(atPath: $0.path) ? $0 : nil }
+            }
+        }
+        return destinationURL
+    }
+
+    private func uniqueExportURL(
+        baseName: String,
+        pathExtension: String,
+        preferredExistingURL: URL?
+    ) -> URL {
+        let fileManager = FileManager.default
+        if let preferredExistingURL,
+           preferredExistingURL.deletingLastPathComponent() == exportedVideosRootURL {
+            return preferredExistingURL
+        }
+
+        let normalizedExtension = pathExtension.isEmpty ? "mp4" : pathExtension
+        var index = 0
+        while true {
+            let candidateName = index == 0
+                ? "\(baseName).\(normalizedExtension)"
+                : "\(baseName) (\(index)).\(normalizedExtension)"
+            let candidateURL = exportedVideosRootURL.appendingPathComponent(candidateName)
+            if !fileManager.fileExists(atPath: candidateURL.path) {
+                return candidateURL
+            }
+            index += 1
+        }
+    }
+
+    private func sanitizedExportFileName(from title: String) -> String {
+        let invalidCharacters = CharacterSet(charactersIn: "/\\:?%*|\"<>")
+        let collapsed = title
+            .components(separatedBy: invalidCharacters)
+            .joined(separator: " ")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(collapsed.prefix(120))
     }
 
     private func stagedDownloadDirectoryContainsContent(id: String) -> Bool {
