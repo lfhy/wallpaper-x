@@ -9,6 +9,9 @@ extension WallpaperManager {
     func clearAllCaches() {
         // 清缓存必须同时清理内存态、磁盘态和索引里的派生路径，单清一层会留下孤儿引用。
         clearPreviewCacheArtifacts()
+        thumbnailGenerationFailureLock.lock()
+        thumbnailGenerationFailures.removeAll()
+        thumbnailGenerationFailureLock.unlock()
         // 视频库和图片库共用 ThumbnailCache 磁盘目录，一起清掉
         ThumbnailCache.clearDiskCache()
 
@@ -101,8 +104,14 @@ extension WallpaperManager {
             return
         }
 
-        generateThumbnail(for: sourceURL) { [weak self] imagePath in
-            guard let self, imagePath != nil else { return }
+        guard shouldRetryThumbnailGeneration(for: normalized) || isThumbnailGenerationInFlight(for: normalized) else {
+            notifyThumbnailReady(forPath: sourceURL.path)
+            scheduleStaticFrameGeneration(for: sourceURL)
+            return
+        }
+
+        generateThumbnail(for: sourceURL) { [weak self] _ in
+            guard let self else { return }
             self.notifyThumbnailReady(forPath: sourceURL.path)
         }
         scheduleStaticFrameGeneration(for: sourceURL)

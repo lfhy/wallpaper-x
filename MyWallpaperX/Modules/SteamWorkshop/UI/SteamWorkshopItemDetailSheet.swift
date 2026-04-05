@@ -631,14 +631,16 @@ private struct SteamWorkshopPreviewSurface: View {
                 SteamWorkshopCachedPreviewImage(
                     itemID: itemID,
                     url: previewImageURL,
-                    fallbackVideoURL: fallbackVideoURL
+                    fallbackVideoURL: fallbackVideoURL,
+                    refreshToken: SteamWorkshopService.shared.previewReloadToken
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             } else if let fallbackVideoURL {
                 SteamWorkshopCachedPreviewImage(
                     itemID: itemID,
                     url: fallbackVideoURL,
-                    fallbackVideoURL: fallbackVideoURL
+                    fallbackVideoURL: fallbackVideoURL,
+                    refreshToken: SteamWorkshopService.shared.previewReloadToken
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
@@ -658,14 +660,16 @@ private struct SteamWorkshopCachedPreviewImage: NSViewRepresentable {
     let itemID: String
     let url: URL
     let fallbackVideoURL: URL?
+    let refreshToken: Int
 
     func makeNSView(context: Context) -> SteamWorkshopPreviewImageContainerView {
         SteamWorkshopPreviewImageContainerView()
     }
 
     func updateNSView(_ nsView: SteamWorkshopPreviewImageContainerView, context: Context) {
-        guard context.coordinator.currentURL != url else { return }
+        guard context.coordinator.currentURL != url || context.coordinator.refreshToken != refreshToken else { return }
         context.coordinator.currentURL = url
+        context.coordinator.refreshToken = refreshToken
 
         if url.isFileURL {
             if FileManager.default.fileExists(atPath: url.path),
@@ -679,12 +683,16 @@ private struct SteamWorkshopCachedPreviewImage: NSViewRepresentable {
                 nsView.setLoadingState(.loading)
                 SteamWorkshopDownloadThumbnailPipeline.shared.generateThumbnail(for: fallbackVideoURL) { image in
                     guard context.coordinator.currentURL == url else { return }
-                    nsView.setImage(image)
+                    if let image {
+                        nsView.setImage(image)
+                    } else {
+                        nsView.setLoadingState(.unavailable)
+                    }
                 }
                 return
             }
 
-            nsView.setImage(nil)
+            nsView.setLoadingState(.unavailable)
             return
         }
 
@@ -702,7 +710,12 @@ private struct SteamWorkshopCachedPreviewImage: NSViewRepresentable {
             )
         }) { image in
             guard context.coordinator.currentURL == url else { return }
-            nsView.setImage(image)
+            if let image, !steamWorkshopPreviewImageLooksSuspicious(image) {
+                nsView.setImage(image)
+            } else {
+                SteamWorkshopPreviewRequestCoordinator.shared.markCachedImageSuspicious(forKey: cacheKey)
+                nsView.setLoadingState(.unavailable)
+            }
         }
     }
 
@@ -712,6 +725,7 @@ private struct SteamWorkshopCachedPreviewImage: NSViewRepresentable {
 
     final class Coordinator {
         var currentURL: URL?
+        var refreshToken: Int = -1
     }
 }
 
@@ -746,7 +760,7 @@ private final class SteamWorkshopPreviewImageContainerView: NSView {
 
     func setImage(_ image: NSImage?) {
         imageView.image = image
-        placeholderView.setState(image == nil ? .retrying : .hidden)
+        placeholderView.setState(image == nil ? .unavailable : .hidden)
         updateImageFrame()
     }
 

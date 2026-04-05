@@ -40,6 +40,9 @@ func steamWorkshopPreviewImageLooksSuspicious(_ image: NSImage) -> Bool {
     if image.size.width <= 4 || image.size.height <= 4 {
         return true
     }
+    if steamWorkshopPreviewImageIsAnimated(image) {
+        return false
+    }
     guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
         return false
     }
@@ -77,6 +80,14 @@ func steamWorkshopPreviewImageLooksSuspicious(_ image: NSImage) -> Bool {
     let maxLuma = luminances.max() ?? 0
     let meanLuma = luminances.reduce(0, +) / CGFloat(luminances.count)
     return meanLuma < 0.03 && (maxLuma - minLuma) < 0.025
+}
+
+private func steamWorkshopPreviewImageIsAnimated(_ image: NSImage) -> Bool {
+    image.representations.contains { representation in
+        guard let bitmap = representation as? NSBitmapImageRep else { return false }
+        let frameCount = bitmap.value(forProperty: .frameCount) as? Int ?? 1
+        return frameCount > 1
+    }
 }
 
 public struct SteamWorkshopEntryView: View {

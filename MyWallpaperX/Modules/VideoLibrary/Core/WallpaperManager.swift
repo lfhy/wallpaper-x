@@ -119,6 +119,8 @@ class WallpaperManager: ObservableObject {
     var pendingMissingIndexedTitles = Set<String>()
     var missingIndexedAlertWorkItem: DispatchWorkItem?
     var missingIndexedSourceScanWorkItem: DispatchWorkItem?
+    var thumbnailGenerationFailures: [String: Date] = [:]
+    let thumbnailGenerationFailureLock = NSLock()
     var wallpapersAutoSaveWorkItem: DispatchWorkItem?
     var recentWallpapersAutoSaveWorkItem: DispatchWorkItem?
     var settingsAutoSaveWorkItem: DispatchWorkItem?
@@ -260,6 +262,7 @@ class WallpaperManager: ObservableObject {
 
     var pendingCardInteraction = false
     var pendingCardInteractionResetWorkItem: DispatchWorkItem?
+    let thumbnailFailureRetryCooldown: TimeInterval = 12
 
     func normalizedPath(_ path: String) -> String {
         // 路径比较统一先做标准化，避免符号链接、相对路径和大小写差异造成重复项。

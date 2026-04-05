@@ -147,13 +147,20 @@ final class AppKitWallpaperItem: NSCollectionViewItem {
             } else {
                 self.thumbnailImageView.image = nil
                 self.placeholderLabel.isHidden = false
-                if wallpaperManager.normalizedSourcePathExists(wallpaper.path) {
+                let normalizedPath = wallpaperManager.normalizedPath(wallpaper.path)
+                if !wallpaperManager.normalizedSourcePathExists(wallpaper.path) {
+                    self.placeholderLabel.stringValue = "请检查文件路径"
+                    self.placeholderLabel.toolTip = wallpaper.path
+                } else if wallpaperManager.isThumbnailGenerationInFlight(for: normalizedPath) {
+                    self.placeholderLabel.stringValue = "生成中..."
+                    self.placeholderLabel.toolTip = nil
+                } else if wallpaperManager.hasRecentThumbnailGenerationFailure(for: normalizedPath) {
+                    self.placeholderLabel.stringValue = "缩略图生成失败"
+                    self.placeholderLabel.toolTip = "稍后将自动重试"
+                } else {
                     self.placeholderLabel.stringValue = "生成中..."
                     self.placeholderLabel.toolTip = nil
                     wallpaperManager.ensurePreviewAssetsForWallpaper(wallpaper)
-                } else {
-                    self.placeholderLabel.stringValue = "请检查文件路径"
-                    self.placeholderLabel.toolTip = wallpaper.path
                 }
             }
         }

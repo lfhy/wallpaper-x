@@ -8,6 +8,12 @@
 import AppKit
 import Combine
 
+enum SILThumbnailLoadResult {
+    case image(NSImage)
+    case missingFile
+    case unavailable
+}
+
 final class SILGridContainerView: NSView, ModuleFocusable {
     private enum Section { case main }
 
@@ -68,7 +74,20 @@ final class SILGridContainerView: NSView, ModuleFocusable {
                 wallpaper: w, isSelected: isSel,
                 isMultiSelectMode: svc.isMultiSelectMode
             ) { [weak self] completion in
-                self?.thumbnailCache.load(forKey: w.path, loader: {
+                guard let self else {
+                    completion(.unavailable)
+                    return
+                }
+                guard FileManager.default.fileExists(atPath: w.path) else {
+                    completion(.missingFile)
+                    return
+                }
+                if let signature = self.thumbnailFailureSignature(for: w),
+                   self.failedThumbnailSignatures.contains(signature) {
+                    completion(.unavailable)
+                    return
+                }
+                self.thumbnailCache.load(forKey: w.path, loader: {
                     guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: w.path) as CFURL, nil) else { return nil }
                     let opts: [CFString: Any] = [
                         kCGImageSourceThumbnailMaxPixelSize: 512,
@@ -77,7 +96,20 @@ final class SILGridContainerView: NSView, ModuleFocusable {
                     ]
                     guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
                     return NSImage(cgImage: cg, size: .zero)
-                }, completion: completion)
+                }, completion: { [weak self] image in
+                    guard let self else {
+                        completion(image.map(SILThumbnailLoadResult.image) ?? .unavailable)
+                        return
+                    }
+                    if let signature = self.thumbnailFailureSignature(for: w) {
+                        if image != nil {
+                            self.failedThumbnailSignatures.remove(signature)
+                        } else {
+                            self.failedThumbnailSignatures.insert(signature)
+                        }
+                    }
+                    completion(image.map(SILThumbnailLoadResult.image) ?? .unavailable)
+                })
             }
             return item
         }
@@ -85,6 +117,7 @@ final class SILGridContainerView: NSView, ModuleFocusable {
 
     // MARK: - 状态
     private let thumbnailCache = SILThumbnailStore.sharedCache
+    private var failedThumbnailSignatures: Set<String> = []
     var wallpapersByID: [String: SILWallpaper] = [:]
     /// 当前标签上下文；nil 表示「我的图片」全库，由外部 SILBridgeView.updateNSView 写入
     var currentSILTag: String? = nil
@@ -358,6 +391,13 @@ extension SILGridContainerView {
             if !FileManager.default.fileExists(atPath: w.path) { reload.insert(ip) }
         }
         if !reload.isEmpty { collectionView.reloadItems(at: reload) }
+    }
+
+    private func thumbnailFailureSignature(for wallpaper: SILWallpaper) -> String? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: wallpaper.path) else { return nil }
+        let size = (attrs[.size] as? NSNumber)?.int64Value ?? -1
+        let modifiedAt = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        return "\(wallpaper.path)|\(size)|\(Int64(modifiedAt))"
     }
 }
 

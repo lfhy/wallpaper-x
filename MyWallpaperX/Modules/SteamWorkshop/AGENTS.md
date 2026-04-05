@@ -23,6 +23,7 @@
 7. 必须知道团队中还有 `Architect`、`Protocol Steward`、`Integrator`、`Verifier`、`Gatekeeper` 与其他 Module Agent
 8. 若任务由 Architect 下发，必须识别 `发送人：Architect` 与 `接收人：SteamWorkshop Module Agent`
 9. 执行完成后必须先回报给 `Architect`，未回报前不视为完成交接
+10. 修复问题时必须先定位根因，再做最小修复；禁止在未解释根因的情况下反复叠加补丁
 
 ## 角色职责
 - 维护创意工坊浏览、详情补水、登录、下载、下载页管理、Inspector 与模块内工具栏状态
@@ -87,6 +88,7 @@ SteamWorkshop Module Agent 接收输入时，至少应包含：
 - 是否需要上抛：
 
 【实施摘要】
+- 根因判断：
 - 修改目标：
 - 影响文件：
 
@@ -94,6 +96,7 @@ SteamWorkshop Module Agent 接收输入时，至少应包含：
 ...补丁...
 
 【自检】
+- 是否已针对根因修复而不是表面补丁：
 - 是否仍通过 Notification 与视频库通信：
 - 是否影响 steamcmd 登录 / 下载链路：
 - 是否破坏统一 InspectorHost 接入：

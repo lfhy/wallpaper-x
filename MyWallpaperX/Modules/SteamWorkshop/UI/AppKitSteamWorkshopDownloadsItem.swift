@@ -643,8 +643,7 @@ final class AppKitSteamWorkshopDownloadsItem: NSCollectionViewItem {
 
     private func schedulePreviewRetry(url: URL, cacheKey: String) {
         previewRetryTask?.cancel()
-        let retryDelay = SteamWorkshopPreviewRequestCoordinator.shared.nextRetryDelay(for: url, priority: .visible) ?? 2.5
-        guard retryDelay < 20 else {
+        guard let retryDelay = SteamWorkshopPreviewRequestCoordinator.shared.nextRetryDelay(for: url, priority: .visible) else {
             previewPlaceholderView.setState(.unavailable)
             return
         }

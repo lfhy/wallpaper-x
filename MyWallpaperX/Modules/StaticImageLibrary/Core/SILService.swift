@@ -106,6 +106,7 @@ final class SILService: ObservableObject {
     private let zoomOffsetKey = "SILGridZoomOffset"
     private let sortStateKey  = "SILSortState"
     private let silTagsKey    = "SILTags"
+    private let initialMissingFilesAlertRetryLimit = 5
 
     /// 供外部（如重置功能）访问持久化文件路径
     var silPersistenceURL: URL { persistenceURL }
@@ -125,6 +126,7 @@ final class SILService: ObservableObject {
         if let saved = UserDefaults.standard.stringArray(forKey: silTagsKey) {
             silTags = saved
         }
+        reconcileMissingFilesOnLaunch()
     }
 
     // MARK: - 持久化
@@ -167,6 +169,53 @@ final class SILService: ObservableObject {
 
     func saveSILTags() {
         UserDefaults.standard.set(silTags, forKey: silTagsKey)
+    }
+
+    private func reconcileMissingFilesOnLaunch() {
+        let fm = FileManager.default
+        let removed = wallpapers.filter { !fm.fileExists(atPath: $0.path) }
+        guard !removed.isEmpty else { return }
+
+        let removedIDs = Set(removed.map(\.id))
+        wallpapers.removeAll { removedIDs.contains($0.id) }
+        selectedIDs.subtract(removedIDs)
+        if let selectedID, removedIDs.contains(selectedID) {
+            self.selectedID = nil
+        }
+        if let inspectedWallpaperID, removedIDs.contains(inspectedWallpaperID) {
+            self.inspectedWallpaperID = nil
+        }
+        save()
+        scheduleInitialMissingFilesAlert(for: removed, attempt: 0)
+    }
+
+    private func scheduleInitialMissingFilesAlert(for removed: [SILWallpaper], attempt: Int) {
+        guard !removed.isEmpty else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0.9 : 0.45)) { [weak self] in
+            guard let self else { return }
+            guard let hostWindow = appModalHostWindow() else {
+                guard attempt < self.initialMissingFilesAlertRetryLimit else { return }
+                self.scheduleInitialMissingFilesAlert(for: removed, attempt: attempt + 1)
+                return
+            }
+
+            let removedNames = removed.prefix(3).map {
+                URL(fileURLWithPath: $0.path).lastPathComponent
+            }
+            var lines = ["启动时已自动从图库移除 \(removed.count) 个本地不存在的文件。"]
+            if !removedNames.isEmpty {
+                lines.append(removedNames.joined(separator: "\n"))
+            }
+            if removed.count > removedNames.count {
+                lines.append("其余 \(removed.count - removedNames.count) 个文件也已同步移除。")
+            }
+            let alert = makeAppAlert(
+                title: "图库已清理失效文件",
+                message: lines.joined(separator: "\n\n"),
+                buttons: ["好"]
+            )
+            presentAppAlert(alert, in: hostWindow)
+        }
     }
 
     // MARK: - 图片专属标签 CRUD

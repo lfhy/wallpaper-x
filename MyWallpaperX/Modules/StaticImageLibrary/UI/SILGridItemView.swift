@@ -224,6 +224,7 @@ final class SILGridItem: NSCollectionViewItem {
         isHovering = false; isPressingCard = false
         isSelectedState = false; isMultiSelect = false
         thumbnailView.image = nil
+        placeholderLabel.stringValue = "加载中..."
         placeholderLabel.isHidden = false
         multiSelectBadge.isHidden = true; multiSelectIcon.isHidden = true
         imageContainer.layer?.transform = CATransform3DIdentity
@@ -238,7 +239,7 @@ final class SILGridItem: NSCollectionViewItem {
         wallpaper: SILWallpaper,
         isSelected: Bool,
         isMultiSelectMode: Bool,
-        thumbnailLoader: @escaping (@escaping (NSImage?) -> Void) -> Void
+        thumbnailLoader: @escaping (@escaping (SILThumbnailLoadResult) -> Void) -> Void
     ) {
         wallpaperID = wallpaper.id
         titleLabel.stringValue = wallpaper.title
@@ -255,12 +256,24 @@ final class SILGridItem: NSCollectionViewItem {
 
         applySelectionState(isSelected: isSelected, multiSelectMode: isMultiSelectMode)
         applyHoverVisibility(isHovering, animated: false)
+        placeholderLabel.stringValue = "加载中..."
         placeholderLabel.isHidden = false
         let taskID = UUID(); imageTaskID = taskID
-        thumbnailLoader { [weak self] image in
+        thumbnailLoader { [weak self] result in
             guard let self, self.imageTaskID == taskID, self.wallpaperID == wallpaper.id else { return }
-            self.thumbnailView.image = image
-            self.placeholderLabel.isHidden = image != nil
+            switch result {
+            case .image(let image):
+                self.thumbnailView.image = image
+                self.placeholderLabel.isHidden = true
+            case .missingFile:
+                self.thumbnailView.image = nil
+                self.placeholderLabel.stringValue = "原文件不存在"
+                self.placeholderLabel.isHidden = false
+            case .unavailable:
+                self.thumbnailView.image = nil
+                self.placeholderLabel.stringValue = "缩略图不可用"
+                self.placeholderLabel.isHidden = false
+            }
         }
     }
 
@@ -478,4 +491,3 @@ final class SILGridItem: NSCollectionViewItem {
         refreshThemeAwareAppearance()
     }
 }
-

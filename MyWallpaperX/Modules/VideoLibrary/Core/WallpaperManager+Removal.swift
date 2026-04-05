@@ -144,6 +144,7 @@ extension WallpaperManager {
 
         setCachedThumbnailPath(nil, for: cacheKey(for: fileURL))
         let normalized = normalizedPath(record.path)
+        clearThumbnailGenerationFailure(for: normalized)
         removeThumbnailInFlight(for: normalized)
         finishStaticFrameSchedule(for: normalized)
         return failures

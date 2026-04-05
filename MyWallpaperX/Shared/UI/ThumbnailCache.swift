@@ -159,9 +159,49 @@ final class ThumbnailCache {
         }
     }
 
+    /// 预取原始图片数据并保留原编码格式。
+    /// 适合 GIF 等动态缩略图，避免在预取阶段被转成静态 JPEG。
+    func prefetchImageData(forKey key: String, loader: @escaping () -> Data?) {
+        let cacheKey = key as NSString
+        guard imageCache.object(forKey: cacheKey) == nil else { return }
+
+        lock.lock()
+        guard inFlight[key] == nil else { lock.unlock(); return }
+        inFlight[key] = []
+        lock.unlock()
+
+        decodeQueue.async { [weak self] in
+            guard let self else { return }
+            let diskURL = Self.diskCacheURL(for: key)
+            if let data = try? Data(contentsOf: diskURL),
+               let image = NSImage(data: data) {
+                self.imageCache.setObject(image, forKey: cacheKey)
+                self.finish(key: key, image: image)
+                return
+            }
+
+            guard let data = loader() else {
+                self.finish(key: key, image: nil)
+                return
+            }
+
+            let image = NSImage(data: data)
+            if let image {
+                self.imageCache.setObject(image, forKey: cacheKey)
+            }
+            try? data.write(to: diskURL, options: .atomic)
+            self.finish(key: key, image: image)
+        }
+    }
+
     /// 清空内存缓存（磁盘缓存保留）
     func removeAll() {
         imageCache.removeAllObjects()
+    }
+
+    func remove(forKey key: String) {
+        imageCache.removeObject(forKey: key as NSString)
+        try? FileManager.default.removeItem(at: Self.diskCacheURL(for: key))
     }
 
     /// 同步读取内存缓存，不触发磁盘 IO。

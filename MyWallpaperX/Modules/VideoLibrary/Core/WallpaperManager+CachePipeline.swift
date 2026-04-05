@@ -80,6 +80,39 @@ extension WallpaperManager {
         thumbnailCacheLock.unlock()
     }
 
+    func markThumbnailGenerationFailure(for normalizedPath: String) {
+        thumbnailGenerationFailureLock.lock()
+        thumbnailGenerationFailures[normalizedPath] = Date()
+        thumbnailGenerationFailureLock.unlock()
+    }
+
+    func clearThumbnailGenerationFailure(for normalizedPath: String) {
+        thumbnailGenerationFailureLock.lock()
+        thumbnailGenerationFailures.removeValue(forKey: normalizedPath)
+        thumbnailGenerationFailureLock.unlock()
+    }
+
+    func recentThumbnailGenerationFailureDate(for normalizedPath: String) -> Date? {
+        thumbnailGenerationFailureLock.lock()
+        defer { thumbnailGenerationFailureLock.unlock() }
+        return thumbnailGenerationFailures[normalizedPath]
+    }
+
+    func hasRecentThumbnailGenerationFailure(for normalizedPath: String) -> Bool {
+        guard let failureDate = recentThumbnailGenerationFailureDate(for: normalizedPath) else { return false }
+        return Date().timeIntervalSince(failureDate) < thumbnailFailureRetryCooldown
+    }
+
+    func shouldRetryThumbnailGeneration(for normalizedPath: String) -> Bool {
+        !hasRecentThumbnailGenerationFailure(for: normalizedPath)
+    }
+
+    func isThumbnailGenerationInFlight(for normalizedPath: String) -> Bool {
+        thumbnailInFlightLock.lock()
+        defer { thumbnailInFlightLock.unlock() }
+        return thumbnailInFlightHandlers[normalizedPath] != nil
+    }
+
     func beginStaticFrameSchedule(for normalizedPath: String) -> Bool {
         staticFrameScheduleLock.lock()
         defer { staticFrameScheduleLock.unlock() }
@@ -136,10 +169,12 @@ extension WallpaperManager {
         let capturedGeneration = currentCacheGeneration()
         // 生成缓存键
         let cacheKey = cacheKey(for: url)
+        let normalized = normalizedPath(url.path)
 
         // 检查缓存
         if let cachedPath = cachedThumbnailPath(for: cacheKey) {
             if pathExists(cachedPath) {
+                clearThumbnailGenerationFailure(for: normalized)
                 completion(cachedPath)
                 return
             } else {
@@ -151,17 +186,18 @@ extension WallpaperManager {
         let diskCachedPath = thumbnailOutputURL(for: url).path
         if pathExists(diskCachedPath) {
             setCachedThumbnailPath(diskCachedPath, for: cacheKey)
+            clearThumbnailGenerationFailure(for: normalizedPath(url.path))
             completion(diskCachedPath)
             return
         }
 
         // 检查文件是否存在
         guard pathExists(url.path) else {
+            markThumbnailGenerationFailure(for: normalized)
             completion(nil)
             return
         }
 
-        let normalized = normalizedPath(url.path)
         if enqueueThumbnailCompletion(completion, for: normalized) {
             return
         }
@@ -188,6 +224,9 @@ extension WallpaperManager {
 
                 let candidateTimes = [
                     CMTime(seconds: 1, preferredTimescale: 600),
+                    CMTime(seconds: 0.2, preferredTimescale: 600),
+                    CMTime(seconds: 2, preferredTimescale: 600),
+                    CMTime(seconds: 3, preferredTimescale: 600),
                     CMTime.zero
                 ]
 
@@ -205,12 +244,16 @@ extension WallpaperManager {
                                 }
                                 try data.write(to: saveURL)
                                 self.setCachedThumbnailPath(saveURL.path, for: cacheKey)
+                                self.clearThumbnailGenerationFailure(for: normalized)
                                 outputPath = saveURL.path
                                 break
                             } catch {
                             }
                         }
                     }
+                }
+                if outputPath == nil {
+                    self.markThumbnailGenerationFailure(for: normalized)
                 }
                 self.completeThumbnailGeneration(for: normalized, with: outputPath)
             }

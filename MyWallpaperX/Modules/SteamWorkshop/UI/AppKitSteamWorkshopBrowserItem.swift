@@ -499,6 +499,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
     private var imageTask: Task<Void, Never>?
     private var previewRetryTask: Task<Void, Never>?
     private var currentPreviewURL: URL?
+    private var currentPreviewSourceURL: URL?
     private var currentDownloadVideoURL: URL?
     private var currentTitleText = ""
     private var onOpen: (() -> Void)?
@@ -646,6 +647,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         self.onCancelDownload = onCancelDownload
         currentDisplayContext = displayContext
         currentDownloadVideoURL = downloadRecord?.videoURL
+        currentPreviewSourceURL = item.previewImageURL
         currentDebugID = item.id
         prefersCircularPlayBadge = false
         applyContent(
@@ -680,6 +682,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         self.onCancelDownload = onCancelDownload
         currentDisplayContext = displayContext
         currentDownloadVideoURL = downloadRecord?.videoURL
+        currentPreviewSourceURL = item.previewImageURL
         currentDebugID = item.id
         prefersCircularPlayBadge = false
         applyContent(
@@ -763,6 +766,22 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         applyHoverStyle(animated: false)
         refreshTrackingArea()
         syncHoverStateFromWindow(animated: false)
+    }
+
+    func forceReloadPreview() {
+        previewRetryTask?.cancel()
+        imageTask?.cancel()
+
+        if let currentPreviewSourceURL, !currentPreviewSourceURL.isFileURL {
+            let cacheKey = steamWorkshopPreviewCacheKey(for: currentPreviewSourceURL)
+            SteamWorkshopPreviewImageCache.shared.remove(forKey: cacheKey)
+            SteamWorkshopPreviewRequestCoordinator.shared.resetFailureState(for: currentPreviewSourceURL)
+            SteamWorkshopPreviewRequestCoordinator.shared.markCachedImageSuspicious(forKey: cacheKey)
+        }
+
+        currentPreviewURL = nil
+        previewImageView.image = nil
+        loadPreview(from: currentPreviewSourceURL, fallbackVideoURL: currentDownloadVideoURL)
     }
 
     func setKeyboardFocus(_ focused: Bool) {
@@ -1430,8 +1449,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
 
     private func schedulePreviewRetry(url: URL, cacheKey: String) {
         previewRetryTask?.cancel()
-        let retryDelay = SteamWorkshopPreviewRequestCoordinator.shared.nextRetryDelay(for: url, priority: .visible) ?? 2.5
-        guard retryDelay < 20 else {
+        guard let retryDelay = SteamWorkshopPreviewRequestCoordinator.shared.nextRetryDelay(for: url, priority: .visible) else {
             previewPlaceholderView.setState(.unavailable)
             return
         }

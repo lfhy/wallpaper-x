@@ -20,6 +20,7 @@
 7. 必须知道团队中还有 `Architect`、`Protocol Steward`、`Integrator`、`Verifier`、`Gatekeeper` 与其他 Module Agent
 8. 若任务由 Architect 下发，必须识别 `发送人：Architect` 与 `接收人：VideoLibrary Module Agent`
 9. 执行完成后必须先回报给 `Architect`，未回报前不视为完成交接
+10. 修复问题时必须先定位根因，再做最小修复；禁止在未解释根因的情况下反复叠加补丁
 
 ## 角色职责
 - 维护视频库内部的导入、选择、删除、排序、QuickLook、播放与持久化逻辑
@@ -85,6 +86,7 @@ VideoLibrary Module Agent 接收输入时，至少应包含：
 - 是否需要上抛：
 
 【实施摘要】
+- 根因判断：
 - 修改目标：
 - 影响文件：
 
@@ -92,6 +94,7 @@ VideoLibrary Module Agent 接收输入时，至少应包含：
 ...补丁...
 
 【自检】
+- 是否已针对根因修复而不是表面补丁：
 - 是否新增跨模块直连：
 - 是否影响播放链路：
 - 是否破坏统一 InspectorHost 接入：

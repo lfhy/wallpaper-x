@@ -167,9 +167,9 @@ final class AppKitWallpaperCollectionView: NSCollectionView, GridCollectionViewP
 
 final class AppKitThumbnailProvider {
     private let wallpaperManager: WallpaperManager
-    private let cache = ThumbnailCache(
-        label: "com.mywallpaper.videolibrary.thumbnail.decode",
-        countLimit: 360
+    private let decodeQueue = DispatchQueue(
+        label: "com.mywallpaper.videolibrary.thumbnail.provider",
+        qos: .userInitiated
     )
 
     init(wallpaperManager: WallpaperManager) {
@@ -177,21 +177,23 @@ final class AppKitThumbnailProvider {
     }
 
     func loadThumbnail(for wallpaper: VideoWallpaper, completion: @escaping (NSImage?) -> Void) {
-        let key = wallpaperManager.normalizedPath(wallpaper.path)
-        cache.load(forKey: key, loader: { [weak self] in
-            guard let self else { return nil }
-            guard let thumbPath = self.wallpaperManager.resolvedThumbnailPath(for: wallpaper) else { return nil }
-            return NSImage(contentsOfFile: thumbPath)
-        }, completion: completion)
+        decodeQueue.async { [weak self] in
+            guard let self else { return }
+            let image: NSImage?
+            if let thumbPath = self.wallpaperManager.resolvedThumbnailPath(for: wallpaper) {
+                image = NSImage(contentsOfFile: thumbPath)
+            } else {
+                image = nil
+            }
+
+            DispatchQueue.main.async {
+                completion(image)
+            }
+        }
     }
 
     func prefetchThumbnail(for wallpaper: VideoWallpaper) {
-        let key = wallpaperManager.normalizedPath(wallpaper.path)
-        cache.prefetch(forKey: key, loader: { [weak self] in
-            guard let self else { return nil }
-            guard let thumbPath = self.wallpaperManager.resolvedThumbnailPath(for: wallpaper) else { return nil }
-            return NSImage(contentsOfFile: thumbPath)
-        })
+        loadThumbnail(for: wallpaper) { _ in }
     }
 
     func cancelPrefetch(id: String) {

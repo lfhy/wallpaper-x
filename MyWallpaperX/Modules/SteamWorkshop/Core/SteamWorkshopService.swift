@@ -57,11 +57,13 @@ final class SteamWorkshopService: ObservableObject {
     @Published private(set) var displayedBrowserItems: [SteamWorkshopBrowserItem] = []
     @Published private(set) var pendingBrowserScrollRestoreOffset: CGFloat?
     @Published private(set) var browserState: SteamWorkshopBrowserLoadState = .idle
+    @Published private(set) var isRefreshingBrowserFeed = false
+    @Published private(set) var previewReloadToken: Int = 0
     @Published private(set) var isLoadingMoreBrowserItems = false
     @Published private(set) var hasMoreBrowserItems = true
     @Published var downloads: [SteamWorkshopDownloadRecord] = []
     @Published var source: SteamWorkshopSource = .featured {
-        didSet { navigateToBrowse() }
+        didSet { if !suppressAutomaticBrowseNavigation { navigateToBrowse() } }
     }
     @Published var browserQuery: String = "" {
         didSet {
@@ -70,19 +72,19 @@ final class SteamWorkshopService: ObservableObject {
         }
     }
     @Published var trendingWindow: SteamWorkshopTrendingWindow = .week {
-        didSet { navigateToBrowse() }
+        didSet { if !suppressAutomaticBrowseNavigation { navigateToBrowse() } }
     }
     @Published var themeFilter: SteamWorkshopThemeFilter = .all {
-        didSet { navigateToBrowse() }
+        didSet { if !suppressAutomaticBrowseNavigation { navigateToBrowse() } }
     }
     @Published var ageRatingFilter: SteamWorkshopAgeRatingFilter = .all {
-        didSet { navigateToBrowse() }
+        didSet { if !suppressAutomaticBrowseNavigation { navigateToBrowse() } }
     }
     @Published var resolutionFilter: SteamWorkshopResolutionFilter = .all {
-        didSet { navigateToBrowse() }
+        didSet { if !suppressAutomaticBrowseNavigation { navigateToBrowse() } }
     }
     @Published var categoryFilter: SteamWorkshopCategoryFilter = .all {
-        didSet { navigateToBrowse() }
+        didSet { if !suppressAutomaticBrowseNavigation { navigateToBrowse() } }
     }
     @Published var downloadsQuery: String = ""
     @Published var downloadsSortMode: SteamWorkshopDownloadsSortMode = .updatedAt
@@ -158,6 +160,7 @@ final class SteamWorkshopService: ObservableObject {
     private var currentBrowserScrollOffsetY: CGFloat = 0
     private var savedDiscoveryQueryBeforeAuthorBrowse: String?
     private var isUpdatingBrowserQueryProgrammatically = false
+    private var suppressAutomaticBrowseNavigation = false
     private var browseContext: SteamWorkshopBrowseContext = .discovery {
         didSet {
             browserSectionTitle = browseContext.title
@@ -451,6 +454,12 @@ final class SteamWorkshopService: ObservableObject {
         cancelBrowserDetailHydration()
         navigationVersion += 1
         reloadInstalledItems()
+        SteamWorkshopPreviewRequestCoordinator.shared.resetAllFailureStates()
+        previewReloadToken += 1
+        isRefreshingBrowserFeed = true
+        statusMessage = browseContext.isAuthorWorkshop
+            ? "正在刷新作者工坊列表…"
+            : "正在刷新 Steam 创意工坊列表…"
         fetchBrowserItems(forceRefresh: true)
     }
 
@@ -603,7 +612,19 @@ final class SteamWorkshopService: ObservableObject {
     }
 
     func retrySelectedBrowserItemDetailRefresh() {
+        retrySelectedBrowserPreviewLoad()
         refreshSelectedBrowserItemDetailIfNeeded(forceRefresh: true)
+    }
+
+    private func retrySelectedBrowserPreviewLoad() {
+        guard let item = selectedBrowserItem else { return }
+        if let previewURL = item.previewImageURL {
+            SteamWorkshopPreviewRequestCoordinator.shared.resetFailureState(for: previewURL)
+            let cacheKey = steamWorkshopPreviewCacheKey(for: previewURL)
+            SteamWorkshopPreviewRequestCoordinator.shared.markCachedImageSuspicious(forKey: cacheKey)
+            SteamWorkshopPreviewImageCache.shared.remove(forKey: cacheKey)
+        }
+        previewReloadToken += 1
     }
 
     func showAuthorWorkshop(for item: SteamWorkshopBrowserItem) {
@@ -835,6 +856,7 @@ final class SteamWorkshopService: ObservableObject {
         browserNextPage = 2
         hasMoreBrowserItems = true
         isLoadingMoreBrowserItems = false
+        isRefreshingBrowserFeed = forceRefresh
         prefetchedBrowserPageKeys.removeAll()
         prefetchedBrowserPages.removeAll()
         let browseContext = self.browseContext
@@ -870,8 +892,14 @@ final class SteamWorkshopService: ObservableObject {
                 "fetchBrowserItems cacheHit context=\(browseContext.title) cachedCount=\(cached.items.count) nextPage=\(browserNextPage) hasMore=\(hasMoreBrowserItems)"
             )
             if !forceRefresh && Date().timeIntervalSince(cached.fetchedAt) < Constants.cacheTTL {
+                isRefreshingBrowserFeed = false
                 logBrowserDebug("fetchBrowserItems skipRemote context=\(browseContext.title) reason=freshCache")
                 return
+            }
+            if forceRefresh {
+                statusMessage = browseContext.isAuthorWorkshop
+                    ? "正在刷新作者工坊列表…"
+                    : "正在刷新 Steam 创意工坊列表…"
             }
         } else {
             browserState = .loading
@@ -898,6 +926,7 @@ final class SteamWorkshopService: ObservableObject {
                 await MainActor.run {
                     guard let self else { return }
                     guard self.browseContext == browseContext else { return }
+                    self.isRefreshingBrowserFeed = false
                     self.browserItems = seededItems
                     self.prefetchBrowserPreviewImages(for: seededItems, limit: 48)
                     self.browserState = .loaded
@@ -919,6 +948,7 @@ final class SteamWorkshopService: ObservableObject {
                 await MainActor.run {
                     guard let self else { return }
                     guard self.browseContext == browseContext else { return }
+                    self.isRefreshingBrowserFeed = false
                     self.browserState = .loaded
                     self.hasMoreBrowserItems = pageResult.hasMore
                     self.browserNextPage = 2
@@ -944,6 +974,7 @@ final class SteamWorkshopService: ObservableObject {
                 await MainActor.run {
                     guard let self else { return }
                     guard self.browseContext == browseContext else { return }
+                    self.isRefreshingBrowserFeed = false
                     if self.browserItems.isEmpty {
                         self.browserState = .failed(error.localizedDescription)
                     }
@@ -1002,11 +1033,8 @@ final class SteamWorkshopService: ObservableObject {
 
         for (_, url) in candidates.prefix(limit) {
             let cacheKey = steamWorkshopPreviewCacheKey(for: url)
-            SteamWorkshopPreviewImageCache.shared.prefetch(forKey: cacheKey) {
-                guard let data = SteamWorkshopPreviewRequestCoordinator.shared.prefetchDataSynchronously(from: url) else {
-                    return nil
-                }
-                return NSImage(data: data)
+            SteamWorkshopPreviewImageCache.shared.prefetchImageData(forKey: cacheKey) {
+                SteamWorkshopPreviewRequestCoordinator.shared.prefetchDataSynchronously(from: url)
             }
         }
     }
@@ -1071,10 +1099,17 @@ final class SteamWorkshopService: ObservableObject {
         cancelBrowserDetailHydration()
         selectedItemDetailTask?.cancel()
         selectedItemDetailTask = nil
+        cancelActiveLoginSession()
+        cancelDownloadImmediately(showFeedback: false)
+        logoutImmediately()
 
         let fileManager = FileManager.default
         try? fileManager.removeItem(at: cacheDirectoryURL)
         try? fileManager.removeItem(at: Self.detailCacheDirectoryURL())
+        try? fileManager.removeItem(at: runtimeInstallRootURL)
+        try? fileManager.removeItem(at: libraryRootURL)
+        SteamWorkshopPreviewImageCache.shared.removeAll()
+        ThumbnailCache.clearDiskCache()
         Task {
             await Self.authorNameStore.clear()
         }
@@ -1083,21 +1118,54 @@ final class SteamWorkshopService: ObservableObject {
         displayedBrowserItems = []
         pendingBrowserScrollRestoreOffset = nil
         browserState = .idle
+        isRefreshingBrowserFeed = false
+        previewReloadToken += 1
         isLoadingMoreBrowserItems = false
         hasMoreBrowserItems = true
         browserNextPage = 1
         prefetchedBrowserPageKeys.removeAll()
+        prefetchedBrowserPages.removeAll()
+        pendingBrowserDetailStubs = []
+        pendingBrowserDetailStubIDs.removeAll()
+        browserDetailRetryCounts.removeAll()
+        lastPreviewPrefetchIDs = []
         prioritizedVisibleBrowserItemIDs = []
         selectedBrowserItem = nil
         selectedBrowserItemError = nil
         isRefreshingSelectedBrowserItem = false
         currentWorkshopItemID = nil
+        currentPageTitle = "Steam 创意工坊"
+        activeDownloadItemID = nil
+        downloads = []
+        downloadsQuery = ""
+        downloadsSortMode = .updatedAt
+        downloadsSortAscending = false
+        isDownloadsMultiSelectMode = false
+        selectedDownloadID = nil
+        selectedDownloadIDs = []
+        selectedDownloadInspectorItem = nil
+        selectedDownloadDetailItem = nil
+        selectedDownloadDetailError = nil
+        isRefreshingSelectedDownloadDetailItem = false
+        downloadError = nil
+        pendingDownloadRequest = nil
+        queuedDownloadRequests = []
+        activeDownloadWasCancelled = false
+        zoomOffset = 0
 
         browseContext = .discovery
         savedDiscoveryQueryBeforeAuthorBrowse = nil
         isUpdatingBrowserQueryProgrammatically = true
         browserQuery = ""
         isUpdatingBrowserQueryProgrammatically = false
+        suppressAutomaticBrowseNavigation = true
+        source = .featured
+        trendingWindow = .week
+        themeFilter = .all
+        ageRatingFilter = .all
+        resolutionFilter = .all
+        categoryFilter = .all
+        suppressAutomaticBrowseNavigation = false
 
         requestedURL = Self.makeBrowseURL(
             source: source,
@@ -1111,9 +1179,7 @@ final class SteamWorkshopService: ObservableObject {
         )
         navigationVersion += 1
         currentPageTitle = browseContext.title
-        statusMessage = "Steam 创意工坊缓存已清空，重新进入模块后会重新抓取列表。"
-
-        reloadInstalledItems()
+        statusMessage = "Steam 创意工坊已恢复到初始状态。下次进入时会像首次使用一样重新加载。"
     }
 
     private func mergeBrowserItems(_ items: [SteamWorkshopBrowserItem]) {

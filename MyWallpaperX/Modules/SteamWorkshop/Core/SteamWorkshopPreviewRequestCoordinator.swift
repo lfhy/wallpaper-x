@@ -17,6 +17,7 @@ final class SteamWorkshopPreviewRequestCoordinator {
 
     private struct FailureState {
         var attempts: Int
+        var firstFailureAt: Date
         var retryAfter: Date
         var isPermanent: Bool
     }
@@ -25,8 +26,8 @@ final class SteamWorkshopPreviewRequestCoordinator {
         let configuration = URLSessionConfiguration.default
         configuration.httpMaximumConnectionsPerHost = 6
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.timeoutIntervalForRequest = 20
-        configuration.timeoutIntervalForResource = 30
+        configuration.timeoutIntervalForRequest = 12
+        configuration.timeoutIntervalForResource = 16
         configuration.waitsForConnectivity = false
         session = URLSession(configuration: configuration)
     }
@@ -83,6 +84,9 @@ final class SteamWorkshopPreviewRequestCoordinator {
     ) -> TimeInterval? {
         stateQueue.sync {
             guard let state = failureStates[url.absoluteString] else { return nil }
+            if hasExceededRetryWindow(state: state, priority: priority) {
+                return nil
+            }
             if priority == .userInitiated {
                 return 0
             }
@@ -105,6 +109,18 @@ final class SteamWorkshopPreviewRequestCoordinator {
     func clearCachedImageSuspicion(forKey key: String) {
         stateQueue.async {
             self.suspiciousCacheKeys.remove(key)
+        }
+    }
+
+    func resetFailureState(for url: URL) {
+        stateQueue.async {
+            self.failureStates.removeValue(forKey: url.absoluteString)
+        }
+    }
+
+    func resetAllFailureStates() {
+        stateQueue.async {
+            self.failureStates.removeAll()
         }
     }
 
@@ -140,11 +156,11 @@ final class SteamWorkshopPreviewRequestCoordinator {
     nonisolated private func timeout(for priority: SteamWorkshopPreviewRequestPriority) -> TimeInterval {
         switch priority {
         case .userInitiated:
-            return 20
+            return 12
         case .visible:
-            return 18
+            return 10
         case .prefetch:
-            return 15
+            return 8
         }
     }
 
@@ -154,6 +170,9 @@ final class SteamWorkshopPreviewRequestCoordinator {
     ) -> Bool {
         stateQueue.sync {
             guard let state = failureStates[url.absoluteString] else { return true }
+            if hasExceededRetryWindow(state: state, priority: priority) {
+                return false
+            }
             if priority == .userInitiated {
                 return true
             }
@@ -177,6 +196,7 @@ final class SteamWorkshopPreviewRequestCoordinator {
             let now = Date()
             let prior = self.failureStates[key]
             let nextAttempts = (prior?.attempts ?? 0) + 1
+            let firstFailureAt = prior?.firstFailureAt ?? now
             let nsError = error as NSError
             let statusCode = nsError.code
             let isPermanent = statusCode == 404 || statusCode == NSURLErrorFileDoesNotExist
@@ -186,18 +206,38 @@ final class SteamWorkshopPreviewRequestCoordinator {
             } else {
                 switch priority {
                 case .userInitiated:
-                    delay = min(12, pow(2, Double(min(nextAttempts, 3))))
+                    delay = min(8, pow(2, Double(min(nextAttempts, 3))))
                 case .visible:
-                    delay = min(30, pow(2, Double(min(nextAttempts + 1, 4))))
+                    delay = min(16, pow(2, Double(min(nextAttempts + 1, 4))))
                 case .prefetch:
-                    delay = min(90, pow(2, Double(min(nextAttempts + 2, 5))))
+                    delay = min(24, pow(2, Double(min(nextAttempts + 2, 5))))
                 }
             }
             self.failureStates[key] = FailureState(
                 attempts: nextAttempts,
+                firstFailureAt: firstFailureAt,
                 retryAfter: now.addingTimeInterval(delay),
                 isPermanent: isPermanent
             )
+        }
+    }
+
+    private func hasExceededRetryWindow(
+        state: FailureState,
+        priority: SteamWorkshopPreviewRequestPriority
+    ) -> Bool {
+        guard !state.isPermanent else { return true }
+        return Date().timeIntervalSince(state.firstFailureAt) >= maxRetryWindow(for: priority)
+    }
+
+    private func maxRetryWindow(for priority: SteamWorkshopPreviewRequestPriority) -> TimeInterval {
+        switch priority {
+        case .userInitiated:
+            return 12
+        case .visible:
+            return 35
+        case .prefetch:
+            return 18
         }
     }
 }

@@ -208,6 +208,13 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             }
             .store(in: &cancellables)
 
+        service.$previewReloadToken
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.forceReloadVisiblePreviews()
+            }
+            .store(in: &cancellables)
+
         Publishers.CombineLatest(
             service.$isLoadingMoreBrowserItems,
             service.$hasMoreBrowserItems
@@ -322,6 +329,15 @@ final class AppKitSteamWorkshopBrowserContainerView: NSView, ModuleFocusable, NS
             guard let cell = collectionView.item(at: indexPath) as? AppKitSteamWorkshopBrowserItem else { continue }
             guard itemsByID[id] != nil else { continue }
             configureCell(cell, for: id)
+        }
+    }
+
+    private func forceReloadVisiblePreviews() {
+        for indexPath in collectionView.indexPathsForVisibleItems() {
+            guard let id = dataSource.itemIdentifier(for: indexPath), id != Self.footerItemID else { continue }
+            guard let cell = collectionView.item(at: indexPath) as? AppKitSteamWorkshopBrowserItem else { continue }
+            guard itemsByID[id] != nil else { continue }
+            cell.forceReloadPreview()
         }
     }
 

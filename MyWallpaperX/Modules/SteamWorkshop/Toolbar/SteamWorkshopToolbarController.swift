@@ -175,6 +175,13 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
             }
             .store(in: &cancellables)
 
+        SteamWorkshopService.shared.$isRefreshingBrowserFeed
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.configureRefreshItem()
+            }
+            .store(in: &cancellables)
+
         SteamWorkshopService.shared.$isBrowsingAuthorWorkshop
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -248,6 +255,7 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
             titleUpdateHandler?(SteamWorkshopService.shared.browserSectionTitle)
             syncBrowserContextControls()
             configureAuthItems()
+            configureRefreshItem()
         }
         configureZoomItem()
     }
@@ -619,6 +627,19 @@ final class SteamWorkshopToolbarController: NSObject, NSSearchFieldDelegate {
             ? "返回 Steam 创意工坊总榜"
             : "当前不在作者工坊模式"
         authorBackToolbarItem.toolTip = authorBackButton.toolTip
+    }
+
+    private func configureRefreshItem() {
+        let service = SteamWorkshopService.shared
+        let isRefreshing = service.isRefreshingBrowserFeed
+        refreshToolbarItem.isEnabled = !isDownloadsMode && !isRefreshing
+        refreshToolbarItem.image = NSImage(
+            systemSymbolName: isRefreshing ? "arrow.trianglehead.2.clockwise.rotate.90" : "arrow.clockwise",
+            accessibilityDescription: "刷新"
+        )
+        refreshToolbarItem.toolTip = isRefreshing
+            ? (service.isBrowsingAuthorWorkshop ? "正在刷新作者工坊列表…" : "正在刷新 Steam 创意工坊列表…")
+            : "刷新 Steam 创意工坊列表"
     }
 
     private func syncSortPopup() {
