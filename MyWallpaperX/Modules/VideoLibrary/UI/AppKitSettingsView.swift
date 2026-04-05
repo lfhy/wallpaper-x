@@ -9,15 +9,32 @@ import Combine
 import UniformTypeIdentifiers
 import Foundation
 
+enum AppSettingsSection: String, CaseIterable, Identifiable {
+    case playbackModes
+    case audio
+    case system
+    case hotkeys
+    case efficiency
+    case display
+    case maintenance
+
+    var id: String { rawValue }
+}
+
 struct AppKitSettingsView: NSViewRepresentable {
     @EnvironmentObject var wallpaperManager: WallpaperManager
+    var visibleSections: Set<AppSettingsSection> = Set(AppSettingsSection.allCases)
 
     func makeNSView(context: Context) -> AppKitSettingsContainerView {
         // SwiftUI 只负责把 AppKit 容器挂进来，设置页状态和交互都由容器自己维护。
-        AppKitSettingsContainerView(wallpaperManager: wallpaperManager)
+        AppKitSettingsContainerView(
+            wallpaperManager: wallpaperManager,
+            visibleSections: visibleSections
+        )
     }
 
     func updateNSView(_ nsView: AppKitSettingsContainerView, context: Context) {
+        nsView.updateVisibleSections(visibleSections)
         nsView.refreshFromState()
     }
 }
@@ -27,42 +44,26 @@ final class AppKitSettingsContainerView: NSView {
     private var cancellables = Set<AnyCancellable>()
     private var isUpdatingUI = false
     private var scrollToTopObserver: NSObjectProtocol?
-    private var isScrollToTopAnimating = false
-    private var restingScrollOrigin: NSPoint?
-
-    private let scrollView: NSScrollView = {
-        let view = NSScrollView()
-        view.drawsBackground = false
-        view.hasVerticalScroller = true
-        view.hasHorizontalScroller = false
-        view.autohidesScrollers = true
-        view.translatesAutoresizingMaskIntoConstraints = false
-        return view
-    }()
-
-    private let documentView: NSView = {
-        let view = NSView()
-        view.translatesAutoresizingMaskIntoConstraints = false
-        return view
-    }()
+    private var visibleSections: Set<AppSettingsSection>
+    private let contentContainer = NSView()
 
     private let contentStack: NSStackView = {
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.distribution = .gravityAreas
-        stack.spacing = 16
+        stack.distribution = .fill
+        stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         return stack
     }()
 
-    private let playbackSection = SettingsGroupView(title: "播放控制")
+    private let playbackModesSection = SettingsGroupView(title: "播放模式")
+    private let audioSection = SettingsGroupView(title: "音频与速率")
     private let systemSection = SettingsGroupView(title: "系统行为")
-    private let performanceSection = SettingsGroupView(title: "性能设置")
+    private let hotkeysSection = SettingsGroupView(title: "快捷键")
+    private let efficiencySection = SettingsGroupView(title: "节能与暂停")
     private let displaySection = SettingsGroupView(title: "显示设置")
-    private let profileSettingsSection = SettingsGroupView(title: nil)
-    private let clearCacheSection = SettingsGroupView(title: nil)
-    private let resetSettingsSection = SettingsGroupView(title: nil)
+    private let maintenanceSection = SettingsGroupView(title: nil)
 
     private let loopSwitch = NSSwitch()
     private let randomSwitch = NSSwitch()
@@ -100,13 +101,17 @@ final class AppKitSettingsContainerView: NSView {
     private let fillModeFitButton = NSButton(radioButtonWithTitle: VideoFillMode.aspectFit.rawValue, target: nil, action: nil)
     private let fillModeFillButton = NSButton(radioButtonWithTitle: VideoFillMode.aspectFill.rawValue, target: nil, action: nil)
 
-    private let clearCacheButton = NSButton(title: "清空所有缓存", target: nil, action: nil)
-    private let resetSettingsButton = NSButton(title: "重置为默认设置", target: nil, action: nil)
-    private let exportProfileButton = NSButton(title: "导出个人设置", target: nil, action: nil)
-    private let importProfileButton = NSButton(title: "导入个人设置", target: nil, action: nil)
+    private let clearCacheButton = NSButton(title: "清除缓存", target: nil, action: nil)
+    private let resetSettingsButton = NSButton(title: "重置默认", target: nil, action: nil)
+    private let exportProfileButton = NSButton(title: "导出设置", target: nil, action: nil)
+    private let importProfileButton = NSButton(title: "导入设置", target: nil, action: nil)
 
-    init(wallpaperManager: WallpaperManager) {
+    init(
+        wallpaperManager: WallpaperManager,
+        visibleSections: Set<AppSettingsSection>
+    ) {
         self.wallpaperManager = wallpaperManager
+        self.visibleSections = visibleSections
         super.init(frame: .zero)
         setupLayout()
         setupSections()
@@ -114,18 +119,13 @@ final class AppKitSettingsContainerView: NSView {
         bindEvents()
         observeManager()
         observeScrollToTopRequests()
+        applyVisibleSections()
         refreshFromState()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard window != nil else { return }
-        scheduleRestingScrollOriginCapture()
     }
 
     deinit {
@@ -185,40 +185,36 @@ final class AppKitSettingsContainerView: NSView {
         selectFillMode(settings.videoFillMode)
 
         refreshHotkeyRows()
-        scheduleRestingScrollOriginCapture()
+        applyVisibleSections()
+    }
+
+    func updateVisibleSections(_ visibleSections: Set<AppSettingsSection>) {
+        guard self.visibleSections != visibleSections else { return }
+        self.visibleSections = visibleSections
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.applyVisibleSections()
+        }
     }
 
     private func setupLayout() {
-        // 外层滚动视图是必须的，因为设置页内容会在高密度选项下超过窗口高度。
+        // 设置页使用固定布局，不再滚动；分组数量和内容高度已经按展开态预留空间。
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
-
-        scrollView.documentView = documentView
-        addSubview(scrollView)
-        documentView.addSubview(contentStack)
-
-        let preferredWidth = contentStack.widthAnchor.constraint(equalToConstant: 500)
-        preferredWidth.priority = .defaultHigh
+        contentContainer.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(contentContainer)
+        contentContainer.addSubview(contentStack)
 
         NSLayoutConstraint.activate([
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: topAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            contentContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
+            contentContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
+            contentContainer.topAnchor.constraint(equalTo: topAnchor),
+            contentContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            documentView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
-            documentView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
-            documentView.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
-            documentView.heightAnchor.constraint(greaterThanOrEqualTo: scrollView.contentView.heightAnchor),
-
-            contentStack.topAnchor.constraint(equalTo: documentView.topAnchor, constant: 14),
-            contentStack.bottomAnchor.constraint(equalTo: documentView.bottomAnchor, constant: -20),
-            contentStack.centerXAnchor.constraint(equalTo: documentView.centerXAnchor),
-            contentStack.leadingAnchor.constraint(greaterThanOrEqualTo: documentView.leadingAnchor, constant: 24),
-            contentStack.trailingAnchor.constraint(lessThanOrEqualTo: documentView.trailingAnchor, constant: -24),
-            contentStack.widthAnchor.constraint(greaterThanOrEqualToConstant: 400),
-            contentStack.widthAnchor.constraint(lessThanOrEqualToConstant: 520),
-            preferredWidth
+            contentStack.topAnchor.constraint(equalTo: contentContainer.topAnchor, constant: 10),
+            contentStack.leadingAnchor.constraint(equalTo: contentContainer.leadingAnchor, constant: 16),
+            contentStack.trailingAnchor.constraint(equalTo: contentContainer.trailingAnchor, constant: -16),
+            contentStack.bottomAnchor.constraint(lessThanOrEqualTo: contentContainer.bottomAnchor, constant: -12)
         ])
     }
 
@@ -227,71 +223,38 @@ final class AppKitSettingsContainerView: NSView {
             forName: .appKitRequestScrollToTopForCurrentSelection,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            guard let self else { return }
-            self.scrollToTop(animated: true)
+        ) { _ in
+            // 设置页改为固定高度后，不再处理滚动复位。
         }
-    }
-
-    private func scrollToTop(animated: Bool) {
-        guard !isScrollToTopAnimating else { return }
-        guard scrollView.documentView != nil else { return }
-
-        let targetOrigin = restingScrollOrigin ?? NSPoint(x: 0, y: 0)
-        guard scrollView.contentView.bounds.origin != targetOrigin else { return }
-
-        isScrollToTopAnimating = true
-        NotificationCenter.default.post(name: .appKitLibraryGridScrollToTopAnimationWillStart, object: nil)
-        NSAnimationContext.runAnimationGroup { context in
-            let distance = abs(scrollView.contentView.bounds.origin.y - targetOrigin.y)
-            context.duration = animated ? min(0.36, max(0.20, distance / 5200.0)) : 0
-            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.18, 0.85, 0.20, 1.0)
-            scrollView.contentView.animator().setBoundsOrigin(targetOrigin)
-        } completionHandler: { [weak self] in
-            guard let self else { return }
-            self.scrollView.reflectScrolledClipView(self.scrollView.contentView)
-            self.isScrollToTopAnimating = false
-            NotificationCenter.default.post(name: .appKitLibraryGridScrollToTopAnimationDidEnd, object: nil)
-        }
-    }
-
-    private func scheduleRestingScrollOriginCapture() {
-        guard restingScrollOrigin == nil else { return }
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            guard self.restingScrollOrigin == nil else { return }
-            self.layoutSubtreeIfNeeded()
-            self.scrollView.layoutSubtreeIfNeeded()
-            self.documentView.layoutSubtreeIfNeeded()
-            self.captureRestingScrollOriginIfNeeded()
-        }
-    }
-
-    private func captureRestingScrollOriginIfNeeded() {
-        guard restingScrollOrigin == nil else { return }
-        guard window != nil, scrollView.documentView != nil else { return }
-        restingScrollOrigin = scrollView.contentView.bounds.origin
     }
 
     private func setupSections() {
-        // 分组顺序固定：播放、系统、性能、显示、维护，避免重排后影响用户心智和回归判断。
+        // 分组顺序固定：播放、系统、节能、显示、维护；由左侧导航决定当前显示哪些块。
         setupPlaybackSection()
         setupSystemSection()
-        setupPerformanceSection()
+        setupEfficiencySection()
         setupDisplaySection()
         setupMaintenanceSection()
 
-        addSection(playbackSection)
+        addSection(playbackModesSection)
+        addSection(audioSection)
         addSection(systemSection)
-        addSection(performanceSection)
+        addSection(hotkeysSection)
+        addSection(efficiencySection)
         addSection(displaySection)
-        let maintenanceSpacer = NSView()
-        maintenanceSpacer.translatesAutoresizingMaskIntoConstraints = false
-        maintenanceSpacer.heightAnchor.constraint(equalToConstant: 8).isActive = true
-        contentStack.addArrangedSubview(maintenanceSpacer)
-        addSection(profileSettingsSection)
-        addSection(clearCacheSection)
-        addSection(resetSettingsSection)
+        addSection(maintenanceSection)
+    }
+
+    private func applyVisibleSections() {
+        playbackModesSection.isHidden = !visibleSections.contains(.playbackModes)
+        audioSection.isHidden = !visibleSections.contains(.audio)
+        systemSection.isHidden = !visibleSections.contains(.system)
+        hotkeysSection.isHidden = !visibleSections.contains(.hotkeys)
+        efficiencySection.isHidden = !visibleSections.contains(.efficiency)
+        displaySection.isHidden = !visibleSections.contains(.display)
+
+        let showsMaintenance = visibleSections.contains(.maintenance)
+        maintenanceSection.isHidden = !showsMaintenance
     }
 
     private func addSection(_ section: NSView) {
@@ -302,12 +265,12 @@ final class AppKitSettingsContainerView: NSView {
 
     private func setupPlaybackSection() {
         // 播放控制区只放与播放状态相关的可逆配置，避免和系统集成配置混在一起。
-        playbackSection.addRow(makeSettingRow(title: "循环播放", trailing: loopSwitch))
-        playbackSection.addRow(makeSettingRow(title: "顺序播放", trailing: sequentialSwitch))
-        playbackSection.addRow(makeSettingRow(title: "随机播放", trailing: randomSwitch))
+        playbackModesSection.addRow(makeSettingRow(title: "循环播放", trailing: loopSwitch))
+        playbackModesSection.addRow(makeSettingRow(title: "顺序播放", trailing: sequentialSwitch))
+        playbackModesSection.addRow(makeSettingRow(title: "随机播放", trailing: randomSwitch))
         let autoSwitchRow = makeSettingRow(title: "自动切换", trailing: autoSwitchSwitch)
         autoSwitchRowView = autoSwitchRow
-        playbackSection.addRow(autoSwitchRow)
+        playbackModesSection.addRow(autoSwitchRow)
 
         intervalField.alignment = .right
         intervalField.translatesAutoresizingMaskIntoConstraints = false
@@ -327,7 +290,7 @@ final class AppKitSettingsContainerView: NSView {
 
         intervalRowView = makeSettingRow(title: "-  间隔时间", trailing: intervalControls)
         if let intervalRowView {
-            playbackSection.addRow(intervalRowView)
+            playbackModesSection.addRow(intervalRowView)
         }
 
         volumeSlider.translatesAutoresizingMaskIntoConstraints = false
@@ -341,7 +304,7 @@ final class AppKitSettingsContainerView: NSView {
         volumeControls.orientation = .horizontal
         volumeControls.alignment = .centerY
         volumeControls.spacing = 8
-        playbackSection.addRow(makeSettingRow(title: "静音", trailing: volumeControls))
+        audioSection.addRow(makeSettingRow(title: "静音", trailing: volumeControls))
 
         // 播放速率行：开关控制滑块显隐，滑块宽度与音量条对齐。
         playbackRateSwitch.toolTip = "启用后可调整播放速率"
@@ -360,7 +323,7 @@ final class AppKitSettingsContainerView: NSView {
         rateControls.spacing = 8
         let rateRow = makeSettingRow(title: "播放速率", trailing: rateControls)
         playbackRateRowView = rateRow
-        playbackSection.addRow(rateRow)
+        audioSection.addRow(rateRow)
     }
 
     private func setupSystemSection() {
@@ -371,7 +334,7 @@ final class AppKitSettingsContainerView: NSView {
 
         systemSection.addRow(makeSettingRow(title: "开机自启动", trailing: startOnBootSwitch))
         systemSection.addRow(makeSettingRow(title: "同步系统壁纸", trailing: syncSystemWallpaperSwitch))
-        systemSection.addRow(makeSettingRow(title: "响应系统快捷键", trailing: systemHotkeysSwitch))
+        hotkeysSection.addRow(makeSettingRow(title: "响应系统快捷键", trailing: systemHotkeysSwitch))
 
         hotkeyRowsStack.orientation = .vertical
         hotkeyRowsStack.alignment = .leading
@@ -406,20 +369,20 @@ final class AppKitSettingsContainerView: NSView {
 
         hotkeyRowsContainer = makeEmbeddedRow(content: hotkeyRowsStack)
         if let hotkeyRowsContainer {
-            systemSection.addRow(hotkeyRowsContainer)
+            hotkeysSection.addRow(hotkeyRowsContainer)
         }
     }
 
-    private func setupPerformanceSection() {
+    private func setupEfficiencySection() {
         // 性能区的开关会直接影响引擎暂停状态，改动后必须同步到 WallpaperEngine。
         pauseOtherAppFullscreenSwitch.toolTip = "当其他应用进入全屏并占据主要桌面空间时暂停壁纸播放"
         pauseWhenUnpluggedSwitch.toolTip = "使用电池时暂停壁纸播放以节省电量"
         pauseWhenIdleSwitch.toolTip = "当电脑长时间不活跃时暂停壁纸播放"
 
-        performanceSection.addRow(makeSettingRow(title: "其他应用焦点时暂停", trailing: pauseOtherAppFocusedSwitch))
-        performanceSection.addRow(makeSettingRow(title: "其他应用全屏时暂停", trailing: pauseOtherAppFullscreenSwitch))
-        performanceSection.addRow(makeSettingRow(title: "未连接电源时暂停播放", trailing: pauseWhenUnpluggedSwitch))
-        performanceSection.addRow(makeSettingRow(title: "电脑不活跃时暂停播放", trailing: pauseWhenIdleSwitch))
+        efficiencySection.addRow(makeSettingRow(title: "其他应用焦点时暂停", trailing: pauseOtherAppFocusedSwitch))
+        efficiencySection.addRow(makeSettingRow(title: "其他应用全屏时暂停", trailing: pauseOtherAppFullscreenSwitch))
+        efficiencySection.addRow(makeSettingRow(title: "未连接电源时暂停播放", trailing: pauseWhenUnpluggedSwitch))
+        efficiencySection.addRow(makeSettingRow(title: "电脑不活跃时暂停播放", trailing: pauseWhenIdleSwitch))
 
         for value in [5, 10, 15, 20, 30, 60] {
             idleTimeoutPopup.addItem(withTitle: "\(value)分钟")
@@ -427,7 +390,7 @@ final class AppKitSettingsContainerView: NSView {
         }
         idleTimeoutRowView = makeSettingRow(title: "-  不活跃时间", trailing: idleTimeoutPopup)
         if let idleTimeoutRowView {
-            performanceSection.addRow(idleTimeoutRowView)
+            efficiencySection.addRow(idleTimeoutRowView)
         }
     }
 
@@ -445,32 +408,49 @@ final class AppKitSettingsContainerView: NSView {
 
     private func setupMaintenanceSection() {
         // 维护区只承载导入导出、清缓存和恢复默认这类高风险动作，和普通设置分开。
-        // 导出/导入按钮去掉 bordered 样式，避免与 section 背景产生双层视觉叠加。
-        exportProfileButton.isBordered = false
+        exportProfileButton.isBordered = true
         exportProfileButton.bezelStyle = .rounded
-        exportProfileButton.contentTintColor = .controlAccentColor
+        exportProfileButton.contentTintColor = nil
         exportProfileButton.isEnabled = true
         exportProfileButton.target = self
         exportProfileButton.action = #selector(handleExportProfile)
-        importProfileButton.isBordered = false
+        importProfileButton.isBordered = true
         importProfileButton.bezelStyle = .rounded
-        importProfileButton.contentTintColor = .controlAccentColor
+        importProfileButton.contentTintColor = nil
         importProfileButton.isEnabled = true
         importProfileButton.target = self
         importProfileButton.action = #selector(handleImportProfile)
 
-        clearCacheButton.isBordered = false
+        clearCacheButton.isBordered = true
+        clearCacheButton.bezelStyle = .rounded
+        clearCacheButton.contentTintColor = nil
 
-        resetSettingsButton.isBordered = false
+        resetSettingsButton.isBordered = true
+        resetSettingsButton.bezelStyle = .rounded
         resetSettingsButton.contentTintColor = .systemRed
 
-        let profileButtons = NSStackView(views: [exportProfileButton, importProfileButton])
-        profileButtons.orientation = .horizontal
-        profileButtons.alignment = .centerY
-        profileButtons.spacing = 20
-        profileSettingsSection.addRow(makeCenteredControlRow(content: profileButtons))
-        clearCacheSection.addRow(makeCenteredControlRow(content: clearCacheButton))
-        resetSettingsSection.addRow(makeCenteredControlRow(content: resetSettingsButton))
+        let firstRow = NSStackView(views: [exportProfileButton, importProfileButton])
+        firstRow.orientation = .horizontal
+        firstRow.alignment = .centerY
+        firstRow.distribution = .fillEqually
+        firstRow.spacing = 12
+        firstRow.translatesAutoresizingMaskIntoConstraints = false
+
+        let secondRow = NSStackView(views: [clearCacheButton, resetSettingsButton])
+        secondRow.orientation = .horizontal
+        secondRow.alignment = .centerY
+        secondRow.distribution = .fillEqually
+        secondRow.spacing = 12
+        secondRow.translatesAutoresizingMaskIntoConstraints = false
+
+        let maintenanceGrid = NSStackView(views: [firstRow, secondRow])
+        maintenanceGrid.orientation = .vertical
+        maintenanceGrid.alignment = .leading
+        maintenanceGrid.distribution = .fillEqually
+        maintenanceGrid.spacing = 10
+        maintenanceGrid.translatesAutoresizingMaskIntoConstraints = false
+
+        maintenanceSection.addRow(makeMaintenanceControlRow(content: maintenanceGrid))
     }
 
     private func applyNativeControlSizes() {
@@ -623,7 +603,7 @@ final class AppKitSettingsContainerView: NSView {
         rowStack.orientation = .horizontal
         rowStack.alignment = .centerY
         rowStack.distribution = .fill
-        rowStack.spacing = 12
+        rowStack.spacing = 8
         rowStack.translatesAutoresizingMaskIntoConstraints = false
 
         let container = NSView()
@@ -633,7 +613,7 @@ final class AppKitSettingsContainerView: NSView {
         let bottomInset: CGFloat = 8
         NSLayoutConstraint.activate([
             rowStack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14 + leadingInset),
-            rowStack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            rowStack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
             rowStack.topAnchor.constraint(equalTo: container.topAnchor, constant: topInset),
             rowStack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -bottomInset)
         ])
@@ -667,6 +647,22 @@ final class AppKitSettingsContainerView: NSView {
 
         NSLayoutConstraint.activate([
             content.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            content.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
+            content.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -8)
+        ])
+
+        return container
+    }
+
+    private func makeMaintenanceControlRow(content: NSView) -> NSView {
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        content.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(content)
+
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            content.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
             content.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
             content.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -8)
         ])
@@ -772,7 +768,7 @@ final class AppKitSettingsContainerView: NSView {
 
     @objc private func handleSyncSystemWallpaperToggle() {
         guard !isUpdatingUI else { return }
-        wallpaperManager.settings.syncSystemWallpaper = (syncSystemWallpaperSwitch.state == .on)
+        wallpaperManager.setSyncSystemWallpaperEnabled(syncSystemWallpaperSwitch.state == .on)
     }
 
     @objc private func handleSystemHotkeysToggle() {

@@ -11,6 +11,7 @@ import AppKit
 
 struct ContentView: View {
     @EnvironmentObject var wallpaperManager: WallpaperManager
+    @Environment(\.openSettings) private var openSettings
     @State private var selectedItem: SelectedItem = .category(.myWallpapers)
     @State private var contentReloadToken = UUID()
     /// 上次发出工具栏模式通知时的模块 ID，用于幂等保护，避免视频库内部切换时反复触发工具栏重建
@@ -22,6 +23,7 @@ struct ContentView: View {
             .ignoresSafeArea(.container, edges: .top)
             .onAppear {
                 syncSelectedItemFromManager()
+                syncInitialModuleFocusIfNeeded()
             }
             .onChange(of: selectedItem) { _, newValue in
                 syncManagerSelection(from: newValue)
@@ -45,6 +47,9 @@ struct ContentView: View {
                 contentReloadToken = UUID()
                 NotificationCenter.default.post(name: .inspectorHostCloseRequested, object: nil)
                 syncQuickLookPreviewIfNeeded()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .appOpenSettingsRequested)) { _ in
+                openSettings()
             }
             .simultaneousGesture(
                 TapGesture().onEnded {
@@ -184,6 +189,28 @@ struct ContentView: View {
 
     private func syncQuickLookPreviewIfNeeded() {
         QuickLookPreviewController.shared.syncVisiblePreview(for: wallpaperManager.selectedWallpaperForQuickLook)
+    }
+
+    private func syncInitialModuleFocusIfNeeded() {
+        let module: ModuleIdentifier
+        switch selectedItem {
+        case .staticImageLibrary, .silTag:
+            module = .staticImageLibrary
+        case .onlineLibrary, .onlineDownloads:
+            module = .onlineLibrary
+        case .steamWorkshop, .steamDownloads:
+            module = .steamWorkshop
+        default:
+            module = .videoLibrary
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            NotificationCenter.default.post(
+                name: .moduleDidBecomeActive,
+                object: nil,
+                userInfo: ["module": module.rawValue]
+            )
+        }
     }
 
 }

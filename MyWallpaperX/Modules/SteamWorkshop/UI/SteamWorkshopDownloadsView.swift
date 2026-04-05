@@ -43,7 +43,7 @@ private struct SteamWorkshopDownloadsContentView: View {
                 )
             },
             onSelectionCleared: {
-                service.clearDownloadSelectionAndInspector()
+                service.dismissDownloadInspector()
             },
             content: { item in
                 SteamWorkshopItemDetailSheet(item: item)

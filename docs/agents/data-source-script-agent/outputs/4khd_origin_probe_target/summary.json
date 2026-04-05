@@ -1,0 +1,146 @@
+{
+  "input_file": "outputs/4khd_gallery_dump_target/image_urls.txt",
+  "sample_count": 5,
+  "probes": [
+    {
+      "proxy_url": "https://i0.wp.com/pic.4khd.com/-q5dGd1mPw2s/ZnPvI4Snlcl/AAAAAAACUko/Mia4zhIIY5U5dycMtL7TkP7cTlkp8MRiACNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-001.webp?w=1300",
+      "variants": [
+        "https://i0.wp.com/pic.4khd.com/-q5dGd1mPw2s/ZnPvI4Snlcl/AAAAAAACUko/Mia4zhIIY5U5dycMtL7TkP7cTlkp8MRiACNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-001.webp?w=1300",
+        "https://pic.4khd.com/-q5dGd1mPw2s/ZnPvI4Snlcl/AAAAAAACUko/Mia4zhIIY5U5dycMtL7TkP7cTlkp8MRiACNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-001.webp",
+        "https://pic.4khd.com/-q5dGd1mPw2s/ZnPvI4Snlcl/AAAAAAACUko/Mia4zhIIY5U5dycMtL7TkP7cTlkp8MRiACNcBGAsYHQ/pudding-dafa-jk-sailor-suit-4khd.com-001.webp"
+      ],
+      "results": [
+        {
+          "url": "https://i0.wp.com/pic.4khd.com/-q5dGd1mPw2s/ZnPvI4Snlcl/AAAAAAACUko/Mia4zhIIY5U5dycMtL7TkP7cTlkp8MRiACNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-001.webp?w=1300",
+          "error_type": "HTTPError",
+          "status": 400,
+          "reason": "HTTP Error 400: Bad Request"
+        },
+        {
+          "url": "https://pic.4khd.com/-q5dGd1mPw2s/ZnPvI4Snlcl/AAAAAAACUko/Mia4zhIIY5U5dycMtL7TkP7cTlkp8MRiACNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-001.webp",
+          "error_type": "HTTPError",
+          "status": 526,
+          "reason": "HTTP Error 526: <none>"
+        },
+        {
+          "url": "https://pic.4khd.com/-q5dGd1mPw2s/ZnPvI4Snlcl/AAAAAAACUko/Mia4zhIIY5U5dycMtL7TkP7cTlkp8MRiACNcBGAsYHQ/pudding-dafa-jk-sailor-suit-4khd.com-001.webp",
+          "error_type": "HTTPError",
+          "status": 526,
+          "reason": "HTTP Error 526: <none>"
+        }
+      ]
+    },
+    {
+      "proxy_url": "https://i0.wp.com/pic.4khd.com/-e08PRtBhKm8/ZnPvIzZaa7l/AAAAAAACUkg/GDkeHY-4wOkI5-37leB3gTIYJyul6SogwCNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-002.webp?w=1300",
+      "variants": [
+        "https://i0.wp.com/pic.4khd.com/-e08PRtBhKm8/ZnPvIzZaa7l/AAAAAAACUkg/GDkeHY-4wOkI5-37leB3gTIYJyul6SogwCNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-002.webp?w=1300",
+        "https://pic.4khd.com/-e08PRtBhKm8/ZnPvIzZaa7l/AAAAAAACUkg/GDkeHY-4wOkI5-37leB3gTIYJyul6SogwCNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-002.webp",
+        "https://pic.4khd.com/-e08PRtBhKm8/ZnPvIzZaa7l/AAAAAAACUkg/GDkeHY-4wOkI5-37leB3gTIYJyul6SogwCNcBGAsYHQ/pudding-dafa-jk-sailor-suit-4khd.com-002.webp"
+      ],
+      "results": [
+        {
+          "url": "https://i0.wp.com/pic.4khd.com/-e08PRtBhKm8/ZnPvIzZaa7l/AAAAAAACUkg/GDkeHY-4wOkI5-37leB3gTIYJyul6SogwCNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-002.webp?w=1300",
+          "error_type": "HTTPError",
+          "status": 400,
+          "reason": "HTTP Error 400: Bad Request"
+        },
+        {
+          "url": "https://pic.4khd.com/-e08PRtBhKm8/ZnPvIzZaa7l/AAAAAAACUkg/GDkeHY-4wOkI5-37leB3gTIYJyul6SogwCNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-002.webp",
+          "error_type": "HTTPError",
+          "status": 526,
+          "reason": "HTTP Error 526: <none>"
+        },
+        {
+          "url": "https://pic.4khd.com/-e08PRtBhKm8/ZnPvIzZaa7l/AAAAAAACUkg/GDkeHY-4wOkI5-37leB3gTIYJyul6SogwCNcBGAsYHQ/pudding-dafa-jk-sailor-suit-4khd.com-002.webp",
+          "error_type": "HTTPError",
+          "status": 526,
+          "reason": "HTTP Error 526: <none>"
+        }
+      ]
+    },
+    {
+      "proxy_url": "https://i0.wp.com/pic.4khd.com/-UPig_zImRxY/ZnPvI5-sCTl/AAAAAAACUkk/gxRvAlvWzuAEO4_YG41epCpffcrfvqplgCNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-003.webp?w=1300",
+      "variants": [
+        "https://i0.wp.com/pic.4khd.com/-UPig_zImRxY/ZnPvI5-sCTl/AAAAAAACUkk/gxRvAlvWzuAEO4_YG41epCpffcrfvqplgCNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-003.webp?w=1300",
+        "https://pic.4khd.com/-UPig_zImRxY/ZnPvI5-sCTl/AAAAAAACUkk/gxRvAlvWzuAEO4_YG41epCpffcrfvqplgCNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-003.webp",
+        "https://pic.4khd.com/-UPig_zImRxY/ZnPvI5-sCTl/AAAAAAACUkk/gxRvAlvWzuAEO4_YG41epCpffcrfvqplgCNcBGAsYHQ/pudding-dafa-jk-sailor-suit-4khd.com-003.webp"
+      ],
+      "results": [
+        {
+          "url": "https://i0.wp.com/pic.4khd.com/-UPig_zImRxY/ZnPvI5-sCTl/AAAAAAACUkk/gxRvAlvWzuAEO4_YG41epCpffcrfvqplgCNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-003.webp?w=1300",
+          "error_type": "HTTPError",
+          "status": 400,
+          "reason": "HTTP Error 400: Bad Request"
+        },
+        {
+          "url": "https://pic.4khd.com/-UPig_zImRxY/ZnPvI5-sCTl/AAAAAAACUkk/gxRvAlvWzuAEO4_YG41epCpffcrfvqplgCNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-003.webp",
+          "error_type": "HTTPError",
+          "status": 526,
+          "reason": "HTTP Error 526: <none>"
+        },
+        {
+          "url": "https://pic.4khd.com/-UPig_zImRxY/ZnPvI5-sCTl/AAAAAAACUkk/gxRvAlvWzuAEO4_YG41epCpffcrfvqplgCNcBGAsYHQ/pudding-dafa-jk-sailor-suit-4khd.com-003.webp",
+          "error_type": "HTTPError",
+          "status": 526,
+          "reason": "HTTP Error 526: <none>"
+        }
+      ]
+    },
+    {
+      "proxy_url": "https://i0.wp.com/pic.4khd.com/-CzafFXv__8E/ZnPvJrYookl/AAAAAAACUks/pzHqsOfYKpUdZ1d7erriUgTrefZLKWt-ACNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-004.webp?w=1300",
+      "variants": [
+        "https://i0.wp.com/pic.4khd.com/-CzafFXv__8E/ZnPvJrYookl/AAAAAAACUks/pzHqsOfYKpUdZ1d7erriUgTrefZLKWt-ACNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-004.webp?w=1300",
+        "https://pic.4khd.com/-CzafFXv__8E/ZnPvJrYookl/AAAAAAACUks/pzHqsOfYKpUdZ1d7erriUgTrefZLKWt-ACNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-004.webp",
+        "https://pic.4khd.com/-CzafFXv__8E/ZnPvJrYookl/AAAAAAACUks/pzHqsOfYKpUdZ1d7erriUgTrefZLKWt-ACNcBGAsYHQ/pudding-dafa-jk-sailor-suit-4khd.com-004.webp"
+      ],
+      "results": [
+        {
+          "url": "https://i0.wp.com/pic.4khd.com/-CzafFXv__8E/ZnPvJrYookl/AAAAAAACUks/pzHqsOfYKpUdZ1d7erriUgTrefZLKWt-ACNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-004.webp?w=1300",
+          "error_type": "HTTPError",
+          "status": 400,
+          "reason": "HTTP Error 400: Bad Request"
+        },
+        {
+          "url": "https://pic.4khd.com/-CzafFXv__8E/ZnPvJrYookl/AAAAAAACUks/pzHqsOfYKpUdZ1d7erriUgTrefZLKWt-ACNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-004.webp",
+          "error_type": "HTTPError",
+          "status": 526,
+          "reason": "HTTP Error 526: <none>"
+        },
+        {
+          "url": "https://pic.4khd.com/-CzafFXv__8E/ZnPvJrYookl/AAAAAAACUks/pzHqsOfYKpUdZ1d7erriUgTrefZLKWt-ACNcBGAsYHQ/pudding-dafa-jk-sailor-suit-4khd.com-004.webp",
+          "error_type": "HTTPError",
+          "status": 526,
+          "reason": "HTTP Error 526: <none>"
+        }
+      ]
+    },
+    {
+      "proxy_url": "https://i0.wp.com/pic.4khd.com/-f9EGh6eKbIY/ZnPvJioqOnl/AAAAAAACUkw/UItFovR1QK47EbIHTxoAboU91OzkgpcwQCNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-005.webp?w=1300",
+      "variants": [
+        "https://i0.wp.com/pic.4khd.com/-f9EGh6eKbIY/ZnPvJioqOnl/AAAAAAACUkw/UItFovR1QK47EbIHTxoAboU91OzkgpcwQCNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-005.webp?w=1300",
+        "https://pic.4khd.com/-f9EGh6eKbIY/ZnPvJioqOnl/AAAAAAACUkw/UItFovR1QK47EbIHTxoAboU91OzkgpcwQCNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-005.webp",
+        "https://pic.4khd.com/-f9EGh6eKbIY/ZnPvJioqOnl/AAAAAAACUkw/UItFovR1QK47EbIHTxoAboU91OzkgpcwQCNcBGAsYHQ/pudding-dafa-jk-sailor-suit-4khd.com-005.webp"
+      ],
+      "results": [
+        {
+          "url": "https://i0.wp.com/pic.4khd.com/-f9EGh6eKbIY/ZnPvJioqOnl/AAAAAAACUkw/UItFovR1QK47EbIHTxoAboU91OzkgpcwQCNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-005.webp?w=1300",
+          "error_type": "HTTPError",
+          "status": 400,
+          "reason": "HTTP Error 400: Bad Request"
+        },
+        {
+          "url": "https://pic.4khd.com/-f9EGh6eKbIY/ZnPvJioqOnl/AAAAAAACUkw/UItFovR1QK47EbIHTxoAboU91OzkgpcwQCNcBGAsYHQ/w1300-rw/pudding-dafa-jk-sailor-suit-4khd.com-005.webp",
+          "error_type": "HTTPError",
+          "status": 526,
+          "reason": "HTTP Error 526: <none>"
+        },
+        {
+          "url": "https://pic.4khd.com/-f9EGh6eKbIY/ZnPvJioqOnl/AAAAAAACUkw/UItFovR1QK47EbIHTxoAboU91OzkgpcwQCNcBGAsYHQ/pudding-dafa-jk-sailor-suit-4khd.com-005.webp",
+          "error_type": "HTTPError",
+          "status": 526,
+          "reason": "HTTP Error 526: <none>"
+        }
+      ]
+    }
+  ]
+}

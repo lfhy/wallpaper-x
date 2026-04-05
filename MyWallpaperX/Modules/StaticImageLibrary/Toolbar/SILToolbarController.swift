@@ -29,6 +29,7 @@ final class SILToolbarController: NSObject {
     weak var window: NSWindow?
     var localModeIdentifiers: [NSToolbarItem.Identifier] = []
     private(set) var isSILMode = false
+    private var observerTokens: [NSObjectProtocol] = []
     private var cancellables = Set<AnyCancellable>()
 
     private lazy var sortMenuButton: NSButton = {
@@ -65,8 +66,12 @@ final class SILToolbarController: NSObject {
         installObservers()
     }
 
+    deinit {
+        observerTokens.forEach { NotificationCenter.default.removeObserver($0) }
+    }
+
     private func installObservers() {
-        NotificationCenter.default.addObserver(
+        let modeObserver = NotificationCenter.default.addObserver(
             forName: .staticImageLibraryModeDidChange, object: nil, queue: .main
         ) { [weak self] n in
             guard let self else { return }
@@ -81,6 +86,7 @@ final class SILToolbarController: NSObject {
                 self.titleUpdateHandler?(title)
             }
         }
+        observerTokens.append(modeObserver)
         SILService.shared.$gridZoomOffset.receive(on: RunLoop.main)
             .sink { [weak self] _ in guard self?.isSILMode == true else { return }; self?.configureZoomItem() }
             .store(in: &cancellables)
@@ -344,7 +350,7 @@ extension SILToolbarController {
     }
     @objc func handleInfo() {
         let service = SILService.shared
-        guard let id = service.selectedID,
+        guard let id = service.singleEffectiveSelectedID,
               service.wallpapers.contains(where: { $0.id == id }) else { return }
         if service.selectedWallpaperForInspector?.id == id {
             service.dismissSelectedWallpaperInspector()
@@ -382,19 +388,41 @@ extension SILToolbarController {
         // 排除「最近使用」，图片库未实际记录 lastUsed
         let visibleModes = SILSortMode.allCases.filter { $0 != .lastUsed }
         for (i, mode) in visibleModes.enumerated() {
-            let mi = NSMenuItem(title: mode.displayName, action: #selector(handleSortMode(_:)), keyEquivalent: "")
-            mi.target = self; mi.tag = i; mi.state = svc.sortState.mode == mode ? .on : .off
-            menu.addItem(mi)
+            menu.addItem(
+                makeSortMenuItem(
+                    title: mode.displayName,
+                    action: #selector(handleSortMode(_:)),
+                    tag: i,
+                    state: svc.sortState.mode == mode ? .on : .off
+                )
+            )
         }
         menu.addItem(.separator())
         [("升序", 1), ("降序", 0)].forEach { title, tag in
-            let mi = NSMenuItem(title: title, action: #selector(handleSortDir(_:)), keyEquivalent: "")
-            mi.target = self; mi.tag = tag
-            mi.state = (tag == 1) == svc.sortState.ascending ? .on : .off; menu.addItem(mi)
+            menu.addItem(
+                makeSortMenuItem(
+                    title: title,
+                    action: #selector(handleSortDir(_:)),
+                    tag: tag,
+                    state: (tag == 1) == svc.sortState.ascending ? .on : .off
+                )
+            )
         }
         let buttonBounds = sender.convert(sender.bounds, to: nil)
         let screenRect = sender.window?.convertToScreen(buttonBounds) ?? .zero
         menu.popUp(positioning: nil, at: NSPoint(x: screenRect.minX, y: screenRect.minY), in: nil)
+    }
+    private func makeSortMenuItem(
+        title: String,
+        action: Selector,
+        tag: Int,
+        state: NSControl.StateValue
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.tag = tag
+        item.state = state
+        return item
     }
     @objc private func handleSortMode(_ sender: NSMenuItem) {
         let visibleModes = SILSortMode.allCases.filter { $0 != .lastUsed }

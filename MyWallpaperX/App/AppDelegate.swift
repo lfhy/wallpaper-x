@@ -33,6 +33,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
  }
  }
 
+ if normalizedMenuTitle(menuItem) == "查看文件" || normalizedMenuTitle(menuItem) == "刷新" {
+ menuItem.title = MainWindowCoordinator.revealInFinderMenuTitle
+ return MainWindowCoordinator.canRevealInFinder
+ }
+
  switch normalizedMenuTitle(menuItem) {
  case "设为当前壁纸", "切换下一张", "切换上一张", "收藏/取消收藏":
  return MainWindowCoordinator.canUseVideoLibraryOnlyCommands
@@ -54,9 +59,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
  case "预览":
  return MainWindowCoordinator.canPreview
-
- case "查看文件":
- return MainWindowCoordinator.canRevealInFinder
 
  default:
  return true

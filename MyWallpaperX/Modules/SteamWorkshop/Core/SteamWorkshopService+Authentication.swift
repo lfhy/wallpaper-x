@@ -601,10 +601,7 @@ extension SteamWorkshopService {
         pendingDownloadRequest = nil
         if let pendingDownload {
             DispatchQueue.main.async {
-                SteamWorkshopService.shared.downloadWorkshopItem(
-                    id: pendingDownload.id,
-                    pageTitle: pendingDownload.pageTitle
-                )
+                SteamWorkshopService.shared.startDownloadRequest(pendingDownload)
             }
         }
     }
@@ -676,6 +673,7 @@ extension SteamWorkshopService {
         if fileManager.fileExists(atPath: steamAuthDebugLogURL.path),
            let handle = try? FileHandle(forWritingTo: steamAuthDebugLogURL) {
             defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: data)
         } else {
             try? data.write(to: steamAuthDebugLogURL, options: [.atomic])

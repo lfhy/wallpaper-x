@@ -136,6 +136,7 @@ final class SILGridContainerView: NSView, ModuleFocusable {
     private var restingScrollOrigin: NSPoint?
     private var isScrollToTopAnimating = false
     private var scrollToTopObserver: NSObjectProtocol?
+    private var moduleFocusObserver: NSObjectProtocol?
     private var missingPathTimer: DispatchSourceTimer?
 
     // MARK: - Init
@@ -152,6 +153,7 @@ final class SILGridContainerView: NSView, ModuleFocusable {
 
     deinit {
         scrollToTopObserver.map { NotificationCenter.default.removeObserver($0) }
+        moduleFocusObserver.map { NotificationCenter.default.removeObserver($0) }
         missingPathTimer?.cancel()
     }
 
@@ -162,7 +164,7 @@ final class SILGridContainerView: NSView, ModuleFocusable {
     }
 
     private func observeModuleFocusRequests() {
-        NotificationCenter.default.addObserver(
+        moduleFocusObserver = NotificationCenter.default.addObserver(
             forName: .moduleDidBecomeActive,
             object: nil,
             queue: .main
@@ -441,53 +443,95 @@ extension SILGridContainerView {
                 if !SILService.shared.selectedIDs.contains(id) { SILService.shared.replaceMultiSelection(with: [id]) }
             } else { SILService.shared.setSingleSelection(id) }
         }
-        guard let id = SILService.shared.selectedID ?? SILService.shared.selectedIDs.first,
+        guard let id = SILService.shared.singleEffectiveSelectedID ?? SILService.shared.selectedIDs.first,
               wallpapersByID[id] != nil else { return nil }
         let svc = SILService.shared
         let menu = NSMenu(title: "SILMenu")
         menu.autoenablesItems = false
+        let singleSelectionEnabled = svc.singleEffectiveSelectedID != nil
 
-        let ql = NSMenuItem(title: "快速预览", action: #selector(ctxQuickLook), keyEquivalent: "")
-        ql.target = self; ql.isEnabled = svc.selectedIDs.isEmpty || svc.selectedIDs.count == 1
-        ql.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "快速预览")
-        menu.addItem(ql)
-
-        menu.addItem(.separator())
-
-        let reveal = NSMenuItem(title: "查看文件", action: #selector(ctxReveal), keyEquivalent: "")
-        reveal.target = self; reveal.isEnabled = svc.selectedIDs.isEmpty || svc.selectedIDs.count == 1
-        reveal.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "查看文件")
-        menu.addItem(reveal)
-
-        let info = NSMenuItem(title: "详细信息", action: #selector(ctxInfo), keyEquivalent: "")
-        info.target = self; info.isEnabled = svc.selectedIDs.isEmpty || svc.selectedIDs.count == 1
-        info.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "详细信息")
-        menu.addItem(info)
-
-        let tagMenuItem = NSMenuItem(title: "添加标签", action: #selector(ctxAddTag), keyEquivalent: "")
-        tagMenuItem.target = self; tagMenuItem.isEnabled = !svc.silTags.isEmpty
-        tagMenuItem.image = NSImage(systemSymbolName: "tag", accessibilityDescription: "添加标签")
-        menu.addItem(tagMenuItem)
+        menu.addItem(
+            makeMenuItem(
+                title: "快速预览",
+                symbolName: "eye",
+                accessibilityDescription: "快速预览",
+                action: #selector(ctxQuickLook),
+                isEnabled: singleSelectionEnabled
+            )
+        )
 
         menu.addItem(.separator())
 
-        let del = NSMenuItem(title: "从列表移除", action: #selector(ctxDelete), keyEquivalent: "")
-        del.target = self; del.isEnabled = true
-        del.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "移除")
-        menu.addItem(del)
+        menu.addItem(
+            makeMenuItem(
+                title: "查看文件",
+                symbolName: "folder",
+                accessibilityDescription: "查看文件",
+                action: #selector(ctxReveal),
+                isEnabled: singleSelectionEnabled
+            )
+        )
+
+        menu.addItem(
+            makeMenuItem(
+                title: "详细信息",
+                symbolName: "info.circle",
+                accessibilityDescription: "详细信息",
+                action: #selector(ctxInfo),
+                isEnabled: singleSelectionEnabled
+            )
+        )
+
+        menu.addItem(
+            makeMenuItem(
+                title: "添加标签",
+                symbolName: "tag",
+                accessibilityDescription: "添加标签",
+                action: #selector(ctxAddTag),
+                isEnabled: !svc.silTags.isEmpty
+            )
+        )
+
+        menu.addItem(.separator())
+
+        menu.addItem(
+            makeMenuItem(
+                title: "从列表移除",
+                symbolName: "trash",
+                accessibilityDescription: "移除",
+                action: #selector(ctxDelete),
+                isEnabled: true
+            )
+        )
 
         return menu
     }
+    private func makeMenuItem(
+        title: String,
+        symbolName: String,
+        accessibilityDescription: String,
+        action: Selector,
+        isEnabled: Bool
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.isEnabled = isEnabled
+        item.image = NSImage(
+            systemSymbolName: symbolName,
+            accessibilityDescription: accessibilityDescription
+        )
+        return item
+    }
     @objc private func ctxQuickLook() {
-        guard let id = SILService.shared.selectedID, let w = wallpapersByID[id] else { return }
+        guard let id = SILService.shared.singleEffectiveSelectedID, let w = wallpapersByID[id] else { return }
         SILQuickLookController.shared.open(url: URL(fileURLWithPath: w.path))
     }
     @objc private func ctxReveal() {
-        guard let id = SILService.shared.selectedID, let w = wallpapersByID[id] else { return }
+        guard let id = SILService.shared.singleEffectiveSelectedID, let w = wallpapersByID[id] else { return }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: w.path)])
     }
     @objc private func ctxInfo() {
-        guard let id = SILService.shared.selectedID, wallpapersByID[id] != nil else { return }
+        guard let id = SILService.shared.singleEffectiveSelectedID, wallpapersByID[id] != nil else { return }
         SILService.shared.presentInspectorForSelectedWallpaper()
     }
     @objc private func ctxAddTag() {

@@ -14,6 +14,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let quickLookPreviewController = QuickLookPreviewController.shared
     /// 当前激活的模块，由 ContentView 通过通知更新，供 performZoom 路由使用
     private var activeModule: ActiveModule = .videoLibrary
+    private var observerTokens: [NSObjectProtocol] = []
 
     enum ActiveModule: Equatable, Sendable {
         case videoLibrary
@@ -62,6 +63,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         nil
     }
 
+    deinit {
+        observerTokens.forEach { NotificationCenter.default.removeObserver($0) }
+    }
+
     override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
         guard let window else { return }
@@ -92,7 +97,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func observeModuleModeChanges() {
-        NotificationCenter.default.addObserver(
+        let staticEnableObserver = NotificationCenter.default.addObserver(
             forName: .staticImageLibraryModeDidChange,
             object: nil,
             queue: .main
@@ -103,7 +108,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                 MainWindowCoordinator.setActiveModule(.staticImageLibrary)
             }
         }
-        NotificationCenter.default.addObserver(
+        observerTokens.append(staticEnableObserver)
+
+        let onlineEnableObserver = NotificationCenter.default.addObserver(
             forName: .onlineLibraryModeDidChange,
             object: nil,
             queue: .main
@@ -114,7 +121,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                 MainWindowCoordinator.setActiveModule(.onlineLibrary)
             }
         }
-        NotificationCenter.default.addObserver(
+        observerTokens.append(onlineEnableObserver)
+
+        let steamEnableObserver = NotificationCenter.default.addObserver(
             forName: .steamWorkshopModeDidChange,
             object: nil,
             queue: .main
@@ -125,9 +134,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                 MainWindowCoordinator.setActiveModule(.steamWorkshop)
             }
         }
+        observerTokens.append(steamEnableObserver)
         // 两个模块都不激活时恢复视频库
         // 同时通知 MainWindowCoordinator 回退，保证菜单路由状态一致。
-        NotificationCenter.default.addObserver(
+        let staticDisableObserver = NotificationCenter.default.addObserver(
             forName: .staticImageLibraryModeDidChange,
             object: nil,
             queue: .main
@@ -139,7 +149,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                 MainWindowCoordinator.clearActiveModuleIfMatches(.staticImageLibrary)
             }
         }
-        NotificationCenter.default.addObserver(
+        observerTokens.append(staticDisableObserver)
+
+        let onlineDisableObserver = NotificationCenter.default.addObserver(
             forName: .onlineLibraryModeDidChange,
             object: nil,
             queue: .main
@@ -151,7 +163,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                 MainWindowCoordinator.clearActiveModuleIfMatches(.onlineLibrary)
             }
         }
-        NotificationCenter.default.addObserver(
+        observerTokens.append(onlineDisableObserver)
+
+        let steamDisableObserver = NotificationCenter.default.addObserver(
             forName: .steamWorkshopModeDidChange,
             object: nil,
             queue: .main
@@ -163,6 +177,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                 MainWindowCoordinator.clearActiveModuleIfMatches(.steamWorkshop)
             }
         }
+        observerTokens.append(steamDisableObserver)
     }
 
     private func configureQuickLookKeyHandling() {
@@ -197,6 +212,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             switch event.keyCode {
             case 49: OnlineDownloadsBridge.shared.previewSelected(); return true
             case 53: OLDownloadsQuickLookController.shared.close(); return true
+            default: return false
+            }
+        }
+
+        if activeModule == .steamWorkshop && SteamWorkshopDownloadsBridge.shared.isActive {
+            switch event.keyCode {
+            case 49: SteamWorkshopDownloadsBridge.shared.previewSelected(); return true
+            case 53: SteamWorkshopDownloadsQuickLookController.shared.close(); return true
             default: return false
             }
         }
@@ -239,6 +262,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             SILQuickLookController.shared.attach(to: panel)
         } else if activeModule == .onlineLibrary && OnlineDownloadsBridge.shared.isActive {
             OLDownloadsQuickLookController.shared.attach(to: panel)
+        } else if activeModule == .steamWorkshop && SteamWorkshopDownloadsBridge.shared.isActive {
+            SteamWorkshopDownloadsQuickLookController.shared.attach(to: panel)
         } else {
             QuickLookPreviewController.shared.attach(to: panel)
         }
@@ -250,6 +275,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             SILQuickLookController.shared.detach(from: panel)
         } else if activeModule == .onlineLibrary && OnlineDownloadsBridge.shared.isActive {
             OLDownloadsQuickLookController.shared.detach(from: panel)
+        } else if activeModule == .steamWorkshop && SteamWorkshopDownloadsBridge.shared.isActive {
+            SteamWorkshopDownloadsQuickLookController.shared.detach(from: panel)
         } else {
             QuickLookPreviewController.shared.detach(from: panel)
         }

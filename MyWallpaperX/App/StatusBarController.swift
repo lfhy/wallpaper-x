@@ -203,7 +203,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     @objc private func openSettings() {
         statusItem?.menu?.cancelTracking()
         DispatchQueue.main.async {
-            MainWindowCoordinator.activateMainWindow(select: .settings)
+            NotificationCenter.default.post(name: .appOpenSettingsRequested, object: nil)
         }
     }
     

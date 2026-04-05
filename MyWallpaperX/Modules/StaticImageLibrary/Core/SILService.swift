@@ -301,6 +301,16 @@ final class SILService: ObservableObject {
         return selectedID != nil
     }
 
+    /// 当前唯一有效选中项。
+    /// 单选模式返回 `selectedID`，多选模式仅在恰好选中一项时返回该项。
+    var singleEffectiveSelectedID: String? {
+        if isMultiSelectMode {
+            guard selectedIDs.count == 1 else { return nil }
+            return selectedIDs.first
+        }
+        return selectedID
+    }
+
     /// 某标签下的壁纸列表
     func wallpapers(forSILTag tag: String) -> [SILWallpaper] {
         wallpapers.filter { $0.tags.contains(tag) }
@@ -416,8 +426,7 @@ final class SILService: ObservableObject {
     }
 
     func presentInspectorForSelectedWallpaper() {
-        guard !isMultiSelectMode,
-              let selectedID,
+        guard let selectedID = singleEffectiveSelectedID,
               wallpapers.contains(where: { $0.id == selectedID }) else {
             return
         }
@@ -430,8 +439,7 @@ final class SILService: ObservableObject {
 
     func syncSelectedWallpaperInspectorIfNeeded() {
         guard inspectedWallpaperID != nil else { return }
-        guard !isMultiSelectMode,
-              let selectedID,
+        guard let selectedID = singleEffectiveSelectedID,
               wallpapers.contains(where: { $0.id == selectedID }) else {
             inspectedWallpaperID = nil
             return

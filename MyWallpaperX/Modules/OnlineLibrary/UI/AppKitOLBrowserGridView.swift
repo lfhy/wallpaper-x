@@ -40,18 +40,12 @@ final class AppKitOLCollectionView: NSCollectionView {
     override func mouseUp(with event: NSEvent) {
         super.mouseUp(with: event)
         guard event.type == .leftMouseUp, let pressedCardIndexPath else { return }
-        let elapsed = ProcessInfo.processInfo.systemUptime - pressedCardTimestamp
-        let remaining = max(0, UIInteractionAnimation.minimumPressVisualDuration - elapsed)
-        let releaseWork = DispatchWorkItem { [weak self] in
+        pendingPressReleaseWorkItem = OnlineLibraryCollectionInteractionSupport.schedulePressRelease(
+            pressedAt: pressedCardTimestamp
+        ) { [weak self] in
             guard let self else { return }
             self.cardPressStateHandler?(pressedCardIndexPath, false)
             self.pressedCardIndexPath = nil
-        }
-        pendingPressReleaseWorkItem = releaseWork
-        if remaining <= 0 {
-            releaseWork.perform()
-        } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + remaining, execute: releaseWork)
         }
     }
 }
@@ -78,6 +72,9 @@ struct AppKitOLBrowserGridView: NSViewRepresentable {
 
 final class AppKitOLBrowserContainerView: NSView, ModuleFocusable {
     private enum Section { case main }
+    private enum Constants {
+        static let loadMoreThreshold: CGFloat = 240
+    }
 
     private let service: OnlineLibraryService
     var onDownload:       (OnlineLibraryVideoItem) -> Void
@@ -207,7 +204,10 @@ final class AppKitOLBrowserContainerView: NSView, ModuleFocusable {
             object: scrollView.contentView
         )
         .receive(on: DispatchQueue.main)
-        .sink { [weak self] _ in self?.checkLoadMore() }
+        .sink { [weak self] _ in
+            self?.updateVisibleThumbnailPriorities()
+            self?.checkLoadMore()
+        }
         .store(in: &cancellables)
 
         // ModuleFocusable：监听模块激活通知，自动接管焦点
@@ -243,6 +243,7 @@ final class AppKitOLBrowserContainerView: NSView, ModuleFocusable {
         let animated = lastLoadedCount != 0 && items.count > lastLoadedCount
         lastLoadedCount = items.count
         dataSource.apply(snap, animatingDifferences: animated)
+        updateVisibleThumbnailPriorities()
     }
 
     private func reloadVisibleItems() {
@@ -282,10 +283,25 @@ final class AppKitOLBrowserContainerView: NSView, ModuleFocusable {
         let contentH  = docView.frame.height
         let viewportH = scrollView.contentView.bounds.height
         let offsetY   = scrollView.contentView.bounds.origin.y
-        // 距底部 80pt 时触发
-        if contentH - offsetY - viewportH < 80 {
+        // 稍早一点触发翻页，降低到底部时的感知缝隙。
+        if contentH - offsetY - viewportH < Constants.loadMoreThreshold {
             service.loadNextPage()
         }
+    }
+
+    private func updateVisibleThumbnailPriorities() {
+        let visibleIDs = collectionView.indexPathsForVisibleItems()
+            .sorted { lhs, rhs in
+                if lhs.section == rhs.section {
+                    return lhs.item < rhs.item
+                }
+                return lhs.section < rhs.section
+            }
+            .compactMap { indexPath -> Int? in
+                guard indexPath.item < orderedIDs.count else { return nil }
+                return orderedIDs[indexPath.item]
+            }
+        service.prioritizeVisibleItemIDs(visibleIDs)
     }
 
     // MARK: - Layout
@@ -296,23 +312,15 @@ final class AppKitOLBrowserContainerView: NSView, ModuleFocusable {
     }
 
     private func updateLayoutItemSize() {
-        let inset = flowLayout.sectionInset
-        let available = max(0, bounds.width - inset.left - inset.right)
-        let cols = GridLayoutHelper.columnCount(
-            for: available,
+        let metrics = OnlineLibraryGridLayoutSupport.metrics(
+            boundsWidth: bounds.width,
             zoomOffset: service.zoomOffset,
-            minCols: 3, maxCols: 6
+            hoverScale: 1.05,
+            sectionInset: flowLayout.sectionInset
         )
-        let hoverScale: CGFloat = 1.05
-        let estimatedW = max(100, (available - flowLayout.minimumInteritemSpacing * CGFloat(max(0, cols - 1))) / CGFloat(cols))
-        let minSpacing = estimatedW * (hoverScale - 1.0)
-        let spacing = max(8, minSpacing)
-        flowLayout.minimumInteritemSpacing = spacing
-        flowLayout.minimumLineSpacing = spacing
-        let totalSpacing = CGFloat(max(0, cols - 1)) * spacing
-        let cardW = max(100, (available - totalSpacing) / CGFloat(cols))
-        let cardH = max(56, cardW / (16.0 / 9.0))
-        let newSize = NSSize(width: floor(cardW), height: floor(cardH + 2))
+        flowLayout.minimumInteritemSpacing = metrics.interitemSpacing
+        flowLayout.minimumLineSpacing = metrics.lineSpacing
+        let newSize = metrics.itemSize
         guard flowLayout.itemSize != newSize else { return }
         flowLayout.itemSize = newSize
         // 布局变化与悬停视觉同步生效，避免渐变层在缩放期间出现跟随滞后。

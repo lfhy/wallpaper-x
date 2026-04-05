@@ -23,6 +23,7 @@ extension Notification.Name {
     static let appKitRequestScrollToTopForCurrentSelection = Notification.Name("AppKitRequestScrollToTopForCurrentSelection")
     static let appKitLibraryGridScrollToTopAnimationWillStart = Notification.Name("AppKitLibraryGridScrollToTopAnimationWillStart")
     static let appKitLibraryGridScrollToTopAnimationDidEnd = Notification.Name("AppKitLibraryGridScrollToTopAnimationDidEnd")
+    static let appOpenSettingsRequested = Notification.Name("AppOpenSettingsRequested")
     /// 在线图库模式切换通知，由 DetailView 发出，OnlineLibrary 模块接收
     static let onlineLibraryModeDidChange = Notification.Name("OnlineLibraryModeDidChange")
     /// 在线库视频下载完成，携带 userInfo["localURL": URL]，由 MainWindowCoordinator 中转给视频库静默导入并播放
@@ -58,8 +59,6 @@ struct DetailView: View {
                 StaticImageLibraryEntryView()
             } else if case .silTag(let tag) = selectedItem {
                 StaticImageLibraryEntryView(silTag: tag)
-            } else if selection.isSettings {
-                AppKitSettingsView()
             } else {
                 VideoLibraryEntryView(
                     wallpapers: wallpaperManager.sortedWallpapers(

@@ -34,48 +34,89 @@ extension AppKitLibraryGridContainerView {
         let menu = NSMenu(title: "WallpaperMenu")
         menu.autoenablesItems = false
 
-        let setItem = NSMenuItem(title: "设为壁纸", action: #selector(handleContextSetAsWallpaper(_:)), keyEquivalent: "")
-        setItem.target = self
-        setItem.isEnabled = wallpaperManager.hasSingleWallpaperSelection
-        setItem.image = NSImage(systemSymbolName: "play.circle", accessibilityDescription: "设为壁纸")
-        menu.addItem(setItem)
+        menu.addItem(
+            makeContextMenuItem(
+                title: "设为壁纸",
+                symbolName: "play.circle",
+                accessibilityDescription: "设为壁纸",
+                action: #selector(handleContextSetAsWallpaper(_:)),
+                isEnabled: wallpaperManager.hasSingleWallpaperSelection
+            )
+        )
 
         // 收藏状态互斥：已全部收藏则显示"取消收藏"，否则显示"收藏壁纸"。
         let allFavorited = wallpaperManager.areAllSelectedWallpapersFavorite(for: selection)
         let favoriteTitle = allFavorited ? "取消收藏" : "收藏壁纸"
         let favoriteSymbol = allFavorited ? "heart.slash" : "heart"
-        let favoriteItem = NSMenuItem(title: favoriteTitle, action: #selector(handleContextToggleFavorite(_:)), keyEquivalent: "")
-        favoriteItem.target = self
-        favoriteItem.isEnabled = true
-        favoriteItem.image = NSImage(systemSymbolName: favoriteSymbol, accessibilityDescription: favoriteTitle)
-        menu.addItem(favoriteItem)
+        menu.addItem(
+            makeContextMenuItem(
+                title: favoriteTitle,
+                symbolName: favoriteSymbol,
+                accessibilityDescription: favoriteTitle,
+                action: #selector(handleContextToggleFavorite(_:)),
+                isEnabled: true
+            )
+        )
 
-        let tagItem = NSMenuItem(title: "添加标签", action: #selector(handleContextAddTag(_:)), keyEquivalent: "")
-        tagItem.target = self
-        tagItem.isEnabled = !wallpaperManager.tags.isEmpty
-        tagItem.image = NSImage(systemSymbolName: "tag", accessibilityDescription: "添加标签")
-        menu.addItem(tagItem)
+        menu.addItem(
+            makeContextMenuItem(
+                title: "添加标签",
+                symbolName: "tag",
+                accessibilityDescription: "添加标签",
+                action: #selector(handleContextAddTag(_:)),
+                isEnabled: !wallpaperManager.tags.isEmpty
+            )
+        )
 
-        let infoItem = NSMenuItem(title: "详细信息", action: #selector(handleContextShowInfo(_:)), keyEquivalent: "")
-        infoItem.target = self
-        infoItem.isEnabled = wallpaperManager.hasSingleWallpaperSelection
-        infoItem.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "详细信息")
-        menu.addItem(infoItem)
+        menu.addItem(
+            makeContextMenuItem(
+                title: "详细信息",
+                symbolName: "info.circle",
+                accessibilityDescription: "详细信息",
+                action: #selector(handleContextShowInfo(_:)),
+                isEnabled: wallpaperManager.hasSingleWallpaperSelection
+            )
+        )
 
-        let revealItem = NSMenuItem(title: "查看文件", action: #selector(handleContextRevealInFinder(_:)), keyEquivalent: "")
-        revealItem.target = self
-        revealItem.isEnabled = wallpaperManager.hasSingleWallpaperSelection
-        revealItem.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "查看文件")
-        menu.addItem(revealItem)
+        menu.addItem(
+            makeContextMenuItem(
+                title: "查看文件",
+                symbolName: "folder",
+                accessibilityDescription: "查看文件",
+                action: #selector(handleContextRevealInFinder(_:)),
+                isEnabled: wallpaperManager.hasSingleWallpaperSelection
+            )
+        )
 
         menu.addItem(.separator())
 
-        let deleteItem = NSMenuItem(title: "删除", action: #selector(handleContextDelete(_:)), keyEquivalent: "")
-        deleteItem.target = self
-        deleteItem.isEnabled = selection.deletionScope != nil
-        deleteItem.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "删除")
-        menu.addItem(deleteItem)
+        menu.addItem(
+            makeContextMenuItem(
+                title: "删除",
+                symbolName: "trash",
+                accessibilityDescription: "删除",
+                action: #selector(handleContextDelete(_:)),
+                isEnabled: selection.deletionScope != nil
+            )
+        )
         return menu
+    }
+
+    private func makeContextMenuItem(
+        title: String,
+        symbolName: String,
+        accessibilityDescription: String,
+        action: Selector,
+        isEnabled: Bool
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.isEnabled = isEnabled
+        item.image = NSImage(
+            systemSymbolName: symbolName,
+            accessibilityDescription: accessibilityDescription
+        )
+        return item
     }
 
     @objc func handleContextSetAsWallpaper(_ sender: Any?) {

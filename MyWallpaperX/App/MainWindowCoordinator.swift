@@ -10,6 +10,7 @@ enum MainWindowCoordinator {
     private static var mainWindowController: MainWindowController?
     private static var wallpaperManager: WallpaperManager = .shared
     private static var isSteamDownloadsMode = false
+    private static var observerTokens: [NSObjectProtocol] = []
 
     // MARK: - 当前激活模块
 
@@ -49,7 +50,7 @@ enum MainWindowCoordinator {
  }
 
  /// 「全选」菜单项是否可用
- static var canSelectAll: Bool {
+    static var canSelectAll: Bool {
  switch activeModule {
  case .videoLibrary, .staticImageLibrary:
  return true
@@ -57,6 +58,15 @@ enum MainWindowCoordinator {
  return OnlineDownloadsBridge.shared.isActive && OnlineDownloadsBridge.shared.isMultiSelectMode
  case .steamWorkshop:
  return isSteamDownloadsMode && SteamWorkshopService.shared.canSelectAllDownloads
+ }
+ }
+
+ static var revealInFinderMenuTitle: String {
+ switch activeModule {
+ case .onlineLibrary:
+ return OnlineDownloadsBridge.shared.isActive ? "查看文件" : "刷新"
+ default:
+ return "查看文件"
  }
  }
 
@@ -330,7 +340,6 @@ enum MainWindowCoordinator {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: wallpaper.path)])
             }
         case .onlineLibrary:
-            // 区分子页面：已下载项对齐视频库行为（在访达中显示），浏览页执行在线刷新
             if OnlineDownloadsBridge.shared.isActive {
                 OnlineDownloadsBridge.shared.revealInFinder()
             } else {
@@ -370,7 +379,7 @@ enum MainWindowCoordinator {
         case .onlineLibrary:
             return OnlineDownloadsBridge.shared.isActive && OnlineDownloadsBridge.shared.hasAnySelection
         case .steamWorkshop:
-            return false
+            return SteamWorkshopDownloadsBridge.shared.isActive && SteamWorkshopDownloadsBridge.shared.hasPreviewableSelection
         }
     }
 
@@ -391,11 +400,14 @@ enum MainWindowCoordinator {
             _ = SILKeyboardHandler.shared.handleSpace()
         } else if module == .onlineLibrary && OnlineDownloadsBridge.shared.isActive {
             OnlineDownloadsBridge.shared.previewSelected()
+        } else if module == .steamWorkshop && SteamWorkshopDownloadsBridge.shared.isActive {
+            SteamWorkshopDownloadsBridge.shared.previewSelected()
         }
     }
 
     static func configure(with wallpaperManager: WallpaperManager) {
         self.wallpaperManager = wallpaperManager
+        guard observerTokens.isEmpty else { return }
         observeOnlineVideoReadyToPlay()
         observeSteamWorkshopVideoReadyToPlay()
         observeSteamWorkshopModeChanges()
@@ -404,7 +416,7 @@ enum MainWindowCoordinator {
     /// 监听在线库下载完成通知，中转给视频库执行静默导入并播放。
     /// 在线库模块自身不依赖 WallpaperManager，通过此中转保持模块间零耦合。
     private static func observeOnlineVideoReadyToPlay() {
-        NotificationCenter.default.addObserver(
+        let observer = NotificationCenter.default.addObserver(
             forName: .onlineVideoReadyToPlay,
             object: nil,
             queue: .main
@@ -416,11 +428,12 @@ enum MainWindowCoordinator {
                 context: .onlinePlayback
             )
         }
+        observerTokens.append(observer)
     }
 
     /// 监听 Steam 下载页发出的本地视频播放请求，中转给视频库静默导入并播放。
     private static func observeSteamWorkshopVideoReadyToPlay() {
-        NotificationCenter.default.addObserver(
+        let observer = NotificationCenter.default.addObserver(
             forName: .steamWorkshopVideoReadyToPlay,
             object: nil,
             queue: .main
@@ -432,11 +445,12 @@ enum MainWindowCoordinator {
                 context: .steamPlayback
             )
         }
+        observerTokens.append(observer)
     }
 
     /// 监听 Steam 浏览/下载子页面切换，保证主菜单分发与当前工具栏语义一致。
     private static func observeSteamWorkshopModeChanges() {
-        NotificationCenter.default.addObserver(
+        let observer = NotificationCenter.default.addObserver(
             forName: .steamWorkshopModeDidChange,
             object: nil,
             queue: .main
@@ -445,6 +459,7 @@ enum MainWindowCoordinator {
             let isDownloads = notification.userInfo?["isDownloads"] as? Bool ?? false
             isSteamDownloadsMode = enabled && isDownloads
         }
+        observerTokens.append(observer)
     }
 
     static func mainWindow() -> NSWindow? {
@@ -457,6 +472,11 @@ enum MainWindowCoordinator {
     }
 
     static func activateMainWindow(select category: Category? = nil) {
+        if category == .settings {
+            NotificationCenter.default.post(name: .appOpenSettingsRequested, object: nil)
+            return
+        }
+
         if let category {
             wallpaperManager.selectCategory(category)
         }

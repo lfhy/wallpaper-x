@@ -66,6 +66,7 @@ final class AppKitLibraryGridContainerView: NSView, ModuleFocusable {
     private var lastObservedPlayingNormalizedPath: String?
     private var lastObservedSelectedIDs = Set<String>()
     private var scrollToTopObserver: NSObjectProtocol?
+    private var moduleFocusObserver: NSObjectProtocol?
     private var isScrollToTopAnimating = false
     private var restingScrollOrigin: NSPoint?
 
@@ -169,6 +170,9 @@ final class AppKitLibraryGridContainerView: NSView, ModuleFocusable {
         if let scrollToTopObserver {
             NotificationCenter.default.removeObserver(scrollToTopObserver)
         }
+        if let moduleFocusObserver {
+            NotificationCenter.default.removeObserver(moduleFocusObserver)
+        }
         viewportPrefetchWorkItem?.cancel()
         missingPathProbeTimer?.cancel()
         missingPathProbeTimer = nil
@@ -182,7 +186,7 @@ final class AppKitLibraryGridContainerView: NSView, ModuleFocusable {
     }
 
     private func observeModuleFocusRequests() {
-        NotificationCenter.default.addObserver(
+        moduleFocusObserver = NotificationCenter.default.addObserver(
             forName: .moduleDidBecomeActive,
             object: nil,
             queue: .main

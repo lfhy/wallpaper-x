@@ -131,6 +131,53 @@ final class ThumbnailCache {
         }
     }
 
+    /// 异步加载原始图片数据并保留其编码格式。
+    /// 适合网络资源，避免在缓存队列里同步等待请求返回。
+    func loadImageDataAsync(
+        forKey key: String,
+        loader: @escaping @Sendable () async -> Data?,
+        completion: @escaping (NSImage?) -> Void
+    ) {
+        let cacheKey = key as NSString
+        if let cached = imageCache.object(forKey: cacheKey) {
+            completion(cached)
+            return
+        }
+
+        lock.lock()
+        if inFlight[key] != nil {
+            inFlight[key]?.append(completion)
+            lock.unlock()
+            return
+        }
+        inFlight[key] = [completion]
+        lock.unlock()
+
+        decodeQueue.async { [weak self] in
+            guard let self else { return }
+            let diskURL = Self.diskCacheURL(for: key)
+            if let data = try? Data(contentsOf: diskURL),
+               let image = NSImage(data: data) {
+                self.imageCache.setObject(image, forKey: cacheKey)
+                self.finish(key: key, image: image)
+                return
+            }
+
+            Task { [weak self] in
+                guard let self else { return }
+                guard let data = await loader(),
+                      let image = NSImage(data: data) else {
+                    self.finish(key: key, image: nil)
+                    return
+                }
+
+                self.imageCache.setObject(image, forKey: cacheKey)
+                try? data.write(to: diskURL, options: .atomic)
+                self.finish(key: key, image: image)
+            }
+        }
+    }
+
     /// 预取：触发后台加载但不注册回调。
     func prefetch(forKey key: String, loader: @escaping () -> NSImage?) {
         let cacheKey = key as NSString
@@ -191,6 +238,46 @@ final class ThumbnailCache {
             }
             try? data.write(to: diskURL, options: .atomic)
             self.finish(key: key, image: image)
+        }
+    }
+
+    /// 异步预取原始图片数据并保留原编码格式。
+    func prefetchImageDataAsync(
+        forKey key: String,
+        loader: @escaping @Sendable () async -> Data?
+    ) {
+        let cacheKey = key as NSString
+        guard imageCache.object(forKey: cacheKey) == nil else { return }
+
+        lock.lock()
+        guard inFlight[key] == nil else { lock.unlock(); return }
+        inFlight[key] = []
+        lock.unlock()
+
+        decodeQueue.async { [weak self] in
+            guard let self else { return }
+            let diskURL = Self.diskCacheURL(for: key)
+            if let data = try? Data(contentsOf: diskURL),
+               let image = NSImage(data: data) {
+                self.imageCache.setObject(image, forKey: cacheKey)
+                self.finish(key: key, image: image)
+                return
+            }
+
+            Task { [weak self] in
+                guard let self else { return }
+                guard let data = await loader() else {
+                    self.finish(key: key, image: nil)
+                    return
+                }
+
+                let image = NSImage(data: data)
+                if let image {
+                    self.imageCache.setObject(image, forKey: cacheKey)
+                }
+                try? data.write(to: diskURL, options: .atomic)
+                self.finish(key: key, image: image)
+            }
         }
     }
 

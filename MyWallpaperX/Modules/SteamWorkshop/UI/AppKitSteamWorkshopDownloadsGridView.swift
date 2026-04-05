@@ -6,6 +6,88 @@
 import AppKit
 import SwiftUI
 import Combine
+import QuickLook
+import QuickLookUI
+
+final class SteamWorkshopDownloadsBridge {
+    static let shared = SteamWorkshopDownloadsBridge()
+    weak var container: AppKitSteamWorkshopDownloadsContainerView?
+    var isActive: Bool = false
+
+    func previewSelected() { container?.previewSelected() }
+    func moveSelectionByArrowKey(_ keyCode: UInt16) { container?.moveSelectionByArrowKey(keyCode) }
+
+    var hasPreviewableSelection: Bool {
+        container?.hasPreviewableSelection ?? false
+    }
+}
+
+final class SteamWorkshopDownloadsQuickLookController: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate {
+    static let shared = SteamWorkshopDownloadsQuickLookController()
+
+    private var previewURL: URL?
+    private var refreshPreview: (() -> URL?)?
+
+    func open(previewURL: URL, refreshPreview: @escaping () -> URL?) {
+        self.previewURL = previewURL
+        self.refreshPreview = refreshPreview
+        guard let panel = QLPreviewPanel.shared() else { return }
+        panel.dataSource = self
+        panel.delegate = self
+        panel.reloadData()
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    func attach(to panel: QLPreviewPanel) {
+        panel.dataSource = self
+        panel.delegate = self
+    }
+
+    func detach(from panel: QLPreviewPanel) {
+        if panel.dataSource === self {
+            panel.dataSource = nil
+        }
+        if panel.delegate === self {
+            panel.delegate = nil
+        }
+    }
+
+    func close() {
+        QLPreviewPanel.shared()?.orderOut(nil)
+    }
+
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+        previewURL == nil ? 0 : 1
+    }
+
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
+        previewURL as NSURL?
+    }
+
+    func previewPanel(_ panel: QLPreviewPanel!, handle event: NSEvent!) -> Bool {
+        guard let event, event.type == .keyDown else { return false }
+        let disallowed: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+        guard event.modifierFlags.intersection(disallowed).isEmpty else { return false }
+
+        switch event.keyCode {
+        case 49:
+            close()
+            return true
+        case 123, 124, 125, 126:
+            SteamWorkshopDownloadsBridge.shared.moveSelectionByArrowKey(event.keyCode)
+            if let nextURL = refreshPreview?() {
+                previewURL = nextURL
+                panel.reloadData()
+            }
+            return true
+        case 53:
+            close()
+            return true
+        default:
+            return false
+        }
+    }
+}
 
 struct AppKitSteamWorkshopDownloadsGridView: NSViewRepresentable {
     @ObservedObject var service: SteamWorkshopService
@@ -91,11 +173,7 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
     }()
 
     private lazy var flowLayout: NSCollectionViewFlowLayout = {
-        let l = NSCollectionViewFlowLayout()
-        l.minimumInteritemSpacing = 8
-        l.minimumLineSpacing = 8
-        l.sectionInset = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
-        return l
+        SteamWorkshopGridLayoutSupport.makeFlowLayout()
     }()
 
     private lazy var dataSource: NSCollectionViewDiffableDataSource<Section, String> = {
@@ -137,12 +215,22 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
         window?.makeFirstResponder(collectionView)
     }
 
+    var hasPreviewableSelection: Bool {
+        !service.isDownloadsMultiSelectMode && (service.selectedDownloadRecord?.isPlayable ?? false)
+    }
+
     override func layout() {
         super.layout()
         updateLayoutItemSize()
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        SteamWorkshopDownloadsBridge.shared.isActive = (window != nil)
+    }
+
     private func setup() {
+        SteamWorkshopDownloadsBridge.shared.container = self
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
 
@@ -164,11 +252,10 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
             emptyLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
 
-        service.$downloads
-            .combineLatest(service.$downloadsQuery)
+        service.$displayedDownloads
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _, _ in
-                self?.applyRecords(self?.service.filteredDownloads ?? [])
+            .sink { [weak self] records in
+                self?.applyRecords(records)
                 self?.refreshVisibleDownloadItems()
             }
             .store(in: &cancellables)
@@ -206,17 +293,6 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
             }
             .store(in: &cancellables)
 
-        Publishers.CombineLatest(
-            service.$downloadsSortMode,
-            service.$downloadsSortAscending
-        )
-        .receive(on: DispatchQueue.main)
-        .sink { [weak self] _, _ in
-            self?.applyRecords(self?.service.filteredDownloads ?? [])
-            self?.refreshVisibleDownloadItems()
-        }
-        .store(in: &cancellables)
-
         moduleActivationObserver = NotificationCenter.default.addObserver(
             forName: .moduleDidBecomeActive,
             object: nil,
@@ -227,7 +303,7 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
             self?.requestFocus()
         }
 
-        applyRecords(service.filteredDownloads)
+        applyRecords(service.displayedDownloads)
     }
 
     private func applyRecords(_ records: [SteamWorkshopDownloadRecord]) {
@@ -249,7 +325,7 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
     }
 
     private func configureDownloadItem(_ item: AppKitSteamWorkshopBrowserItem, for record: SteamWorkshopDownloadRecord) {
-        let displayItem = record.displayItem ?? fallbackDisplayItem(for: record)
+        let displayItem = record.displayItem ?? SteamWorkshopDownloadGridSupport.fallbackDisplayItem(for: record)
         item.configure(
             displayContext: .downloads,
             item: displayItem,
@@ -266,18 +342,11 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
             },
             onDownload: { [weak self] in
                 guard let self else { return }
-                switch record.status {
-                case .ready:
-                    if record.isPlayable {
-                        self.onSetAsWallpaper(record)
-                    }
-                case .failed:
-                    self.service.downloadWorkshopItem(id: record.id, pageTitle: record.title)
-                case .queued:
-                    self.service.cancelDownload(itemID: record.id)
-                case .downloading:
-                    self.service.cancelDownload(itemID: record.id)
-                }
+                SteamWorkshopDownloadGridSupport.performPrimaryAction(
+                    for: record,
+                    service: self.service,
+                    onSetAsWallpaper: self.onSetAsWallpaper
+                )
             },
             onSetAsWallpaper: { [weak self] in self?.onSetAsWallpaper(record) },
             onCancelDownload: { [weak self] in self?.service.cancelDownload(itemID: record.id) }
@@ -296,59 +365,17 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
         }
     }
 
-    private func fallbackDisplayItem(for record: SteamWorkshopDownloadRecord) -> SteamWorkshopBrowserItem {
-        SteamWorkshopBrowserItem(
-            id: record.id,
-            title: record.title,
-            author: "未知作者",
-            authorProfileURL: nil,
-            authorWorkshopURL: nil,
-            hasAdultContent: false,
-            summary: record.description,
-            descriptionText: record.description,
-            tags: record.tags,
-            workshopTypeText: "Video",
-            ageRatingText: nil,
-            genreText: nil,
-            categoryText: "Wallpaper",
-            previewImageURL: record.previewURL,
-            previewVideoURL: nil,
-            previewAssetKind: .stillImage,
-            fileSizeText: record.sizeText,
-            resolutionText: nil,
-            postedText: nil,
-            updatedText: nil,
-            favoritesText: nil,
-            subscriptionsText: nil,
-            scoreText: nil,
-            lifetimeFavoritesText: nil,
-            lifetimeSubscriptionsText: nil,
-            visibilityText: nil,
-            moderationText: nil,
-            detailFields: [],
-            detailURL: SteamWorkshopService.makeDetailURL(id: record.id)
-        )
-    }
-
     private func updateLayoutItemSize() {
-        let inset = flowLayout.sectionInset
-        let availableWidth = max(0, bounds.width - inset.left - inset.right)
-        let columns = GridLayoutHelper.columnCount(
-            for: availableWidth,
-            zoomOffset: service.zoomOffset
+        let metrics = SteamWorkshopGridLayoutSupport.metrics(
+            boundsWidth: bounds.width,
+            zoomOffset: service.zoomOffset,
+            hoverScale: AppKitSteamWorkshopBrowserItem.hoverScale,
+            sectionInset: flowLayout.sectionInset
         )
-        currentColumnCount = max(1, columns)
-        let hoverScale: CGFloat = AppKitSteamWorkshopBrowserItem.hoverScale
-        let baseSpacing: CGFloat = 8
-        let estimatedWidth = max(100, (availableWidth - baseSpacing * CGFloat(max(0, columns - 1))) / CGFloat(columns))
-        let minSpacing = estimatedWidth * (hoverScale - 1.0)
-        let spacing = max(baseSpacing, minSpacing)
-        let verticalSpacing = spacing + 2
-        flowLayout.minimumInteritemSpacing = spacing
-        flowLayout.minimumLineSpacing = verticalSpacing
-        let totalSpacing = CGFloat(max(0, columns - 1)) * spacing
-        let cardWidth = max(100, (availableWidth - totalSpacing) / CGFloat(columns))
-        let newSize = NSSize(width: floor(cardWidth), height: floor(cardWidth))
+        currentColumnCount = metrics.columns
+        flowLayout.minimumInteritemSpacing = metrics.interitemSpacing
+        flowLayout.minimumLineSpacing = metrics.lineSpacing
+        let newSize = metrics.itemSize
         guard flowLayout.itemSize != newSize else { return }
         flowLayout.itemSize = newSize
         collectionView.collectionViewLayout?.invalidateLayout()
@@ -401,19 +428,40 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
     private func handleReturnKey() -> Bool {
         guard let id = keyboardFocusedID,
               let record = recordsByID[id] else { return false }
-        switch record.status {
-        case .ready:
-            if record.isPlayable {
-                onSetAsWallpaper(record)
-            }
-        case .failed:
-            service.downloadWorkshopItem(id: record.id, pageTitle: record.title)
-        case .queued:
-            service.cancelDownload(itemID: record.id)
-        case .downloading:
-            service.cancelDownload(itemID: record.id)
-        }
+        SteamWorkshopDownloadGridSupport.performPrimaryAction(
+            for: record,
+            service: service,
+            onSetAsWallpaper: onSetAsWallpaper
+        )
         return true
+    }
+
+    private func handleArrowKey(_ keyCode: UInt16) -> Bool {
+        switch keyCode {
+        case 123:
+            return moveFocus(delta: -1)
+        case 124:
+            return moveFocus(delta: 1)
+        case 126:
+            return moveFocus(delta: -currentColumnCount)
+        case 125:
+            return moveFocus(delta: currentColumnCount)
+        default:
+            return false
+        }
+    }
+
+    func moveSelectionByArrowKey(_ keyCode: UInt16) {
+        _ = handleArrowKey(keyCode)
+    }
+
+    func previewSelected() {
+        guard !service.isDownloadsMultiSelectMode,
+              let previewURL = service.selectedDownloadRecord?.videoURL else { return }
+        SteamWorkshopDownloadsQuickLookController.shared.open(previewURL: previewURL) { [weak self] in
+            guard let self, !self.service.isDownloadsMultiSelectMode else { return nil }
+            return self.service.selectedDownloadRecord?.videoURL
+        }
     }
 
     private func handleBackgroundClick() {
@@ -446,42 +494,38 @@ final class AppKitSteamWorkshopDownloadsContainerView: NSView, ModuleFocusable {
 
         if !service.isDownloadsMultiSelectMode,
            let record = service.selectedDownloadRecord {
-            if record.status == .ready, record.isPlayable {
-                let setItem = NSMenuItem(title: "设为壁纸", action: #selector(contextSetAsWallpaper), keyEquivalent: "")
-                setItem.target = self
-                setItem.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: "设为壁纸")
-                menu.addItem(setItem)
-            } else if case .failed = record.status {
-                let retryItem = NSMenuItem(title: "重新下载", action: #selector(contextRetryDownload), keyEquivalent: "")
-                retryItem.target = self
-                retryItem.image = NSImage(systemSymbolName: "square.and.arrow.down", accessibilityDescription: "重新下载")
-                menu.addItem(retryItem)
-            } else if record.status == .queued || record.status == .downloading {
-                let cancelItem = NSMenuItem(title: "取消下载", action: #selector(contextCancelDownload), keyEquivalent: "")
-                cancelItem.target = self
-                cancelItem.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "取消下载")
-                menu.addItem(cancelItem)
+            if let primaryActionItem = makePrimaryActionMenuItem(for: record) {
+                menu.addItem(primaryActionItem)
             }
 
-            let infoItem = NSMenuItem(title: "信息", action: #selector(contextShowInfo), keyEquivalent: "")
-            infoItem.target = self
-            infoItem.isEnabled = service.canShowSelectedDownloadInfo
-            infoItem.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "信息")
-            menu.addItem(infoItem)
+            menu.addItem(
+                makeMenuItem(
+                    title: "信息",
+                    symbolName: "info.circle",
+                    action: #selector(contextShowInfo),
+                    isEnabled: service.canShowSelectedDownloadInfo
+                )
+            )
 
-            let revealItem = NSMenuItem(title: "查看文件", action: #selector(contextRevealItem), keyEquivalent: "")
-            revealItem.target = self
-            revealItem.isEnabled = service.canRevealSelectedDownload
-            revealItem.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "查看文件")
-            menu.addItem(revealItem)
+            menu.addItem(
+                makeMenuItem(
+                    title: "查看文件",
+                    symbolName: "folder",
+                    action: #selector(contextRevealItem),
+                    isEnabled: service.canRevealSelectedDownload
+                )
+            )
             menu.addItem(.separator())
         }
 
-        let deleteItem = NSMenuItem(title: "删除", action: #selector(contextDeleteSelected), keyEquivalent: "")
-        deleteItem.target = self
-        deleteItem.isEnabled = service.canDeleteSelectedDownload
-        deleteItem.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "删除")
-        menu.addItem(deleteItem)
+        menu.addItem(
+            makeMenuItem(
+                title: "删除",
+                symbolName: "trash",
+                action: #selector(contextDeleteSelected),
+                isEnabled: service.canDeleteSelectedDownload
+            )
+        )
         return menu
     }
 
@@ -573,18 +617,11 @@ extension AppKitSteamWorkshopDownloadsContainerView: SteamWorkshopKeyboardDelega
         }
 
         if service.isDownloadsMultiSelectMode {
-            let arrows: Set<UInt16> = [123, 124, 125, 126]
-            return arrows.contains(event.keyCode)
+            return handleArrowKey(event.keyCode)
         }
         switch event.keyCode {
-        case 123:
-            return moveFocus(delta: -1)
-        case 124:
-            return moveFocus(delta: 1)
-        case 126:
-            return moveFocus(delta: -currentColumnCount)
-        case 125:
-            return moveFocus(delta: currentColumnCount)
+        case 123, 124, 125, 126:
+            return handleArrowKey(event.keyCode)
         case 36, 76:
             return handleReturnKey()
         default:
@@ -628,25 +665,49 @@ extension AppKitSteamWorkshopDownloadsContainerView: NSCollectionViewDelegateFlo
 }
 
 extension AppKitSteamWorkshopDownloadsContainerView {
-    @objc private func contextSetAsWallpaper() {
-        guard let record = service.selectedDownloadRecord, record.status == .ready, record.isPlayable else { return }
-        onSetAsWallpaper(record)
-    }
-
-    @objc private func contextRetryDownload() {
-        guard let record = service.selectedDownloadRecord else { return }
-        guard case .failed = record.status else { return }
-        service.downloadWorkshopItem(id: record.id, pageTitle: record.title)
-    }
-
-    @objc private func contextCancelDownload() {
-        guard let record = service.selectedDownloadRecord else { return }
-        switch record.status {
-        case .queued, .downloading:
-            service.cancelDownload(itemID: record.id)
-        case .ready, .failed:
-            break
+    private func makePrimaryActionMenuItem(for record: SteamWorkshopDownloadRecord) -> NSMenuItem? {
+        let action = SteamWorkshopDownloadGridSupport.primaryAction(for: record)
+        let config: (title: String, symbolName: String)?
+        switch action {
+        case .setAsWallpaper:
+            config = ("设为壁纸", "play.fill")
+        case .retryDownload:
+            config = ("重新下载", "square.and.arrow.down")
+        case .cancelDownload:
+            config = ("取消下载", "xmark")
+        case .none:
+            config = nil
         }
+        guard let config else {
+            return nil
+        }
+        return makeMenuItem(
+            title: config.title,
+            symbolName: config.symbolName,
+            action: #selector(contextPerformPrimaryAction)
+        )
+    }
+
+    private func makeMenuItem(
+        title: String,
+        symbolName: String,
+        action: Selector,
+        isEnabled: Bool = true
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.isEnabled = isEnabled
+        item.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: title)
+        return item
+    }
+
+    @objc private func contextPerformPrimaryAction() {
+        guard let record = service.selectedDownloadRecord else { return }
+        SteamWorkshopDownloadGridSupport.performPrimaryAction(
+            for: record,
+            service: service,
+            onSetAsWallpaper: onSetAsWallpaper
+        )
     }
 
     @objc private func contextShowInfo() {

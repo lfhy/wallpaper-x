@@ -7,6 +7,9 @@ enum SteamWorkshopDetailRequestPriority {
 
 actor SteamWorkshopDetailRequestScheduler {
     static let shared = SteamWorkshopDetailRequestScheduler()
+    private let maxConcurrentUserRequests = 1
+    private let maxConcurrentBackgroundRequests = 2
+    private let maxConcurrentRequestsWhileUserActive = 2
 
     private var activeUserRequests = 0
     private var activeBackgroundRequests = 0
@@ -45,9 +48,12 @@ actor SteamWorkshopDetailRequestScheduler {
     private func canAcquire(priority: SteamWorkshopDetailRequestPriority) -> Bool {
         switch priority {
         case .userInitiated:
-            return activeUserRequests == 0
+            return activeUserRequests < maxConcurrentUserRequests
+                && (activeUserRequests + activeBackgroundRequests) < maxConcurrentRequestsWhileUserActive
         case .background:
-            return activeBackgroundRequests == 0 && activeUserRequests == 0 && waitingUserRequests.isEmpty
+            return activeBackgroundRequests < maxConcurrentBackgroundRequests
+                && activeUserRequests == 0
+                && waitingUserRequests.isEmpty
         }
     }
 
@@ -62,15 +68,13 @@ actor SteamWorkshopDetailRequestScheduler {
     }
 
     private func resumeNextIfPossible() {
-        if activeUserRequests == 0, let continuation = waitingUserRequests.first {
+        if canAcquire(priority: .userInitiated), let continuation = waitingUserRequests.first {
             waitingUserRequests.removeFirst()
             continuation.resume()
-            return
         }
 
-        if activeUserRequests == 0,
-           activeBackgroundRequests == 0,
-           let continuation = waitingBackgroundRequests.first {
+        while canAcquire(priority: .background),
+              let continuation = waitingBackgroundRequests.first {
             waitingBackgroundRequests.removeFirst()
             continuation.resume()
         }

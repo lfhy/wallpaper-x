@@ -1,6 +1,20 @@
 import Foundation
 
 extension SteamWorkshopService {
+    static func shouldEagerlyResolvePreviewKind(for requestPriority: SteamWorkshopDetailRequestPriority) -> Bool {
+        requestPriority == .userInitiated
+    }
+
+    static func maybeEnrichPreviewKind(
+        for item: SteamWorkshopBrowserItem,
+        requestPriority: SteamWorkshopDetailRequestPriority
+    ) async throws -> SteamWorkshopBrowserItem {
+        guard shouldEagerlyResolvePreviewKind(for: requestPriority) else {
+            return item
+        }
+        return try await enrichPreviewKind(for: item, requestPriority: requestPriority)
+    }
+
     static func fetchWorkshopStubPage(
         context: SteamWorkshopBrowseContext,
         source: SteamWorkshopSource,
@@ -78,7 +92,7 @@ extension SteamWorkshopService {
         for stub in stubs {
             if let cached = loadDetailCache(id: stub.id) {
                 let merged = mergeStub(stub, into: cached)
-                let enriched = try await enrichPreviewKind(for: merged)
+                let enriched = try await maybeEnrichPreviewKind(for: merged, requestPriority: requestPriority)
                 if enriched != cached {
                     saveDetailCache(item: enriched)
                 }
@@ -123,7 +137,7 @@ extension SteamWorkshopService {
                 itemsByID[stub.id] = item
             } catch {
                 let fallback = fallbackBrowserItem(from: stub)
-                let enrichedFallback = try await enrichPreviewKind(for: fallback, requestPriority: requestPriority)
+                let enrichedFallback = try await maybeEnrichPreviewKind(for: fallback, requestPriority: requestPriority)
                 itemsByID[stub.id] = enrichedFallback
             }
         }
@@ -163,7 +177,7 @@ extension SteamWorkshopService {
     ) async throws -> SteamWorkshopBrowserItem {
         if let cached = loadDetailCache(id: stub.id) {
             let merged = await applyingCachedAuthorNameIfPossible(to: mergeStub(stub, into: cached))
-            let enriched = try await enrichPreviewKind(for: merged, requestPriority: requestPriority)
+            let enriched = try await maybeEnrichPreviewKind(for: merged, requestPriority: requestPriority)
             if enriched != cached {
                 saveDetailCache(item: enriched)
             }
@@ -210,7 +224,7 @@ extension SteamWorkshopService {
         }
 
         let merged = mergeStub(stub, into: resolvedItem)
-        let enriched = try await enrichPreviewKind(for: merged, requestPriority: requestPriority)
+        let enriched = try await maybeEnrichPreviewKind(for: merged, requestPriority: requestPriority)
         saveDetailCache(item: enriched)
         return enriched
     }
@@ -279,9 +293,10 @@ extension SteamWorkshopService {
             "publishedfileids[\(index)]=\(id)"
         })
         request.httpBody = formItems.joined(separator: "&").data(using: .utf8)
+        let frozenRequest = request
 
         let (data, response) = try await SteamWorkshopDetailRequestScheduler.shared.run(priority: requestPriority) {
-            try await URLSession.shared.data(for: request)
+            try await URLSession.shared.data(for: frozenRequest)
         }
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
@@ -388,6 +403,7 @@ extension SteamWorkshopService {
     static func shouldSupplementWithHTML(item: SteamWorkshopBrowserItem) -> Bool {
         item.author == "未知作者"
             || item.descriptionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || item.previewImageURL == nil
             || item.authorWorkshopURL == nil
     }
 
@@ -438,8 +454,9 @@ extension SteamWorkshopService {
         request.setValue("zh-CN,zh;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
         request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+        let frozenRequest = request
         let (data, response) = try await SteamWorkshopDetailRequestScheduler.shared.run(priority: requestPriority) {
-            try await URLSession.shared.data(for: request)
+            try await URLSession.shared.data(for: frozenRequest)
         }
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
@@ -491,8 +508,9 @@ extension SteamWorkshopService {
         request.httpMethod = "HEAD"
         request.timeoutInterval = 15
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) MyWallpaperX/1.0", forHTTPHeaderField: "User-Agent")
+        let frozenRequest = request
         let (_, response) = try await SteamWorkshopDetailRequestScheduler.shared.run(priority: requestPriority) {
-            try await URLSession.shared.data(for: request)
+            try await URLSession.shared.data(for: frozenRequest)
         }
         guard let http = response as? HTTPURLResponse, (200..<400).contains(http.statusCode) else {
             throw URLError(.badServerResponse)

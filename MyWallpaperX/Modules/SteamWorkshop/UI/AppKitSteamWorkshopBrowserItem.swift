@@ -1170,16 +1170,7 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
         titleMarqueeView.textColor = fixedForeground
         titleMarqueeView.appearance = overlayBar.appearance
 
-        switch currentActionKind {
-        case .download:
-            statusBadgeButton.normalBackgroundColor = .clear
-        case .cancel:
-            statusBadgeButton.normalBackgroundColor = .clear
-        case .setAsWallpaper:
-            statusBadgeButton.normalBackgroundColor = .clear
-        case .retry:
-            statusBadgeButton.normalBackgroundColor = .clear
-        }
+        statusBadgeButton.normalBackgroundColor = .clear
         statusBadgeButton.hoverBackgroundColor = .clear
         statusBadgeButton.pressedBackgroundColor = .clear
         statusBadgeButton.borderColor = .clear
@@ -1421,8 +1412,8 @@ final class AppKitSteamWorkshopBrowserItem: NSCollectionViewItem {
             return
         }
 
-        SteamWorkshopPreviewImageCache.shared.loadImageData(forKey: cacheKey, loader: {
-            SteamWorkshopPreviewRequestCoordinator.shared.loadDataSynchronously(
+        SteamWorkshopPreviewImageCache.shared.loadImageDataAsync(forKey: cacheKey, loader: {
+            await SteamWorkshopPreviewRequestCoordinator.shared.loadData(
                 from: url,
                 priority: .visible
             )

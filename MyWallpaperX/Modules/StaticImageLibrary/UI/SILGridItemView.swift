@@ -65,15 +65,12 @@ final class SILCollectionView: NSCollectionView, GridCollectionViewProtocol {
         super.mouseUp(with: event)
         guard event.type == .leftMouseUp else { return }
         if let ip = pressedCardIndexPath {
-            let elapsed = ProcessInfo.processInfo.systemUptime - pressedCardTimestamp
-            let remaining = max(0, UIInteractionAnimation.minimumPressVisualDuration - elapsed)
-            let work = DispatchWorkItem { [weak self] in
+            pendingPressReleaseWorkItem = SILCollectionInteractionSupport.schedulePressRelease(
+                pressedAt: pressedCardTimestamp
+            ) { [weak self] in
                 self?.cardPressStateHandler?(ip, false)
                 self?.pressedCardIndexPath = nil
             }
-            pendingPressReleaseWorkItem = work
-            if remaining <= 0 { work.perform() }
-            else { DispatchQueue.main.asyncAfter(deadline: .now() + remaining, execute: work) }
         }
         let point = convert(event.locationInWindow, from: nil)
         if lastPrimaryClickIndexPath == nil, indexPathForItem(at: point) == nil {
@@ -87,10 +84,14 @@ final class SILCollectionView: NSCollectionView, GridCollectionViewProtocol {
     }
 
     override func keyDown(with event: NSEvent) {
-        let arrowKeys: Set<UInt16> = [123, 124, 125, 126]
         let noMod = event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
-        if arrowKeys.contains(event.keyCode), noMod {
-            SILService.shared.moveSingleSelectionByArrowKey(event.keyCode); return
+        if noMod {
+            switch event.keyCode {
+            case 123, 124, 125, 126:
+                SILService.shared.moveSingleSelectionByArrowKey(event.keyCode); return
+            default:
+                break
+            }
         }
         // ⌘A：多选模式下全选
         if event.keyCode == 0,

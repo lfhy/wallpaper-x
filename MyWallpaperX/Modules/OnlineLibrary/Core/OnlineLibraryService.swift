@@ -270,11 +270,141 @@ private extension OLHit {
     }
 }
 
+enum OLThumbnailRequestPriority {
+    case visible
+    case prefetch
+}
+
+actor OLThumbnailRequestCoordinator {
+    static let shared = OLThumbnailRequestCoordinator()
+
+    private let session: URLSession
+    private let scheduler = OLThumbnailRequestScheduler()
+    private var inFlight: [String: Task<Data?, Never>] = [:]
+
+    private init() {
+        let configuration = URLSessionConfiguration.default
+        configuration.httpMaximumConnectionsPerHost = 6
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 12
+        configuration.timeoutIntervalForResource = 16
+        configuration.waitsForConnectivity = false
+        session = URLSession(configuration: configuration)
+    }
+
+    func loadData(from url: URL, priority: OLThumbnailRequestPriority) async -> Data? {
+        let key = url.absoluteString
+        if let task = inFlight[key] {
+            return await task.value
+        }
+
+        let task = Task<Data?, Never> { [session, scheduler] in
+            defer { Task { await self.removeInFlightTask(forKey: key) } }
+            return await scheduler.run(priority: priority) {
+                do {
+                    var request = URLRequest(url: url)
+                    request.timeoutInterval = priority == .visible ? 12 : 8
+                    request.networkServiceType = priority == .visible ? .responsiveData : .background
+                    let (data, response) = try await session.data(for: request)
+                    guard let http = response as? HTTPURLResponse,
+                          (200..<300).contains(http.statusCode) else {
+                        return nil
+                    }
+                    return data
+                } catch {
+                    return nil
+                }
+            }
+        }
+        inFlight[key] = task
+        return await task.value
+    }
+
+    private func removeInFlightTask(forKey key: String) {
+        inFlight.removeValue(forKey: key)
+    }
+}
+
+actor OLThumbnailRequestScheduler {
+    private var activeVisibleRequests = 0
+    private var activePrefetchRequests = 0
+    private var waitingVisibleRequests: [CheckedContinuation<Void, Never>] = []
+    private var waitingPrefetchRequests: [CheckedContinuation<Void, Never>] = []
+
+    func run<T>(
+        priority: OLThumbnailRequestPriority,
+        operation: @Sendable () async -> T
+    ) async -> T {
+        await acquire(priority: priority)
+        defer { release(priority: priority) }
+        return await operation()
+    }
+
+    private func acquire(priority: OLThumbnailRequestPriority) async {
+        while !canAcquire(priority: priority) {
+            await withCheckedContinuation { continuation in
+                switch priority {
+                case .visible:
+                    waitingVisibleRequests.append(continuation)
+                case .prefetch:
+                    waitingPrefetchRequests.append(continuation)
+                }
+            }
+        }
+
+        switch priority {
+        case .visible:
+            activeVisibleRequests += 1
+        case .prefetch:
+            activePrefetchRequests += 1
+        }
+    }
+
+    private func canAcquire(priority: OLThumbnailRequestPriority) -> Bool {
+        switch priority {
+        case .visible:
+            return activeVisibleRequests < 2
+        case .prefetch:
+            return activeVisibleRequests == 0
+                && activePrefetchRequests == 0
+                && waitingVisibleRequests.isEmpty
+        }
+    }
+
+    private func release(priority: OLThumbnailRequestPriority) {
+        switch priority {
+        case .visible:
+            activeVisibleRequests = max(0, activeVisibleRequests - 1)
+        case .prefetch:
+            activePrefetchRequests = max(0, activePrefetchRequests - 1)
+        }
+        resumeNextIfPossible()
+    }
+
+    private func resumeNextIfPossible() {
+        while canAcquire(priority: .visible), !waitingVisibleRequests.isEmpty {
+            let continuation = waitingVisibleRequests.removeFirst()
+            continuation.resume()
+        }
+
+        if canAcquire(priority: .prefetch), let continuation = waitingPrefetchRequests.first {
+            waitingPrefetchRequests.removeFirst()
+            continuation.resume()
+        }
+    }
+}
+
 // MARK: - 服务
 
 @MainActor
 final class OnlineLibraryService: ObservableObject {
     static let shared = OnlineLibraryService()
+    private enum Constants {
+        static let initialThumbnailPrefetchLimit = 12
+        static let visibleThumbnailPrefetchLeading = 6
+        static let visibleThumbnailPrefetchTrailing = 12
+        static let visibleThumbnailPrefetchLimit = 18
+    }
 
     // MARK: 搜索状态
     @Published var items:        [OnlineLibraryVideoItem] = []
@@ -300,6 +430,7 @@ final class OnlineLibraryService: ObservableObject {
         hasMore       = false
         hasLoadedOnce = false
         toolbarQuery  = ""
+        lastThumbnailPrefetchIDSet.removeAll()
         objectWillChange.send()
     }
 
@@ -326,6 +457,7 @@ final class OnlineLibraryService: ObservableObject {
         return URLSession(configuration: cfg)
     }()
     private var searchTask: Task<Void, Never>?
+    private var lastThumbnailPrefetchIDSet = Set<Int>()
     private init() {
         restoreDownloadedIDs()
     }
@@ -357,12 +489,27 @@ final class OnlineLibraryService: ObservableObject {
         errorMessage  = nil
         hasMore       = false
         hasLoadedOnce = true
+        lastThumbnailPrefetchIDSet.removeAll()
         fetchPage(page: 1, appending: false)
     }
 
     func loadNextPage() {
         guard hasMore, !isLoading else { return }
         fetchPage(page: currentPage + 1, appending: true)
+    }
+
+    func prioritizeVisibleItemIDs(_ ids: [Int]) {
+        guard !ids.isEmpty, !items.isEmpty else { return }
+        var seen = Set<Int>()
+        let uniqueIDs = ids.filter { seen.insert($0).inserted }
+        let indexByID = Dictionary(uniqueKeysWithValues: items.enumerated().map { ($0.element.id, $0.offset) })
+        let visibleIndexes = uniqueIDs.compactMap { indexByID[$0] }.sorted()
+        guard let firstVisibleIndex = visibleIndexes.first,
+              let lastVisibleIndex = visibleIndexes.last else { return }
+        let startIndex = max(0, firstVisibleIndex - Constants.visibleThumbnailPrefetchLeading)
+        let endIndex = min(items.count - 1, lastVisibleIndex + Constants.visibleThumbnailPrefetchTrailing)
+        guard startIndex <= endIndex else { return }
+        prefetchThumbnailData(for: Array(items[startIndex...endIndex]), limit: Constants.visibleThumbnailPrefetchLimit)
     }
 
     // MARK: - 下载状态
@@ -616,6 +763,10 @@ final class OnlineLibraryService: ObservableObject {
                     self.totalHits   = decoded.totalHits
                     self.hasMore     = (page * self.currentParams.perPage) < decoded.totalHits
                     self.items       = appending ? self.items + newItems : newItems
+                    self.prefetchThumbnailData(
+                        for: appending ? newItems : self.items,
+                        limit: Constants.initialThumbnailPrefetchLimit
+                    )
                 case 400:       self.errorMessage = "API Key 无效或不完整，请重新填写"
                 case 401, 403:  self.errorMessage = "API Key 无效，请重新填写"
                 case 429:       self.errorMessage = "请求过于频繁，请稍后再试"
@@ -647,6 +798,27 @@ final class OnlineLibraryService: ObservableObject {
         }
         c?.queryItems = q
         return c?.url
+    }
+
+    private func prefetchThumbnailData(for items: [OnlineLibraryVideoItem], limit: Int) {
+        guard !items.isEmpty, limit > 0 else { return }
+        let candidates = items.compactMap { item -> (Int, URL)? in
+            guard let url = item.previewThumbnailURL else { return nil }
+            return (item.id, url)
+        }
+        let limitedCandidates = Array(candidates.prefix(limit))
+        let nextIDSet = Set(limitedCandidates.map(\.0))
+        let deltaCandidates = limitedCandidates.filter { !lastThumbnailPrefetchIDSet.contains($0.0) }
+        guard !deltaCandidates.isEmpty else { return }
+        lastThumbnailPrefetchIDSet = nextIDSet
+
+        for (_, url) in deltaCandidates {
+            Task {
+                guard await OLThumbnailCache.shared.cachedData(for: url) == nil else { return }
+                guard let data = await OLThumbnailRequestCoordinator.shared.loadData(from: url, priority: .prefetch) else { return }
+                await OLThumbnailCache.shared.store(data: data, for: url)
+            }
+        }
     }
 }
 

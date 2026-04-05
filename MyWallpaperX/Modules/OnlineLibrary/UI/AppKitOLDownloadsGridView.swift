@@ -161,16 +161,10 @@ final class AppKitOLDownloadsCollectionView: NSCollectionView {
         guard event.type == .leftMouseUp else { return }
 
         if let ip = pressedCardIndexPath {
-            let elapsed = ProcessInfo.processInfo.systemUptime - pressedCardTimestamp
-            let remaining = max(0, UIInteractionAnimation.minimumPressVisualDuration - elapsed)
-            let releaseWork = DispatchWorkItem { [weak self] in
+            pendingPressReleaseWorkItem = OnlineLibraryCollectionInteractionSupport.schedulePressRelease(
+                pressedAt: pressedCardTimestamp
+            ) { [weak self] in
                 self?.cardPressStateHandler?(ip, false)
-            }
-            pendingPressReleaseWorkItem = releaseWork
-            if remaining <= 0 {
-                releaseWork.perform()
-            } else {
-                DispatchQueue.main.asyncAfter(deadline: .now() + remaining, execute: releaseWork)
             }
             pressedCardIndexPath = nil
         }
@@ -198,9 +192,11 @@ final class AppKitOLDownloadsCollectionView: NSCollectionView {
         if event.keyCode == 49 { // Space
             spaceHandler?(); return
         }
-        let arrows: Set<UInt16> = [123, 124, 125, 126]
-        if arrows.contains(event.keyCode) {
+        switch event.keyCode {
+        case 123, 124, 125, 126:
             arrowHandler?(event.keyCode); return
+        default:
+            break
         }
         super.keyDown(with: event)
     }
@@ -647,24 +643,16 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
     }
 
     private func updateLayoutItemSize() {
-        let inset = flowLayout.sectionInset
-        let available = max(0, bounds.width - inset.left - inset.right)
-        let cols = GridLayoutHelper.columnCount(
-            for: available,
+        let metrics = OnlineLibraryGridLayoutSupport.metrics(
+            boundsWidth: bounds.width,
             zoomOffset: OnlineLibraryService.shared.zoomOffset,
-            minCols: 3, maxCols: 6
+            hoverScale: AppKitOLDownloadsItem.hoverScale,
+            sectionInset: flowLayout.sectionInset
         )
-        lastComputedColumns = cols
-        let hoverScale: CGFloat = AppKitOLDownloadsItem.hoverScale
-        let estimatedW = max(100, (available - flowLayout.minimumInteritemSpacing * CGFloat(max(0, cols - 1))) / CGFloat(cols))
-        let minSpacing = estimatedW * (hoverScale - 1.0)
-        let spacing = max(8, minSpacing)
-        flowLayout.minimumInteritemSpacing = spacing
-        flowLayout.minimumLineSpacing = spacing
-        let totalSpacing = CGFloat(max(0, cols - 1)) * spacing
-        let cardW = max(100, (available - totalSpacing) / CGFloat(cols))
-        let cardH = max(56, cardW / (16.0 / 9.0))
-        let newSize = NSSize(width: floor(cardW), height: floor(cardH + 2))
+        lastComputedColumns = metrics.columns
+        flowLayout.minimumInteritemSpacing = metrics.interitemSpacing
+        flowLayout.minimumLineSpacing = metrics.lineSpacing
+        let newSize = metrics.itemSize
         guard flowLayout.itemSize != newSize else { return }
         flowLayout.itemSize = newSize
         // 布局变化与悬停视觉同步生效，避免渐变层在缩放期间出现跟随滞后。
@@ -910,31 +898,46 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
 
         let menu = NSMenu()
         menu.autoenablesItems = false
-        let setItem = NSMenuItem(title: "设为壁纸", action: #selector(contextSetAsWallpaper), keyEquivalent: "")
-        setItem.target = self
-        setItem.isEnabled = !isMultiSelectMode && primarySelectedID != nil
-        setItem.image = NSImage(systemSymbolName: "play.circle", accessibilityDescription: "设为壁纸")
-        menu.addItem(setItem)
-
-        let infoItem = NSMenuItem(title: "详细信息", action: #selector(contextShowInfo), keyEquivalent: "")
-        infoItem.target = self
-        infoItem.isEnabled = !isMultiSelectMode && primarySelectedID != nil
-        infoItem.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "详细信息")
-        menu.addItem(infoItem)
-
-        let revealItem = NSMenuItem(title: "查看文件", action: #selector(contextRevealInFinder), keyEquivalent: "")
-        revealItem.target = self
-        revealItem.isEnabled = !isMultiSelectMode && primarySelectedID != nil
-        revealItem.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "在访达中显示")
-        menu.addItem(revealItem)
+        let singleSelectionEnabled = !isMultiSelectMode && primarySelectedID != nil
+        menu.addItem(
+            makeMenuItem(
+                title: "设为壁纸",
+                symbolName: "play.circle",
+                accessibilityDescription: "设为壁纸",
+                action: #selector(contextSetAsWallpaper),
+                isEnabled: singleSelectionEnabled
+            )
+        )
+        menu.addItem(
+            makeMenuItem(
+                title: "详细信息",
+                symbolName: "info.circle",
+                accessibilityDescription: "详细信息",
+                action: #selector(contextShowInfo),
+                isEnabled: singleSelectionEnabled
+            )
+        )
+        menu.addItem(
+            makeMenuItem(
+                title: "查看文件",
+                symbolName: "folder",
+                accessibilityDescription: "在访达中显示",
+                action: #selector(contextRevealInFinder),
+                isEnabled: singleSelectionEnabled
+            )
+        )
 
         menu.addItem(.separator())
 
-        let deleteItem = NSMenuItem(title: "删除", action: #selector(contextDeleteSelected), keyEquivalent: "")
-        deleteItem.target = self
-        deleteItem.isEnabled = !selectedIDs.isEmpty || selectedAnchorID != nil
-        deleteItem.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "删除")
-        menu.addItem(deleteItem)
+        menu.addItem(
+            makeMenuItem(
+                title: "删除",
+                symbolName: "trash",
+                accessibilityDescription: "删除",
+                action: #selector(contextDeleteSelected),
+                isEnabled: !selectedIDs.isEmpty || selectedAnchorID != nil
+            )
+        )
 
         return menu
     }
@@ -953,6 +956,23 @@ final class AppKitOLDownloadsContainerView: NSView, ModuleFocusable {
 
     @objc private func contextDeleteSelected() {
         deleteSelected()
+    }
+
+    private func makeMenuItem(
+        title: String,
+        symbolName: String,
+        accessibilityDescription: String,
+        action: Selector,
+        isEnabled: Bool
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.isEnabled = isEnabled
+        item.image = NSImage(
+            systemSymbolName: symbolName,
+            accessibilityDescription: accessibilityDescription
+        )
+        return item
     }
 
     private func syncSelectionFromQuickLook(id: Int) {

@@ -654,23 +654,42 @@ extension OnlineLibraryToolbarController {
     @objc private func handleDownloadsSortAction(_ sender: NSButton) {
         let menu = NSMenu()
         for mode in WallpaperSortMode.allCases {
-            let item = NSMenuItem(title: mode.displayName, action: #selector(handleDownloadsSortModeAction(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = mode
-            item.state = downloadsSortState.mode == mode ? .on : .off
-            menu.addItem(item)
+            menu.addItem(
+                makeDownloadsSortMenuItem(
+                    title: mode.displayName,
+                    action: #selector(handleDownloadsSortModeAction(_:)),
+                    representedObject: mode,
+                    state: downloadsSortState.mode == mode ? .on : .off
+                )
+            )
         }
         menu.addItem(.separator())
         [("升序", true), ("降序", false)].forEach { title, asc in
-            let item = NSMenuItem(title: title, action: #selector(handleDownloadsSortDirAction(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = asc
-            item.state = downloadsSortState.ascending == asc ? .on : .off
-            menu.addItem(item)
+            menu.addItem(
+                makeDownloadsSortMenuItem(
+                    title: title,
+                    action: #selector(handleDownloadsSortDirAction(_:)),
+                    representedObject: asc,
+                    state: downloadsSortState.ascending == asc ? .on : .off
+                )
+            )
         }
         let buttonBounds = sender.convert(sender.bounds, to: nil)
         let screenRect = sender.window?.convertToScreen(buttonBounds) ?? .zero
         menu.popUp(positioning: nil, at: NSPoint(x: screenRect.minX, y: screenRect.minY), in: nil)
+    }
+
+    private func makeDownloadsSortMenuItem(
+        title: String,
+        action: Selector,
+        representedObject: Any,
+        state: NSControl.StateValue
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.representedObject = representedObject
+        item.state = state
+        return item
     }
 
     @objc private func handleDownloadsSortModeAction(_ sender: NSMenuItem) {

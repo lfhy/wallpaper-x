@@ -22,18 +22,39 @@ extension SteamWorkshopService {
     func downloadWorkshopItem(id: String, pageTitle: String? = nil) {
         let title = pageTitle ?? "Workshop #\(id)"
 
-        if activeDownloadItemID == id || isQueuedDownloadRequest(id: id) || pendingDownloadRequest?.id == id {
+        guard canRequestDownload(id: id) else {
             statusMessage = "\(title) 已在下载任务中。"
             appendSteamAuthDebugLog("DOWNLOAD BLOCKED: duplicate active/queued request. requestedID=\(id)")
             return
         }
 
-        guard activeDownloadItemID == nil else {
+        guard !isDownloadWorkflowBusy else {
             enqueueDownloadRequest(id: id, pageTitle: pageTitle)
             return
         }
 
-        beginDownloadWorkflow(id: id, pageTitle: pageTitle)
+        startDownloadRequest(SteamWorkshopPendingDownloadRequest(id: id, pageTitle: pageTitle))
+    }
+
+    func canRequestDownload(id: String) -> Bool {
+        activeDownloadItemID != id
+            && !isQueuedDownloadRequest(id: id)
+            && pendingDownloadRequest?.id != id
+    }
+
+    private var isDownloadWorkflowBusy: Bool {
+        activeDownloadItemID != nil
+            || activeDownloadTask != nil
+            || activeDownloadProcess != nil
+            || pendingDownloadRequest != nil
+            || !queuedDownloadRequests.isEmpty
+            || isAuthenticating
+            || isLoginSheetPresented
+            || authPhase == .awaitingGuardCode
+    }
+
+    func startDownloadRequest(_ request: SteamWorkshopPendingDownloadRequest) {
+        beginDownloadWorkflow(id: request.id, pageTitle: request.pageTitle)
     }
 
     private func beginDownloadWorkflow(id: String, pageTitle: String?) {
@@ -209,27 +230,30 @@ extension SteamWorkshopService {
     }
 
     func selectDownload(itemID: String?) {
+        let visibleIDs = Set(displayedDownloads.map(\.id))
+        let resolvedItemID = itemID.flatMap { visibleIDs.contains($0) ? $0 : nil }
         let nextSelectedIDs = !isDownloadsMultiSelectMode
-            ? (itemID.map { [$0] } ?? [])
+            ? (resolvedItemID.map { [$0] } ?? [])
             : selectedDownloadIDs
         applyDownloadSelectionState(
-            primaryID: itemID,
+            primaryID: resolvedItemID,
             selectedIDs: nextSelectedIDs,
             forceSingleSelection: !isDownloadsMultiSelectMode
         )
     }
 
     func replaceSelectedDownloads(with ids: Set<String>, primaryID: String? = nil) {
-        let sanitized = ids.filter { id in downloads.contains(where: { $0.id == id }) }
+        let visibleIDs = Set(displayedDownloads.map(\.id))
+        let sanitized = ids.intersection(visibleIDs)
         let resolvedPrimaryID: String?
         if isDownloadsMultiSelectMode {
             if let primaryID, sanitized.contains(primaryID) {
                 resolvedPrimaryID = primaryID
             } else {
-                resolvedPrimaryID = sanitized.first
+                resolvedPrimaryID = firstDisplayedDownloadID(in: sanitized)
             }
         } else {
-            resolvedPrimaryID = primaryID ?? sanitized.first
+            resolvedPrimaryID = primaryID ?? firstDisplayedDownloadID(in: sanitized)
         }
         let resolvedSelectedIDs = isDownloadsMultiSelectMode
             ? sanitized
@@ -271,8 +295,8 @@ extension SteamWorkshopService {
 
     func selectAllDownloads() {
         guard canSelectAllDownloads else { return }
-        let ids = Set(filteredDownloads.map(\.id))
-        replaceSelectedDownloads(with: ids, primaryID: selectedDownloadID ?? filteredDownloads.first?.id)
+        let ids = Set(displayedDownloads.map(\.id))
+        replaceSelectedDownloads(with: ids, primaryID: selectedDownloadID ?? displayedDownloads.first?.id)
     }
 
     func revealSelectedDownload() {
@@ -346,7 +370,9 @@ extension SteamWorkshopService {
         currentWorkshopItemID = item.id
         currentPageTitle = item.title
         statusMessage = "已加载 \(item.title)"
-        refreshSelectedDownloadInspectorDetailIfNeeded(forceRefresh: needsDetailRefresh(for: item))
+        refreshSelectedDownloadInspectorDetailIfNeeded(
+            forceRefresh: SteamWorkshopDetailRefreshSupport.needsRefresh(item)
+        )
     }
 
     private func resolvedDownloadInspectorItem(for record: SteamWorkshopDownloadRecord) -> SteamWorkshopBrowserItem {
@@ -362,18 +388,25 @@ extension SteamWorkshopService {
         selectedIDs: Set<String>,
         forceSingleSelection: Bool
     ) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            let normalizedSelectedIDs = forceSingleSelection
-                ? (primaryID.map { [$0] } ?? [])
-                : selectedIDs
-            guard self.selectedDownloadID != primaryID || self.selectedDownloadIDs != normalizedSelectedIDs else {
-                return
-            }
-            self.selectedDownloadID = primaryID
-            self.selectedDownloadIDs = normalizedSelectedIDs
-            self.syncDownloadsInspectorSelectionIfNeeded()
+        let visibleIDs = Set(displayedDownloads.map(\.id))
+        let sanitizedPrimaryID = primaryID.flatMap { visibleIDs.contains($0) ? $0 : nil }
+        let normalizedSelectedIDs = forceSingleSelection
+            ? (sanitizedPrimaryID.map { [$0] } ?? [])
+            : selectedIDs.intersection(visibleIDs)
+        let resolvedPrimaryID: String?
+        if let sanitizedPrimaryID {
+            resolvedPrimaryID = sanitizedPrimaryID
+        } else if forceSingleSelection {
+            resolvedPrimaryID = nil
+        } else {
+            resolvedPrimaryID = firstDisplayedDownloadID(in: normalizedSelectedIDs)
         }
+        guard selectedDownloadID != resolvedPrimaryID || selectedDownloadIDs != normalizedSelectedIDs else {
+            return
+        }
+        selectedDownloadID = resolvedPrimaryID
+        selectedDownloadIDs = normalizedSelectedIDs
+        syncDownloadsInspectorSelectionIfNeeded()
     }
 
     func deleteDownload(itemID: String) {
@@ -748,8 +781,12 @@ extension SteamWorkshopService {
     private func persistDownloadMetadataIfPossible(for id: String, targetURL: URL) {
         guard let item = browserItemForDownload(id: id) else { return }
         let existingSnapshot = loadExistingDownloadMetadataSnapshot(at: targetURL)
+        let project = try? JSONDecoder().decode(
+            SteamWorkshopProject.self,
+            from: Data(contentsOf: targetURL.appendingPathComponent("project.json"))
+        )
         try? FileManager.default.createDirectory(at: downloadMetadataIndexDirectoryURL(), withIntermediateDirectories: true)
-        let sourceVideoURL = resolveVideoURL(in: targetURL, preferredFileName: nil)
+        let sourceVideoURL = resolveVideoURL(in: targetURL, preferredFileName: project?.file)
         let previewRelativePath = resolvePreviewRelativePath(in: targetURL)
         let exportedVideoURL = sourceVideoURL.flatMap {
             exportPrimaryVideoIfPossible(
@@ -924,13 +961,7 @@ extension SteamWorkshopService {
               !queuedDownloadRequests.isEmpty else { return }
 
         let next = queuedDownloadRequests.removeFirst()
-        upsertTransientRecord(
-            id: next.id,
-            title: next.pageTitle ?? "Workshop #\(next.id)",
-            status: .downloading,
-            sizeText: downloadStatusSizeText(for: next.id)
-        )
-        downloadWorkshopItem(id: next.id, pageTitle: next.pageTitle)
+        startDownloadRequest(next)
     }
 
     private func removeQueuedDownloadRequest(id: String) -> Bool {

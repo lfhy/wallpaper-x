@@ -8,15 +8,10 @@ import AppKit
 final class SettingsGroupView: NSView {
     private let titleLabel: NSTextField
     private let showsTitle: Bool
-    private let backgroundEffectView: NSVisualEffectView = {
-        let view = NSVisualEffectView()
-        view.material = .underPageBackground
-        view.blendingMode = .withinWindow
-        view.state = .followsWindowActiveState
-        view.alphaValue = 0.4
+    private let backgroundEffectView: NSView = {
+        let view = NSView()
         view.wantsLayer = true
-        view.layer?.cornerRadius = 14
-        view.layer?.masksToBounds = true
+        view.layer?.backgroundColor = NSColor.clear.cgColor
         view.translatesAutoresizingMaskIntoConstraints = false
         return view
     }()
@@ -30,7 +25,7 @@ final class SettingsGroupView: NSView {
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.distribution = .gravityAreas
+        stack.distribution = .fill
         stack.spacing = 0
         stack.translatesAutoresizingMaskIntoConstraints = false
         return stack

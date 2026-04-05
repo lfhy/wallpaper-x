@@ -333,7 +333,6 @@ private struct OLThumbnailView: View {
 
     private func load() {
         guard let url, !isLoading else { return }
-        // 先查磁盘缓存
         Task {
             if let cached = await OLThumbnailCache.shared.cachedData(for: url),
                let img = NSImage(data: cached) {
@@ -341,12 +340,8 @@ private struct OLThumbnailView: View {
                 return
             }
             await MainActor.run { isLoading = true; hasFailed = false }
-            do {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                guard let img = NSImage(data: data) else { throw URLError(.cannotDecodeContentData) }
-                await OLThumbnailCache.shared.store(data: data, for: url)
-                await MainActor.run { image = img; isLoading = false }
-            } catch {
+            guard let data = await OLThumbnailRequestCoordinator.shared.loadData(from: url, priority: .visible),
+                  let img = await Task.detached(priority: .utility) { NSImage(data: data) }.value else {
                 await MainActor.run {
                     isLoading = false
                     retryCount += 1
@@ -360,7 +355,10 @@ private struct OLThumbnailView: View {
                         hasFailed = true
                     }
                 }
+                return
             }
+            await OLThumbnailCache.shared.store(data: data, for: url)
+            await MainActor.run { image = img; isLoading = false }
         }
     }
 }

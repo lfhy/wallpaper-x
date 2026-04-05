@@ -32,34 +32,6 @@ final class SteamWorkshopPreviewRequestCoordinator {
         session = URLSession(configuration: configuration)
     }
 
-    func loadDataSynchronously(
-        from url: URL,
-        priority: SteamWorkshopPreviewRequestPriority
-    ) -> Data? {
-        guard shouldAttemptLoad(for: url, priority: priority) else { return nil }
-        let semaphore = DispatchSemaphore(value: 0)
-        var loadedData: Data?
-
-        Task {
-            do {
-                let data = try await fetchData(from: url, priority: priority)
-                noteSuccess(for: url)
-                loadedData = data
-            } catch {
-                noteFailure(for: url, error: error, priority: priority)
-                loadedData = nil
-            }
-            semaphore.signal()
-        }
-
-        semaphore.wait()
-        return loadedData
-    }
-
-    func prefetchDataSynchronously(from url: URL) -> Data? {
-        loadDataSynchronously(from: url, priority: .prefetch)
-    }
-
     func loadData(
         from url: URL,
         priority: SteamWorkshopPreviewRequestPriority,
@@ -243,9 +215,11 @@ final class SteamWorkshopPreviewRequestCoordinator {
 }
 
 actor SteamWorkshopPreviewRequestScheduler {
-    private var activeForegroundRequests = 0
+    private var activeUserRequests = 0
+    private var activeVisibleRequests = 0
     private var activePrefetchRequests = 0
-    private var waitingForegroundRequests: [CheckedContinuation<Void, Never>] = []
+    private var waitingUserRequests: [CheckedContinuation<Void, Never>] = []
+    private var waitingVisibleRequests: [CheckedContinuation<Void, Never>] = []
     private var waitingPrefetchRequests: [CheckedContinuation<Void, Never>] = []
 
     func run<T>(
@@ -261,8 +235,10 @@ actor SteamWorkshopPreviewRequestScheduler {
         while !canAcquire(priority: priority) {
             await withCheckedContinuation { continuation in
                 switch priority {
-                case .userInitiated, .visible:
-                    waitingForegroundRequests.append(continuation)
+                case .userInitiated:
+                    waitingUserRequests.append(continuation)
+                case .visible:
+                    waitingVisibleRequests.append(continuation)
                 case .prefetch:
                     waitingPrefetchRequests.append(continuation)
                 }
@@ -270,8 +246,10 @@ actor SteamWorkshopPreviewRequestScheduler {
         }
 
         switch priority {
-        case .userInitiated, .visible:
-            activeForegroundRequests += 1
+        case .userInitiated:
+            activeUserRequests += 1
+        case .visible:
+            activeVisibleRequests += 1
         case .prefetch:
             activePrefetchRequests += 1
         }
@@ -279,17 +257,27 @@ actor SteamWorkshopPreviewRequestScheduler {
 
     private func canAcquire(priority: SteamWorkshopPreviewRequestPriority) -> Bool {
         switch priority {
-        case .userInitiated, .visible:
-            return activeForegroundRequests < 2
+        case .userInitiated:
+            return activeUserRequests < 1 && (activeUserRequests + activeVisibleRequests) < 2
+        case .visible:
+            return activeVisibleRequests < 2
+                && activeUserRequests == 0
+                && waitingUserRequests.isEmpty
         case .prefetch:
-            return activeForegroundRequests == 0 && activePrefetchRequests == 0 && waitingForegroundRequests.isEmpty
+            return activeUserRequests == 0
+                && activeVisibleRequests == 0
+                && activePrefetchRequests == 0
+                && waitingUserRequests.isEmpty
+                && waitingVisibleRequests.isEmpty
         }
     }
 
     private func release(priority: SteamWorkshopPreviewRequestPriority) {
         switch priority {
-        case .userInitiated, .visible:
-            activeForegroundRequests = max(0, activeForegroundRequests - 1)
+        case .userInitiated:
+            activeUserRequests = max(0, activeUserRequests - 1)
+        case .visible:
+            activeVisibleRequests = max(0, activeVisibleRequests - 1)
         case .prefetch:
             activePrefetchRequests = max(0, activePrefetchRequests - 1)
         }
@@ -297,14 +285,21 @@ actor SteamWorkshopPreviewRequestScheduler {
     }
 
     private func resumeNextIfPossible() {
-        while activeForegroundRequests < 2, !waitingForegroundRequests.isEmpty {
-            let continuation = waitingForegroundRequests.removeFirst()
+        while canAcquire(priority: .userInitiated), !waitingUserRequests.isEmpty {
+            let continuation = waitingUserRequests.removeFirst()
             continuation.resume()
         }
 
-        if activeForegroundRequests == 0,
+        while canAcquire(priority: .visible), !waitingVisibleRequests.isEmpty {
+            let continuation = waitingVisibleRequests.removeFirst()
+            continuation.resume()
+        }
+
+        if activeUserRequests == 0,
+           activeVisibleRequests == 0,
            activePrefetchRequests == 0,
-           waitingForegroundRequests.isEmpty,
+           waitingUserRequests.isEmpty,
+           waitingVisibleRequests.isEmpty,
            let continuation = waitingPrefetchRequests.first {
             waitingPrefetchRequests.removeFirst()
             continuation.resume()

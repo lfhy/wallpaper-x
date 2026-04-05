@@ -449,19 +449,6 @@ final class AppKitSidebarContainerView: NSView {
             )
         }
 
-        let othersSection = SidebarNode(
-            kind: .section(.others),
-            title: SidebarSectionID.others.title,
-            children: [
-                SidebarNode(
-                    kind: .category(.settings),
-                    title: "设置",
-                    symbolName: "gearshape",
-                    count: nil
-                )
-            ]
-        )
-
         // 图片壁纸分区：主入口 + 图片专属标签（共享同一分区，与视频库完全独立）
         let silTags = SILService.shared.silTags
         let silTagChildren = silTags.map { tag in
@@ -527,7 +514,6 @@ final class AppKitSidebarContainerView: NSView {
         )
         sections.append(steamSection)
         sections.append(onlineSection)
-        sections.append(othersSection)
 
         rootNodes = sections
     }

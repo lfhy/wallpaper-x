@@ -341,17 +341,34 @@ final class AppKitOLBrowserItem: NSCollectionViewItem {
         thumbnailView.image = nil; placeholderView.isHidden = false; spinner.startAnimation(nil)
         guard let url else { return }
         let id = currentItemID
-        thumbnailTask = Task { @MainActor in
+        thumbnailTask = Task { [weak self] in
             if let cached = await OLThumbnailCache.shared.cachedData(for: url),
                let img = NSImage(data: cached) {
-                guard currentItemID == id, !Task.isCancelled else { return }
-                thumbnailView.image = img; placeholderView.isHidden = true; spinner.stopAnimation(nil); return
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self, self.currentItemID == id else { return }
+                    self.thumbnailView.image = img
+                    self.placeholderView.isHidden = true
+                    self.spinner.stopAnimation(nil)
+                }
+                return
             }
             guard !Task.isCancelled else { return }
-            if let (data, _) = try? await URLSession.shared.data(from: url), let img = NSImage(data: data) {
-                guard !Task.isCancelled, currentItemID == id else { return }
-                await OLThumbnailCache.shared.store(data: data, for: url)
-                thumbnailView.image = img; placeholderView.isHidden = true; spinner.stopAnimation(nil)
+            guard let data = await OLThumbnailRequestCoordinator.shared.loadData(from: url, priority: .visible),
+                  let img = await Task.detached(priority: .utility) { NSImage(data: data) }.value else {
+                await MainActor.run {
+                    guard let self, self.currentItemID == id else { return }
+                    self.spinner.stopAnimation(nil)
+                }
+                return
+            }
+            guard !Task.isCancelled else { return }
+            await OLThumbnailCache.shared.store(data: data, for: url)
+            await MainActor.run {
+                guard let self, self.currentItemID == id else { return }
+                self.thumbnailView.image = img
+                self.placeholderView.isHidden = true
+                self.spinner.stopAnimation(nil)
             }
         }
     }
@@ -371,40 +388,51 @@ final class AppKitOLBrowserItem: NSCollectionViewItem {
         let menu = NSMenu()
 
         // 下载 / 已下载状态
-        let downloadItem = NSMenuItem(
-            title: "下载到本地",
-            action: #selector(handleDownload),
-            keyEquivalent: ""
+        menu.addItem(
+            makeContextMenuItem(
+                title: "下载到本地",
+                symbolName: "arrow.down.circle",
+                action: #selector(handleDownload),
+                isEnabled: onDownload != nil
+            )
         )
-        downloadItem.target = self
-        downloadItem.image  = NSImage.olSymbol("arrow.down.circle", pointSize: 14, weight: .regular)
-        downloadItem.isEnabled = onDownload != nil
-        menu.addItem(downloadItem)
 
         // 设为壁纸
-        let setItem = NSMenuItem(
-            title: "设为壁纸",
-            action: #selector(handleSetWallpaper),
-            keyEquivalent: ""
+        menu.addItem(
+            makeContextMenuItem(
+                title: "设为壁纸",
+                symbolName: "display",
+                action: #selector(handleSetWallpaper),
+                isEnabled: onSetAsWallpaper != nil
+            )
         )
-        setItem.target = self
-        setItem.image  = NSImage.olSymbol("display", pointSize: 14, weight: .regular)
-        setItem.isEnabled = onSetAsWallpaper != nil
-        menu.addItem(setItem)
 
         menu.addItem(.separator())
 
         // 在 Pixabay 上查看
-        let openItem = NSMenuItem(
-            title: "在 Pixabay 上查看",
-            action: #selector(handleOpenInPixabay),
-            keyEquivalent: ""
+        menu.addItem(
+            makeContextMenuItem(
+                title: "在 Pixabay 上查看",
+                symbolName: "arrow.up.right.square",
+                action: #selector(handleOpenInPixabay),
+                isEnabled: true
+            )
         )
-        openItem.target = self
-        openItem.image  = NSImage.olSymbol("arrow.up.right.square", pointSize: 14, weight: .regular)
-        menu.addItem(openItem)
 
         return menu
+    }
+
+    private func makeContextMenuItem(
+        title: String,
+        symbolName: String,
+        action: Selector,
+        isEnabled: Bool
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.image = NSImage.olSymbol(symbolName, pointSize: 14, weight: .regular)
+        item.isEnabled = isEnabled
+        return item
     }
 
     @objc private func handleOpenInPixabay() {

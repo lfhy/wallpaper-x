@@ -270,9 +270,18 @@ extension WallpaperManager {
         }
     }
 
+    func setSyncSystemWallpaperEnabled(_ enabled: Bool) {
+        settings.syncSystemWallpaper = enabled
+        if !enabled {
+            pendingSystemWallpaperSyncWorkItem?.cancel()
+            pendingSystemWallpaperSyncWorkItem = nil
+        }
+    }
+
     func applyPlaybackRateToEngine() {
         // 播放速率只影响引擎内部，不重建 daemon session，直接更新速率并在未暂停时立即生效。
-        let rate = Float(max(0.25, min(2.0, settings.playbackRate)))
+        let effectiveRate = settings.playbackRateEnabled ? settings.playbackRate : 1.0
+        let rate = Float(max(0.25, min(2.0, effectiveRate)))
         WallpaperEngine.shared.setPlaybackRate(rate)
     }
 }

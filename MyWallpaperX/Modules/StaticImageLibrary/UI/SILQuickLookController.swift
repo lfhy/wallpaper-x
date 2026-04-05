@@ -29,7 +29,7 @@ final class SILQuickLookController: NSObject, QLPreviewPanelDataSource, QLPrevie
 
     func syncVisible() {
         guard isVisible else { return }
-        guard let id = SILService.shared.selectedID,
+        guard let id = SILService.shared.singleEffectiveSelectedID,
               let w = SILService.shared.wallpapers.first(where: { $0.id == id }) else { return }
         let url = URL(fileURLWithPath: w.path)
         guard FileManager.default.fileExists(atPath: url.path), previewURL != url else { return }
@@ -81,7 +81,7 @@ final class SILKeyboardHandler {
     func handleSpace() -> Bool {
         let ql = SILQuickLookController.shared
         if ql.isVisible { return true }
-        guard let id = SILService.shared.selectedID,
+        guard let id = SILService.shared.singleEffectiveSelectedID,
               let w = SILService.shared.wallpapers.first(where: { $0.id == id }) else { return false }
         ql.open(url: URL(fileURLWithPath: w.path))
         return true

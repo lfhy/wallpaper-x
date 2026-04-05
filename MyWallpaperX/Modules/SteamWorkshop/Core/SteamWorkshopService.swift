@@ -6,7 +6,6 @@
 import Foundation
 import AppKit
 import Combine
-import Darwin
 @MainActor
 final class SteamWorkshopService: ObservableObject {
     static let shared = SteamWorkshopService()
@@ -19,11 +18,17 @@ final class SteamWorkshopService: ObservableObject {
         static let publishedFileDetailsAPI = "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/"
         static let authorWorkshopPageSize = 30
         static let detailHydrationBatchSize = 4
+        static let detailHydrationExpandedBatchSize = 6
+        static let detailHydrationExpandedThreshold = 18
+        static let detailHydrationNormalThreshold = 8
         static let detailHydrationInterBatchDelayNanoseconds: UInt64 = 1_300_000_000
+        static let detailHydrationFastInterBatchDelayNanoseconds: UInt64 = 450_000_000
+        static let detailHydrationNormalInterBatchDelayNanoseconds: UInt64 = 800_000_000
         static let detailPrefetchBatchSize = 2
         static let detailPrefetchInterBatchDelayNanoseconds: UInt64 = 2_000_000_000
         static let browserInteractionDeferralInterval: TimeInterval = 1.2
         static let detailRequestDeferralInterval: TimeInterval = 4.0
+        static let browserDebugLoggingEnabledKey = "SteamWorkshop.browserDebugLoggingEnabled"
         static let bundledSteamBundleName = "SteamCMDRuntime.bundle"
         static let bundledSteamRootName = "Steam"
         static let bundledSteamMetadataName = "runtime-metadata.json"
@@ -61,7 +66,10 @@ final class SteamWorkshopService: ObservableObject {
     @Published private(set) var previewReloadToken: Int = 0
     @Published private(set) var isLoadingMoreBrowserItems = false
     @Published private(set) var hasMoreBrowserItems = true
-    @Published var downloads: [SteamWorkshopDownloadRecord] = []
+    @Published var downloads: [SteamWorkshopDownloadRecord] = [] {
+        didSet { refreshDisplayedDownloads() }
+    }
+    @Published private(set) var displayedDownloads: [SteamWorkshopDownloadRecord] = []
     @Published var source: SteamWorkshopSource = .featured {
         didSet { if !suppressAutomaticBrowseNavigation { navigateToBrowse() } }
     }
@@ -86,9 +94,15 @@ final class SteamWorkshopService: ObservableObject {
     @Published var categoryFilter: SteamWorkshopCategoryFilter = .all {
         didSet { if !suppressAutomaticBrowseNavigation { navigateToBrowse() } }
     }
-    @Published var downloadsQuery: String = ""
-    @Published var downloadsSortMode: SteamWorkshopDownloadsSortMode = .updatedAt
-    @Published var downloadsSortAscending: Bool = false
+    @Published var downloadsQuery: String = "" {
+        didSet { refreshDisplayedDownloads() }
+    }
+    @Published var downloadsSortMode: SteamWorkshopDownloadsSortMode = .updatedAt {
+        didSet { refreshDisplayedDownloads() }
+    }
+    @Published var downloadsSortAscending: Bool = false {
+        didSet { refreshDisplayedDownloads() }
+    }
     @Published var zoomOffset: Int = 0
     @Published var statusMessage: String = "浏览页使用原生网格展示，后台抓取 Wallpaper Engine 创意工坊视频信息。"
     @Published var currentWorkshopItemID: String?
@@ -134,7 +148,7 @@ final class SteamWorkshopService: ObservableObject {
     private var pendingBrowserDetailStubIDs = Set<String>()
     private var browserDetailRetryCounts: [String: Int] = [:]
     private var prioritizedVisibleBrowserItemIDs: [String] = []
-    private var lastPreviewPrefetchIDs: [String] = []
+    private var lastPreviewPrefetchIDSet = Set<String>()
     private var backgroundDetailDeferralUntil: Date = .distantPast
     let defaults = UserDefaults.standard
     var loginProcess: Process?
@@ -197,219 +211,16 @@ final class SteamWorkshopService: ObservableObject {
         refreshSteamRuntimeStatus()
         loadCachedBrowserItemsIfPossible()
         reloadInstalledItems()
+        refreshDisplayedDownloads()
         fetchBrowserItems()
     }
 
-    var bundledSteamBundleURL: URL? {
-        Bundle.main.resourceURL?
-            .appendingPathComponent(Constants.bundledSteamBundleName, isDirectory: true)
-    }
-
-    var bundledSteamRootURL: URL? {
-        bundledSteamBundleURL?
-            .appendingPathComponent(Constants.bundledSteamRootName, isDirectory: true)
-    }
-
-    var bundledSteamCmdURL: URL? {
-        bundledSteamRootURL?.appendingPathComponent("steamcmd.sh")
-    }
-
-    var activeSteamRootURL: URL? {
-        guard let bundledSteamRootURL, validateSteamRuntime(at: bundledSteamRootURL) else {
-            return nil
+    private func refreshDisplayedDownloads() {
+        let nextDisplayedDownloads = filteredAndSortedDownloads(from: downloads)
+        if nextDisplayedDownloads != displayedDownloads {
+            displayedDownloads = nextDisplayedDownloads
         }
-        return bundledSteamRootURL
-    }
-
-    var activeSteamCmdURL: URL? {
-        guard let bundledSteamCmdURL,
-              let bundledSteamRootURL,
-              validateSteamRuntime(at: bundledSteamRootURL) else {
-            return nil
-        }
-        return bundledSteamCmdURL
-    }
-
-    var runtimeInstallRootURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("MyWallpaperX", isDirectory: true)
-            .appendingPathComponent("SteamWorkshopRuntime", isDirectory: true)
-    }
-
-    var stagingWorkshopContentRootURL: URL {
-        runtimeInstallRootURL
-            .appendingPathComponent("steamapps", isDirectory: true)
-            .appendingPathComponent("workshop", isDirectory: true)
-            .appendingPathComponent("content", isDirectory: true)
-            .appendingPathComponent(Constants.workshopAppID, isDirectory: true)
-    }
-
-    var libraryRootURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Movies", isDirectory: true)
-            .appendingPathComponent("MyWallpaperX", isDirectory: true)
-            .appendingPathComponent("创意工坊", isDirectory: true)
-    }
-
-    var exportedVideosRootURL: URL { libraryRootURL }
-
-    var cacheDirectoryURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library", isDirectory: true)
-            .appendingPathComponent("Caches", isDirectory: true)
-            .appendingPathComponent("MyWallpaperX", isDirectory: true)
-            .appendingPathComponent("SteamWorkshop", isDirectory: true)
-    }
-
-    var steamAuthDebugLogURL: URL {
-        cacheDirectoryURL.appendingPathComponent("steamcmd-auth-debug.log")
-    }
-
-    var bundledSteamMetadataURL: URL? {
-        bundledSteamBundleURL?
-            .appendingPathComponent(Constants.bundledSteamMetadataName)
-    }
-
-    var filteredDownloads: [SteamWorkshopDownloadRecord] {
-        let query = downloadsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        let filtered: [SteamWorkshopDownloadRecord]
-        if query.isEmpty {
-            filtered = downloads
-        } else {
-            let normalized = query.localizedLowercase
-            filtered = downloads.filter {
-                $0.title.localizedLowercase.contains(normalized)
-                || $0.description.localizedLowercase.contains(normalized)
-                || $0.tags.contains(where: { $0.localizedLowercase.contains(normalized) })
-                || $0.id.localizedLowercase.contains(normalized)
-                || $0.browserItem?.author.localizedLowercase.contains(normalized) == true
-            }
-        }
-        return filtered.sorted { lhs, rhs in
-            switch downloadsSortMode {
-            case .updatedAt:
-                if lhs.updatedAt == rhs.updatedAt {
-                    return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
-                }
-                return downloadsSortAscending ? (lhs.updatedAt < rhs.updatedAt) : (lhs.updatedAt > rhs.updatedAt)
-            case .title:
-                let comparison = lhs.title.localizedStandardCompare(rhs.title)
-                if comparison == .orderedSame {
-                    return downloadsSortAscending ? (lhs.updatedAt < rhs.updatedAt) : (lhs.updatedAt > rhs.updatedAt)
-                }
-                return downloadsSortAscending ? (comparison == .orderedAscending) : (comparison == .orderedDescending)
-            case .size:
-                let lhsSize = Self.parseByteCount(from: lhs.sizeText) ?? 0
-                let rhsSize = Self.parseByteCount(from: rhs.sizeText) ?? 0
-                if lhsSize == rhsSize {
-                    return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
-                }
-                return downloadsSortAscending ? (lhsSize < rhsSize) : (lhsSize > rhsSize)
-            }
-        }
-    }
-
-    var downloadsCount: Int { downloads.count }
-
-    var activeFilterDisplayParts: [String] {
-        var parts: [String] = []
-        if themeFilter != .all { parts.append(themeFilter.displayName) }
-        if ageRatingFilter != .all { parts.append(ageRatingFilter.displayName) }
-        if resolutionFilter != .all { parts.append(resolutionFilter.displayName) }
-        if categoryFilter != .all { parts.append(categoryFilter.displayName) }
-        return parts
-    }
-
-    var activeFilterSummary: String {
-        let parts = activeFilterDisplayParts
-        return parts.isEmpty ? "未筛选" : parts.joined(separator: " · ")
-    }
-
-    var activeBrowserContextSummary: String? {
-        guard let activeAuthorWorkshopName else { return nil }
-        return "当前正在浏览 \(activeAuthorWorkshopName) 的创意工坊作品"
-    }
-
-    var hasVisibleBrowserItems: Bool {
-        !displayedBrowserItems.isEmpty
-    }
-
-    func isDownloading(itemID: String) -> Bool {
-        latestDownloadRecord(for: itemID)?.status == .downloading
-    }
-
-    func isQueuedForDownload(itemID: String) -> Bool {
-        latestDownloadRecord(for: itemID)?.status == .queued
-    }
-
-    func latestDownloadRecord(for itemID: String) -> SteamWorkshopDownloadRecord? {
-        downloads.first(where: { $0.id == itemID })
-    }
-
-    var selectedDownloadRecord: SteamWorkshopDownloadRecord? {
-        guard let selectedDownloadID else { return nil }
-        return latestDownloadRecord(for: selectedDownloadID)
-    }
-
-    var effectiveSelectedDownloadIDs: Set<String> {
-        if isDownloadsMultiSelectMode {
-            return selectedDownloadIDs
-        }
-        if let selectedDownloadID {
-            return [selectedDownloadID]
-        }
-        return []
-    }
-
-    var canDeleteSelectedDownload: Bool {
-        let selectedIDs = effectiveSelectedDownloadIDs
-        guard !selectedIDs.isEmpty else { return false }
-        return selectedIDs.allSatisfy { id in
-            guard let record = latestDownloadRecord(for: id) else { return false }
-            switch record.status {
-            case .ready, .failed:
-                return true
-            case .queued, .downloading:
-                return false
-            }
-        }
-    }
-
-    var canShowSelectedDownloadInfo: Bool {
-        !isDownloadsMultiSelectMode && selectedDownloadRecord != nil
-    }
-
-    var canRevealSelectedDownload: Bool {
-        !isDownloadsMultiSelectMode && selectedDownloadRecord != nil
-    }
-
-    var canSelectAllDownloads: Bool {
-        isDownloadsMultiSelectMode && !filteredDownloads.isEmpty
-    }
-
-    func downloadRecord(for itemID: String) -> SteamWorkshopDownloadRecord? {
-        guard let record = latestDownloadRecord(for: itemID),
-              record.status == .ready else {
-            return nil
-        }
-        return record
-    }
-
-    func playableDownloadRecord(for itemID: String) -> SteamWorkshopDownloadRecord? {
-        guard let record = latestDownloadRecord(for: itemID),
-              record.status == .ready,
-              record.isPlayable else {
-            return nil
-        }
-        return record
-    }
-
-    func isDownloaded(itemID: String) -> Bool {
-        playableDownloadRecord(for: itemID) != nil
-    }
-
-    func latestDownloadFailure(for itemID: String) -> String? {
-        latestDownloadRecord(for: itemID)?.failureMessage
+        sanitizeDownloadSelectionAgainstDisplayedDownloads()
     }
 
     func updateBrowserScrollMetrics(
@@ -567,13 +378,6 @@ final class SteamWorkshopService: ObservableObject {
         }
     }
 
-    func clearFilters() {
-        themeFilter = .all
-        ageRatingFilter = .all
-        resolutionFilter = .all
-        categoryFilter = .all
-    }
-
     func prepareForBrowserEntry() {
         startupTask?.cancel()
         startupTask = Task(priority: .userInitiated) { [weak self] in
@@ -587,6 +391,8 @@ final class SteamWorkshopService: ObservableObject {
                         "prepareForBrowserEntry trigger initial fetch context=\(self.browseContext.title) state=\(self.browserState)"
                     )
                     self.fetchBrowserItems(forceRefresh: true)
+                } else {
+                    self.repairVisibleBrowserItemsIfNeeded()
                 }
             }
         }
@@ -600,7 +406,9 @@ final class SteamWorkshopService: ObservableObject {
         currentWorkshopItemID = resolvedItem.id
         currentPageTitle = resolvedItem.title
         statusMessage = "已加载 \(resolvedItem.title)"
-        refreshSelectedBrowserItemDetailIfNeeded(forceRefresh: needsDetailRefresh(for: resolvedItem))
+        refreshSelectedBrowserItemDetailIfNeeded(
+            forceRefresh: SteamWorkshopDetailRefreshSupport.needsRefresh(resolvedItem)
+        )
     }
 
     func dismissItemDetail() {
@@ -611,13 +419,25 @@ final class SteamWorkshopService: ObservableObject {
         selectedBrowserItem = nil
     }
 
-    func retrySelectedBrowserItemDetailRefresh() {
-        retrySelectedBrowserPreviewLoad()
+    func retryInspectorDetailRefresh(for itemID: String) {
+        if let selectedDownloadInspectorItem,
+           selectedDownloadInspectorItem.id == itemID {
+            retryInspectorPreviewLoad(for: selectedDownloadDetailItem ?? selectedDownloadInspectorItem)
+            refreshSelectedDownloadInspectorDetailIfNeeded(forceRefresh: true)
+            return
+        }
+
+        guard let selectedBrowserItem, selectedBrowserItem.id == itemID else { return }
+        retryInspectorPreviewLoad(for: selectedBrowserItem)
         refreshSelectedBrowserItemDetailIfNeeded(forceRefresh: true)
     }
 
-    private func retrySelectedBrowserPreviewLoad() {
-        guard let item = selectedBrowserItem else { return }
+    func retrySelectedBrowserItemDetailRefresh() {
+        guard let selectedBrowserItem else { return }
+        retryInspectorDetailRefresh(for: selectedBrowserItem.id)
+    }
+
+    private func retryInspectorPreviewLoad(for item: SteamWorkshopBrowserItem) {
         if let previewURL = item.previewImageURL {
             SteamWorkshopPreviewRequestCoordinator.shared.resetFailureState(for: previewURL)
             let cacheKey = steamWorkshopPreviewCacheKey(for: previewURL)
@@ -771,85 +591,6 @@ final class SteamWorkshopService: ObservableObject {
         pendingBrowserScrollRestoreOffset = snapshot.scrollOffsetY
     }
 
-    private func loadingStatusMessage(for context: SteamWorkshopBrowseContext) -> String {
-        switch context {
-        case .discovery:
-            return "正在抓取 Wallpaper Engine 创意工坊视频列表…"
-        case .authorWorkshop(let authorName, _):
-            return "正在抓取 \(authorName) 的创意工坊作品…"
-        }
-    }
-
-    private func cachedStatusMessage(for context: SteamWorkshopBrowseContext) -> String {
-        switch context {
-        case .discovery:
-            return "已载入缓存的创意工坊列表"
-        case .authorWorkshop(let authorName, _):
-            return "已载入 \(authorName) 的工坊缓存列表"
-        }
-    }
-
-    private func emptyResultsStatusMessage(for context: SteamWorkshopBrowseContext) -> String {
-        switch context {
-        case .discovery:
-            return "没有抓取到符合条件的视频项目。"
-        case .authorWorkshop(let authorName, _):
-            return "\(authorName) 当前没有抓取到可展示的视频项目。"
-        }
-    }
-
-    private func baseCardsStatusMessage(for context: SteamWorkshopBrowseContext, count: Int) -> String {
-        switch context {
-        case .discovery:
-            return "已载入 \(count) 张基础卡片，正在补全详情…"
-        case .authorWorkshop(let authorName, _):
-            return "已载入 \(authorName) 的 \(count) 张基础卡片，正在补全详情…"
-        }
-    }
-
-    private func completedStatusMessage(
-        for context: SteamWorkshopBrowseContext,
-        totalCount: Int,
-        hasMore: Bool
-    ) -> String {
-        switch context {
-        case .discovery:
-            return hasMore ? "已加载 \(totalCount) 个创意工坊视频项目" : "已加载全部 \(totalCount) 个已抓取项目"
-        case .authorWorkshop(let authorName, _):
-            return hasMore ? "已加载 \(authorName) 的 \(totalCount) 个创意工坊项目" : "已加载 \(authorName) 的全部 \(totalCount) 个已抓取项目"
-        }
-    }
-
-    private func failureStatusMessage(for context: SteamWorkshopBrowseContext) -> String {
-        switch context {
-        case .discovery:
-            return "创意工坊列表抓取失败"
-        case .authorWorkshop(let authorName, _):
-            return "\(authorName) 的工坊列表抓取失败"
-        }
-    }
-
-    private func prefetchStatusMessage(for context: SteamWorkshopBrowseContext, page: Int) -> String {
-        switch context {
-        case .discovery:
-            return "已预加载第 \(page) 页基础卡片，正在补全详细信息…"
-        case .authorWorkshop(let authorName, _):
-            return "已预加载 \(authorName) 的第 \(page) 页基础卡片，正在补全详细信息…"
-        }
-    }
-
-    private func browsePageSize(for context: SteamWorkshopBrowseContext) -> Int {
-        switch context {
-        case .discovery:
-            return Constants.browserPageSize
-        case .authorWorkshop:
-            return Constants.authorWorkshopPageSize
-        }
-    }
-
-
-
-
     func fetchBrowserItems(forceRefresh: Bool = false) {
         browserFetchTask?.cancel()
         cancelBrowserDetailHydration()
@@ -883,7 +624,7 @@ final class SteamWorkshopService: ObservableObject {
             categoryFilter: categoryFilter
         ) {
             browserItems = cached.items
-            prefetchBrowserPreviewImages(for: cached.items, limit: 48)
+            prefetchBrowserPreviewImages(for: cached.items, limit: 24)
             browserState = .loaded
             hasMoreBrowserItems = cached.items.count >= pageSize
             browserNextPage = max(2, (cached.items.count / pageSize) + 1)
@@ -928,7 +669,7 @@ final class SteamWorkshopService: ObservableObject {
                     guard self.browseContext == browseContext else { return }
                     self.isRefreshingBrowserFeed = false
                     self.browserItems = seededItems
-                    self.prefetchBrowserPreviewImages(for: seededItems, limit: 48)
+                    self.prefetchBrowserPreviewImages(for: seededItems, limit: 24)
                     self.browserState = .loaded
                     self.hasMoreBrowserItems = pageResult.hasMore
                     self.browserNextPage = 2
@@ -988,7 +729,30 @@ final class SteamWorkshopService: ObservableObject {
     }
 
     private func logBrowserDebug(_ message: String) {
-        _ = message
+        guard defaults.bool(forKey: Constants.browserDebugLoggingEnabledKey) else { return }
+        NSLog("[SteamWorkshopBrowser] %@", message)
+    }
+
+    private func detailHydrationDelayNanoseconds(remainingCount: Int) -> UInt64 {
+        switch remainingCount {
+        case 12...:
+            return Constants.detailHydrationFastInterBatchDelayNanoseconds
+        case 4...:
+            return Constants.detailHydrationNormalInterBatchDelayNanoseconds
+        default:
+            return Constants.detailHydrationInterBatchDelayNanoseconds
+        }
+    }
+
+    private func detailHydrationBatchCount(queuedCount: Int) -> Int {
+        switch queuedCount {
+        case Constants.detailHydrationExpandedThreshold...:
+            return Constants.detailHydrationExpandedBatchSize
+        case Constants.detailHydrationNormalThreshold...:
+            return Constants.detailHydrationBatchSize + 1
+        default:
+            return Constants.detailHydrationBatchSize
+        }
     }
 
     internal func noteUserBrowsingActivity() {
@@ -1015,10 +779,10 @@ final class SteamWorkshopService: ObservableObject {
         let visibleIndexes = ids.compactMap { indexByID[$0] }.sorted()
         guard let firstVisibleIndex = visibleIndexes.first,
               let lastVisibleIndex = visibleIndexes.last else { return }
-        let startIndex = max(0, firstVisibleIndex - 24)
-        let endIndex = min(items.count - 1, lastVisibleIndex + 48)
+        let startIndex = max(0, firstVisibleIndex - 12)
+        let endIndex = min(items.count - 1, lastVisibleIndex + 24)
         guard startIndex <= endIndex else { return }
-        prefetchBrowserPreviewImages(for: Array(items[startIndex...endIndex]), limit: 72)
+        prefetchBrowserPreviewImages(for: Array(items[startIndex...endIndex]), limit: 36)
     }
 
     private func prefetchBrowserPreviewImages(for items: [SteamWorkshopBrowserItem], limit: Int) {
@@ -1027,53 +791,25 @@ final class SteamWorkshopService: ObservableObject {
             guard let url = item.previewImageURL else { return nil }
             return (item.id, url)
         }
-        let ids = Array(candidates.prefix(limit).map(\.0))
-        guard ids != lastPreviewPrefetchIDs else { return }
-        lastPreviewPrefetchIDs = ids
-
-        for (_, url) in candidates.prefix(limit) {
+        let limitedCandidates = Array(candidates.prefix(limit))
+        let nextIDSet = Set(limitedCandidates.map(\.0))
+        let deltaCandidates = limitedCandidates.filter { id, url in
             let cacheKey = steamWorkshopPreviewCacheKey(for: url)
-            SteamWorkshopPreviewImageCache.shared.prefetchImageData(forKey: cacheKey) {
-                SteamWorkshopPreviewRequestCoordinator.shared.prefetchDataSynchronously(from: url)
+            let hasCachedImage = SteamWorkshopPreviewImageCache.shared.cachedOrDiskImage(forKey: cacheKey) != nil
+            return !lastPreviewPrefetchIDSet.contains(id) || !hasCachedImage
+        }
+        guard !deltaCandidates.isEmpty else { return }
+        lastPreviewPrefetchIDSet = nextIDSet
+
+        for (_, url) in deltaCandidates {
+            let cacheKey = steamWorkshopPreviewCacheKey(for: url)
+            SteamWorkshopPreviewImageCache.shared.prefetchImageDataAsync(forKey: cacheKey) {
+                await SteamWorkshopPreviewRequestCoordinator.shared.loadData(
+                    from: url,
+                    priority: .prefetch
+                )
             }
         }
-    }
-
-    func outputIndicatesAuthenticationFailure(_ output: String) -> Bool {
-        let lowered = output.localizedLowercase
-        return lowered.contains("invalid password")
-            || lowered.contains("login failure")
-            || lowered.contains("failed to log in")
-            || lowered.contains("account logon denied")
-            || lowered.contains("incorrect login")
-            || lowered.contains("too many login failures")
-            || lowered.contains("not logged on")
-            || lowered.contains("logged in elsewhere")
-            || lowered.contains("please use force_install_dir before logon")
-            || lowered.contains("steam guard")
-            || lowered.contains("please enter your password")
-    }
-
-    func outputIndicatesBenignSteamBootstrap(_ output: String) -> Bool {
-        let lowered = output.localizedLowercase
-        guard lowered.contains("loading steam api") || lowered.contains("iopollinghelpers_osx.cpp") else {
-            return false
-        }
-        guard lowered.contains("ok") else {
-            return false
-        }
-        return !outputIndicatesAuthenticationFailure(output)
-            && !outputIndicatesAccessRestriction(output)
-    }
-
-    func outputIndicatesAccessRestriction(_ output: String) -> Bool {
-        let lowered = output.localizedLowercase
-        return lowered.contains("access denied")
-            || lowered.contains("private")
-            || lowered.contains("friends only")
-            || lowered.contains("permission")
-            || lowered.contains("not available")
-            || lowered.contains("failed to download item")
     }
 
     private func loadCachedBrowserItemsIfPossible() {
@@ -1090,7 +826,26 @@ final class SteamWorkshopService: ObservableObject {
         ) {
             browserItems = cached.items
             browserState = .loaded
+            repairVisibleBrowserItemsIfNeeded()
         }
+    }
+
+    private func repairVisibleBrowserItemsIfNeeded() {
+        guard !browserItems.isEmpty else { return }
+        let stubsNeedingHydration = browserItems
+            .filter { SteamWorkshopDetailRefreshSupport.needsRefresh($0) }
+            .map(SteamWorkshopDetailRefreshSupport.makeStub)
+        guard !stubsNeedingHydration.isEmpty else { return }
+
+        logBrowserDebug(
+            "repairVisibleBrowserItemsIfNeeded context=\(browseContext.title) count=\(stubsNeedingHydration.count)"
+        )
+        enqueueBrowserDetailHydration(
+            stubs: stubsNeedingHydration,
+            context: browseContext,
+            navigationVersion: navigationVersion,
+            resetQueue: false
+        )
     }
 
     func clearAllCachedState() {
@@ -1128,7 +883,7 @@ final class SteamWorkshopService: ObservableObject {
         pendingBrowserDetailStubs = []
         pendingBrowserDetailStubIDs.removeAll()
         browserDetailRetryCounts.removeAll()
-        lastPreviewPrefetchIDs = []
+        lastPreviewPrefetchIDSet.removeAll()
         prioritizedVisibleBrowserItemIDs = []
         selectedBrowserItem = nil
         selectedBrowserItemError = nil
@@ -1286,7 +1041,10 @@ final class SteamWorkshopService: ObservableObject {
                     return []
                 }
                 guard !self.pendingBrowserDetailStubs.isEmpty else { return [] }
-                let batchCount = min(Constants.detailHydrationBatchSize, self.pendingBrowserDetailStubs.count)
+                let batchCount = min(
+                    self.detailHydrationBatchCount(queuedCount: self.pendingBrowserDetailStubs.count),
+                    self.pendingBrowserDetailStubs.count
+                )
                 let nextBatch = Array(self.pendingBrowserDetailStubs.prefix(batchCount))
                 self.pendingBrowserDetailStubs.removeFirst(batchCount)
                 nextBatch.forEach { self.pendingBrowserDetailStubIDs.remove($0.id) }
@@ -1311,12 +1069,17 @@ final class SteamWorkshopService: ObservableObject {
                             self.selectedBrowserItemError = nil
                         }
                     }
+                    self.logBrowserDebug(
+                        "detail hydration success batchCount=\(items.count) remainingQueue=\(self.pendingBrowserDetailStubs.count)"
+                    )
                 }
-                try? await Task.sleep(nanoseconds: Constants.detailHydrationInterBatchDelayNanoseconds)
+                let remainingCount = await MainActor.run { self.pendingBrowserDetailStubs.count }
+                try? await Task.sleep(nanoseconds: detailHydrationDelayNanoseconds(remainingCount: remainingCount))
             } catch {
                 guard !Task.isCancelled else { return }
                 let nsError = error as NSError
-                let shouldRetry = nsError.domain == NSURLErrorDomain && nsError.code == 429
+                let isRateLimited = nsError.domain == NSURLErrorDomain && nsError.code == 429
+                let isTransientNetworkFailure = nsError.domain == NSURLErrorDomain
                 let attempt = await MainActor.run { () -> Int in
                     var highestAttempt = 0
                     for stub in stubs {
@@ -1327,7 +1090,7 @@ final class SteamWorkshopService: ObservableObject {
                     return highestAttempt
                 }
 
-                if shouldRetry, attempt <= 4 {
+                if isRateLimited, attempt <= 4 {
                     await MainActor.run {
                         for stub in stubs.reversed() {
                             if self.pendingBrowserDetailStubIDs.insert(stub.id).inserted {
@@ -1343,6 +1106,22 @@ final class SteamWorkshopService: ObservableObject {
                     continue
                 }
 
+                if isTransientNetworkFailure, attempt <= 2 {
+                    await MainActor.run {
+                        for stub in stubs {
+                            if self.pendingBrowserDetailStubIDs.insert(stub.id).inserted {
+                                self.pendingBrowserDetailStubs.append(stub)
+                            }
+                        }
+                        self.logBrowserDebug(
+                            "detail hydration transient retry batchCount=\(stubs.count) attempt=\(attempt) queueCount=\(self.pendingBrowserDetailStubs.count) code=\(nsError.code)"
+                        )
+                    }
+                    let backoffSeconds = UInt64(min(8, attempt * 2))
+                    try? await Task.sleep(nanoseconds: backoffSeconds * 1_000_000_000)
+                    continue
+                }
+
                 await MainActor.run {
                     self.logBrowserDebug(
                         "detail hydration failed batchCount=\(stubs.count) code=\(nsError.code) domain=\(nsError.domain) error=\(nsError.localizedDescription)"
@@ -1353,18 +1132,9 @@ final class SteamWorkshopService: ObservableObject {
         }
     }
 
-    func needsDetailRefresh(for item: SteamWorkshopBrowserItem) -> Bool {
-        item.detailFields.isEmpty
-        || item.fileSizeText == nil
-        || item.resolutionText == nil
-        || item.workshopTypeText == nil
-        || item.author == "未知作者"
-        || (item.authorProfileURL == nil && item.authorWorkshopURL == nil)
-    }
-
     private func refreshSelectedBrowserItemDetailIfNeeded(forceRefresh: Bool) {
         guard let item = selectedBrowserItem else { return }
-        if !forceRefresh && !needsDetailRefresh(for: item) {
+        if !forceRefresh && !SteamWorkshopDetailRefreshSupport.needsRefresh(item) {
             return
         }
 
@@ -1372,16 +1142,7 @@ final class SteamWorkshopService: ObservableObject {
         isRefreshingSelectedBrowserItem = true
         selectedBrowserItemError = nil
 
-        let stub = SteamWorkshopBrowseStub(
-            id: item.id,
-            title: item.title,
-            author: item.author,
-            authorProfileURL: item.authorProfileURL,
-            authorWorkshopURL: item.authorWorkshopURL,
-            hasAdultContent: item.hasAdultContent,
-            summary: item.summary,
-            previewImageURL: item.previewImageURL
-        )
+        let stub = SteamWorkshopDetailRefreshSupport.makeStub(from: item)
 
         selectedItemDetailTask = Task(priority: .userInitiated) { [weak self] in
             do {
@@ -1410,7 +1171,7 @@ final class SteamWorkshopService: ObservableObject {
 
     func refreshSelectedDownloadInspectorDetailIfNeeded(forceRefresh: Bool) {
         guard let item = selectedDownloadInspectorItem else { return }
-        if !forceRefresh && !needsDetailRefresh(for: item) {
+        if !forceRefresh && !SteamWorkshopDetailRefreshSupport.needsRefresh(item) {
             return
         }
 
@@ -1418,16 +1179,7 @@ final class SteamWorkshopService: ObservableObject {
         isRefreshingSelectedDownloadDetailItem = true
         selectedDownloadDetailError = nil
 
-        let stub = SteamWorkshopBrowseStub(
-            id: item.id,
-            title: item.title,
-            author: item.author,
-            authorProfileURL: item.authorProfileURL,
-            authorWorkshopURL: item.authorWorkshopURL,
-            hasAdultContent: item.hasAdultContent,
-            summary: item.summary,
-            previewImageURL: item.previewImageURL
-        )
+        let stub = SteamWorkshopDetailRefreshSupport.makeStub(from: item)
 
         selectedItemDetailTask = Task(priority: .userInitiated) { [weak self] in
             do {
@@ -1506,12 +1258,7 @@ final class SteamWorkshopService: ObservableObject {
                     return
                 }
                 self.prefetchedBrowserPages[key] = pageResult
-                let seededItems = pageResult.stubs.map(Self.seededBrowserItem)
-                self.prefetchBrowserPreviewImages(for: seededItems, limit: 36)
             }
-            let shouldDeferDetailPrefetch = await MainActor.run { self.shouldDeferBackgroundDetailWork() }
-            guard !shouldDeferDetailPrefetch else { return }
-            try? await Self.prewarmDetailCache(for: pageResult.stubs)
             guard lookaheadDepth > 0, pageResult.hasMore else { return }
             await MainActor.run {
                 self.prefetchUpcomingBrowserPageIfNeeded(
@@ -1544,489 +1291,4 @@ final class SteamWorkshopService: ObservableObject {
         "\(context.cacheKeyComponent)|\(source.rawValue)|\(trendingWindow.rawValue)|\(themeFilter.rawValue)|\(ageRatingFilter.rawValue)|\(resolutionFilter.rawValue)|\(categoryFilter.rawValue)|\(query)|\(page)"
     }
 
-    private func loadBrowserCache(
-        context: SteamWorkshopBrowseContext,
-        source: SteamWorkshopSource,
-        query: String,
-        trendingWindow: SteamWorkshopTrendingWindow,
-        themeFilter: SteamWorkshopThemeFilter,
-        ageRatingFilter: SteamWorkshopAgeRatingFilter,
-        resolutionFilter: SteamWorkshopResolutionFilter,
-        categoryFilter: SteamWorkshopCategoryFilter
-    ) -> SteamWorkshopBrowserCacheSnapshot? {
-        let url = cacheFileURL(
-            context: context,
-            source: source,
-            query: query,
-            trendingWindow: trendingWindow,
-            themeFilter: themeFilter,
-            ageRatingFilter: ageRatingFilter,
-            resolutionFilter: resolutionFilter,
-            categoryFilter: categoryFilter
-        )
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(SteamWorkshopBrowserCacheSnapshot.self, from: data)
-    }
-
-    private func saveBrowserCache(
-        context: SteamWorkshopBrowseContext,
-        source: SteamWorkshopSource,
-        query: String,
-        trendingWindow: SteamWorkshopTrendingWindow,
-        themeFilter: SteamWorkshopThemeFilter,
-        ageRatingFilter: SteamWorkshopAgeRatingFilter,
-        resolutionFilter: SteamWorkshopResolutionFilter,
-        categoryFilter: SteamWorkshopCategoryFilter,
-        items: [SteamWorkshopBrowserItem]
-    ) {
-        let snapshot = SteamWorkshopBrowserCacheSnapshot(fetchedAt: Date(), items: items)
-        guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        try? FileManager.default.createDirectory(at: cacheDirectoryURL, withIntermediateDirectories: true)
-        try? data.write(
-            to: cacheFileURL(
-                context: context,
-                source: source,
-                query: query,
-                trendingWindow: trendingWindow,
-                themeFilter: themeFilter,
-                ageRatingFilter: ageRatingFilter,
-                resolutionFilter: resolutionFilter,
-                categoryFilter: categoryFilter
-            ),
-            options: [.atomic]
-        )
-    }
-
-    private func cacheFileURL(
-        context: SteamWorkshopBrowseContext,
-        source: SteamWorkshopSource,
-        query: String,
-        trendingWindow: SteamWorkshopTrendingWindow,
-        themeFilter: SteamWorkshopThemeFilter,
-        ageRatingFilter: SteamWorkshopAgeRatingFilter,
-        resolutionFilter: SteamWorkshopResolutionFilter,
-        categoryFilter: SteamWorkshopCategoryFilter
-    ) -> URL {
-        switch context {
-        case .discovery:
-            break
-        case .authorWorkshop:
-            return cacheDirectoryURL.appendingPathComponent("\(context.cacheKeyComponent).json")
-        }
-        let normalized = query.isEmpty
-            ? "all"
-            : query.lowercased().replacingOccurrences(of: #"[^a-z0-9]+"#, with: "-", options: .regularExpression)
-        let theme = themeFilter.rawValue.lowercased().replacingOccurrences(of: #"[^a-z0-9]+"#, with: "-", options: .regularExpression)
-        let age = ageRatingFilter.rawValue.lowercased().replacingOccurrences(of: #"[^a-z0-9]+"#, with: "-", options: .regularExpression)
-        let resolution = resolutionFilter.rawValue.lowercased().replacingOccurrences(of: #"[^a-z0-9]+"#, with: "-", options: .regularExpression)
-        let category = categoryFilter.rawValue.lowercased().replacingOccurrences(of: #"[^a-z0-9]+"#, with: "-", options: .regularExpression)
-        let period = source.supportsTimeRange ? trendingWindow.rawValue : "na"
-        return cacheDirectoryURL.appendingPathComponent("\(source.rawValue)-\(period)-\(theme)-\(age)-\(resolution)-\(category)-\(normalized).json")
-    }
-
-    static func detailCacheDirectoryURL() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library", isDirectory: true)
-            .appendingPathComponent("Caches", isDirectory: true)
-            .appendingPathComponent("MyWallpaperX", isDirectory: true)
-            .appendingPathComponent("SteamWorkshop", isDirectory: true)
-            .appendingPathComponent("ItemDetails", isDirectory: true)
-    }
-
-    static func detailCacheFileURL(id: String) -> URL {
-        detailCacheDirectoryURL().appendingPathComponent("\(id).json")
-    }
-
-    static func legacyDownloadMetadataFileURL(for directory: URL) -> URL {
-        directory.appendingPathComponent(".mywallpaperx-steam-metadata.json")
-    }
-
-    func downloadMetadataIndexDirectoryURL() -> URL {
-        libraryRootURL.appendingPathComponent(".mywallpaperx-steam-metadata", isDirectory: true)
-    }
-
-    func downloadMetadataFileURL(for itemID: String) -> URL {
-        downloadMetadataIndexDirectoryURL().appendingPathComponent("\(itemID).json")
-    }
-
-    static func loadDetailCache(id: String) -> SteamWorkshopBrowserItem? {
-        let url = detailCacheFileURL(id: id)
-        guard let data = try? Data(contentsOf: url),
-              let snapshot = try? JSONDecoder().decode(SteamWorkshopDetailCacheSnapshot.self, from: data),
-              Date().timeIntervalSince(snapshot.fetchedAt) < Constants.detailCacheTTL else {
-            return nil
-        }
-        return snapshot.item
-    }
-
-    static func saveDetailCache(item: SteamWorkshopBrowserItem) {
-        let snapshot = SteamWorkshopDetailCacheSnapshot(fetchedAt: Date(), item: item)
-        guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        let directory = detailCacheDirectoryURL()
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? data.write(to: detailCacheFileURL(id: item.id), options: [.atomic])
-    }
-
-    func buildInstalledRecord(at directory: URL) -> SteamWorkshopDownloadRecord? {
-        let projectURL = directory.appendingPathComponent("project.json")
-        let metadataURL = Self.legacyDownloadMetadataFileURL(for: directory)
-        guard FileManager.default.fileExists(atPath: projectURL.path)
-                || FileManager.default.fileExists(atPath: metadataURL.path) else {
-            return nil
-        }
-        let project = try? JSONDecoder().decode(SteamWorkshopProject.self, from: Data(contentsOf: projectURL))
-        let identifier = project?.workshopid ?? directory.lastPathComponent
-        let metadata = loadDownloadMetadataSnapshot(legacyDirectory: directory, id: identifier)
-        return buildInstalledRecord(
-            from: metadata,
-            legacyDirectory: directory,
-            fallbackProject: project,
-            fallbackIdentifier: identifier
-        )
-    }
-
-    func resolveVideoURL(in directory: URL, preferredFileName: String?) -> URL? {
-        if let preferredFileName {
-            let preferredURL = directory.appendingPathComponent(preferredFileName)
-            if FileManager.default.fileExists(atPath: preferredURL.path) {
-                return preferredURL
-            }
-        }
-
-        let supportedExtensions = Set(["mp4", "webm", "mov", "m4v"])
-        guard let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
-            return nil
-        }
-        return files.first {
-            supportedExtensions.contains($0.pathExtension.localizedLowercase)
-        }
-    }
-
-    private func fileSizeText(for url: URL) -> String? {
-        guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int64 else {
-            return nil
-        }
-        return Self.fileSizeText(forBytes: size)
-    }
-
-    func upsertTransientRecord(
-        id: String,
-        title: String,
-        status: SteamWorkshopDownloadRecord.Status,
-        sizeText: String? = nil
-    ) {
-        if let index = downloads.firstIndex(where: { $0.id == id }) {
-            let previous = downloads[index]
-            downloads[index] = SteamWorkshopDownloadRecord(
-                id: id,
-                title: previous.title,
-                description: previous.description,
-                tags: previous.tags,
-                folderURL: previous.folderURL,
-                previewURL: previous.previewURL,
-                sourceVideoURL: previous.sourceVideoURL,
-                exportedVideoURL: previous.exportedVideoURL,
-                updatedAt: Date(),
-                sizeText: sizeText ?? previous.sizeText,
-                status: status,
-                browserItem: previous.browserItem
-            )
-            return
-        }
-
-        let folderURL = libraryRootURL.appendingPathComponent(id, isDirectory: true)
-        downloads.insert(
-            SteamWorkshopDownloadRecord(
-                id: id,
-                title: title,
-                description: "",
-                tags: [],
-                folderURL: folderURL,
-                previewURL: nil,
-                sourceVideoURL: nil,
-                exportedVideoURL: nil,
-                updatedAt: Date(),
-                sizeText: sizeText ?? "等待下载",
-                status: status,
-                browserItem: browserItemForDownload(id: id)
-            ),
-            at: 0
-        )
-    }
-
-    func buildInstalledRecord(
-        from metadata: SteamWorkshopDownloadMetadataSnapshot?,
-        legacyDirectory: URL?,
-        fallbackProject: SteamWorkshopProject?,
-        fallbackIdentifier: String
-    ) -> SteamWorkshopDownloadRecord? {
-        let identifier = metadata?.item.id ?? fallbackProject?.workshopid ?? fallbackIdentifier
-        let resolvedLegacyDirectory: URL? = {
-            if let legacyFolderURL = metadata?.legacyFolderURL,
-               FileManager.default.fileExists(atPath: legacyFolderURL.path) {
-                return legacyFolderURL
-            }
-            if let legacyDirectory,
-               FileManager.default.fileExists(atPath: legacyDirectory.path) {
-                return legacyDirectory
-            }
-            return nil
-        }()
-
-        let previewURL: URL? = {
-            if let previewRelativePath = metadata?.previewRelativePath,
-               let resolvedLegacyDirectory {
-                let candidate = resolvedLegacyDirectory.appendingPathComponent(previewRelativePath)
-                if FileManager.default.fileExists(atPath: candidate.path) {
-                    return candidate
-                }
-            }
-            if let preview = fallbackProject?.preview,
-               let resolvedLegacyDirectory {
-                let candidate = resolvedLegacyDirectory.appendingPathComponent(preview)
-                if FileManager.default.fileExists(atPath: candidate.path) {
-                    return candidate
-                }
-            }
-            return nil
-        }()
-
-        let sourceVideoURL: URL? = {
-            if let sourceVideoRelativePath = metadata?.sourceVideoRelativePath,
-               let resolvedLegacyDirectory {
-                let candidate = resolvedLegacyDirectory.appendingPathComponent(sourceVideoRelativePath)
-                if FileManager.default.fileExists(atPath: candidate.path) {
-                    return candidate
-                }
-            }
-            if let resolvedLegacyDirectory {
-                return resolveVideoURL(in: resolvedLegacyDirectory, preferredFileName: fallbackProject?.file)
-            }
-            return nil
-        }()
-
-        let exportedVideoURL = metadata?.exportedVideoURL.flatMap { url in
-            FileManager.default.fileExists(atPath: url.path) ? url : nil
-        }
-        let effectiveVideoURL = exportedVideoURL ?? sourceVideoURL
-        guard metadata != nil || effectiveVideoURL != nil else {
-            return nil
-        }
-
-        let updatedAt: Date = {
-            if let effectiveVideoURL,
-               let values = try? effectiveVideoURL.resourceValues(forKeys: [.contentModificationDateKey]),
-               let date = values.contentModificationDate {
-                return date
-            }
-            if let resolvedLegacyDirectory,
-               let values = try? resolvedLegacyDirectory.resourceValues(forKeys: [.contentModificationDateKey]),
-               let date = values.contentModificationDate {
-                return date
-            }
-            return Date()
-        }()
-
-        let title = fallbackProject?.title?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let description = fallbackProject?.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let tags = fallbackProject?.tags ?? []
-        let sizeText = effectiveVideoURL.flatMap { fileSizeText(for: $0) } ?? "未知大小"
-        let browserItem = metadata?.item ?? browserItemForDownload(id: identifier)
-
-        let browserTitle = browserItem?.title.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-        return SteamWorkshopDownloadRecord(
-            id: identifier,
-            title: title?.isEmpty == false ? title! : (browserTitle.isEmpty ? "Workshop #\(identifier)" : browserTitle),
-            description: description.isEmpty ? (browserItem?.descriptionText ?? "") : description,
-            tags: tags.isEmpty ? (browserItem?.tags ?? []) : tags,
-            folderURL: resolvedLegacyDirectory ?? effectiveVideoURL?.deletingLastPathComponent() ?? libraryRootURL,
-            previewURL: previewURL,
-            sourceVideoURL: sourceVideoURL,
-            exportedVideoURL: exportedVideoURL,
-            updatedAt: updatedAt,
-            sizeText: sizeText,
-            status: .ready,
-            browserItem: browserItem
-        )
-    }
-
-    private func loadDownloadMetadataSnapshot(legacyDirectory: URL?, id: String) -> SteamWorkshopDownloadMetadataSnapshot? {
-        let metadataURL = downloadMetadataFileURL(for: id)
-        if let data = try? Data(contentsOf: metadataURL),
-           let snapshot = try? JSONDecoder().decode(SteamWorkshopDownloadMetadataSnapshot.self, from: data) {
-            return snapshot
-        }
-
-        if let legacyDirectory {
-            let metadataURL = Self.legacyDownloadMetadataFileURL(for: legacyDirectory)
-            if let data = try? Data(contentsOf: metadataURL),
-               let snapshot = try? JSONDecoder().decode(SteamWorkshopDownloadMetadataSnapshot.self, from: data) {
-                return snapshot
-            }
-        }
-
-        guard let item = browserItemForDownload(id: id) else { return nil }
-        return SteamWorkshopDownloadMetadataSnapshot(
-            fetchedAt: .distantPast,
-            item: item,
-            sourceVideoRelativePath: nil,
-            previewRelativePath: nil,
-            exportedVideoURL: nil,
-            legacyFolderURL: legacyDirectory
-        )
-    }
-
-    func browserItemForDownload(id: String) -> SteamWorkshopBrowserItem? {
-        if let selectedBrowserItem, selectedBrowserItem.id == id {
-            return selectedBrowserItem
-        }
-        if let browserItem = browserItems.first(where: { $0.id == id }) {
-            return browserItem
-        }
-        return Self.loadDetailCache(id: id)
-    }
-
-    private static func cachedItemNeedsHydration(for stub: SteamWorkshopBrowseStub) -> Bool {
-        guard let cached = loadDetailCache(id: stub.id) else { return true }
-        let merged = mergeStub(stub, into: cached)
-        return merged.detailFields.isEmpty
-            || merged.fileSizeText == nil
-            || merged.resolutionText == nil
-            || merged.workshopTypeText == nil
-            || merged.author == "未知作者"
-            || (merged.authorProfileURL == nil && merged.authorWorkshopURL == nil)
-    }
-
-    static func applyingCachedAuthorNameIfPossible(to item: SteamWorkshopBrowserItem) async -> SteamWorkshopBrowserItem {
-        guard item.author == "未知作者" else { return item }
-        let keys = authorCacheKeys(
-            creatorID: creatorID(from: item.authorProfileURL) ?? creatorID(from: item.authorWorkshopURL),
-            authorProfileURL: item.authorProfileURL,
-            authorWorkshopURL: item.authorWorkshopURL
-        )
-        guard let cachedAuthorName = await Self.authorNameStore.name(for: keys) else { return item }
-        return SteamWorkshopBrowserItem(
-            id: item.id,
-            title: item.title,
-            author: cachedAuthorName,
-            authorProfileURL: item.authorProfileURL,
-            authorWorkshopURL: item.authorWorkshopURL,
-            hasAdultContent: item.hasAdultContent,
-            summary: item.summary,
-            descriptionText: item.descriptionText,
-            tags: item.tags,
-            workshopTypeText: item.workshopTypeText,
-            ageRatingText: item.ageRatingText,
-            genreText: item.genreText,
-            categoryText: item.categoryText,
-            previewImageURL: item.previewImageURL,
-            previewVideoURL: item.previewVideoURL,
-            previewAssetKind: item.previewAssetKind,
-            fileSizeText: item.fileSizeText,
-            resolutionText: item.resolutionText,
-            postedText: item.postedText,
-            updatedText: item.updatedText,
-            favoritesText: item.favoritesText,
-            subscriptionsText: item.subscriptionsText,
-            scoreText: item.scoreText,
-            lifetimeFavoritesText: item.lifetimeFavoritesText,
-            lifetimeSubscriptionsText: item.lifetimeSubscriptionsText,
-            visibilityText: item.visibilityText,
-            moderationText: item.moderationText,
-            detailFields: item.detailFields,
-            detailURL: item.detailURL
-        )
-    }
-
-    static func resolvedAuthorName(
-        creatorID: String?,
-        stub: SteamWorkshopBrowseStub,
-        authorProfileURL: URL?,
-        authorWorkshopURL: URL?
-    ) async -> String {
-        let stubAuthor = normalizedStubAuthor(
-            SteamWorkshopBrowseStub(
-                id: stub.id,
-                title: stub.title,
-                author: stub.author,
-                authorProfileURL: authorProfileURL ?? stub.authorProfileURL,
-                authorWorkshopURL: authorWorkshopURL ?? stub.authorWorkshopURL,
-                hasAdultContent: stub.hasAdultContent,
-                summary: stub.summary,
-                previewImageURL: stub.previewImageURL
-            )
-        )
-
-        if stubAuthor != "未知作者" {
-            await saveAuthorNameIfPossible(
-                stubAuthor,
-                creatorID: creatorID,
-                authorProfileURL: authorProfileURL ?? stub.authorProfileURL,
-                authorWorkshopURL: authorWorkshopURL ?? stub.authorWorkshopURL
-            )
-            return stubAuthor
-        }
-
-        let keys = authorCacheKeys(
-            creatorID: creatorID,
-            authorProfileURL: authorProfileURL ?? stub.authorProfileURL,
-            authorWorkshopURL: authorWorkshopURL ?? stub.authorWorkshopURL
-        )
-        if let cachedName = await Self.authorNameStore.name(for: keys) {
-            return cachedName
-        }
-        return stubAuthor
-    }
-
-    static func saveAuthorNameIfPossible(
-        _ authorName: String?,
-        creatorID: String?,
-        authorProfileURL: URL?,
-        authorWorkshopURL: URL?
-    ) async {
-        guard let authorName else { return }
-        let normalizedName = normalizeAuthorName(authorName)
-        let keys = authorCacheKeys(
-            creatorID: creatorID,
-            authorProfileURL: authorProfileURL,
-            authorWorkshopURL: authorWorkshopURL
-        )
-        await Self.authorNameStore.store(name: normalizedName, for: keys)
-    }
-
-    static func authorCacheKeys(
-        creatorID explicitCreatorID: String?,
-        authorProfileURL: URL?,
-        authorWorkshopURL: URL?
-    ) -> [String] {
-        var keys: [String] = []
-        if let explicitCreatorID, !explicitCreatorID.isEmpty {
-            keys.append("creator:\(explicitCreatorID)")
-        }
-        if let authorProfileURL {
-            keys.append("profile:\((normalizeSteamCommunityURL(authorProfileURL.absoluteString) ?? authorProfileURL).absoluteString.lowercased())")
-        }
-        if let normalizedWorkshopURL = normalizedAuthorWorkshopURL(authorWorkshopURL) {
-            keys.append("workshop:\(normalizedWorkshopURL.absoluteString.lowercased())")
-        }
-        if let profileCreatorID = creatorID(from: authorProfileURL) {
-            keys.append("creator:\(profileCreatorID)")
-        }
-        if let workshopCreatorID = creatorID(from: authorWorkshopURL) {
-            keys.append("creator:\(workshopCreatorID)")
-        }
-        return Array(NSOrderedSet(array: keys)) as? [String] ?? keys
-    }
-
-    static func creatorID(from url: URL?) -> String? {
-        guard let url else { return nil }
-        let components = url.absoluteURL.pathComponents
-        guard let profilesIndex = components.firstIndex(of: "profiles"),
-              components.indices.contains(profilesIndex + 1) else {
-            return nil
-        }
-        let candidate = components[profilesIndex + 1].trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        return candidate.isEmpty ? nil : candidate
-    }
 }
