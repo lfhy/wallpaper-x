@@ -115,7 +115,9 @@ extension WallpaperManager {
         if let tag = selectedTag {
             return .tag(tag)
         }
-        return .category(selectedCategory)
+        // 设置页现在统一使用独立窗口语义；主窗口选择态若残留旧的 `.settings` 持久化值，回退到视频库默认入口。
+        let sanitizedCategory: Category = (selectedCategory == .settings) ? .myWallpapers : selectedCategory
+        return .category(sanitizedCategory)
     }
 }
 

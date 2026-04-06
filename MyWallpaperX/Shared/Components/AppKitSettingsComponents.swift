@@ -5,13 +5,41 @@
 
 import AppKit
 
+final class AdaptiveSystemBackgroundView: NSView {
+    override var wantsUpdateLayer: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+        needsLayout = true
+    }
+
+    override func updateLayer() {
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let color = isDark
+            ? NSColor.white.withAlphaComponent(0.02)
+            : NSColor.textBackgroundColor.blended(withFraction: 0.08, of: .underPageBackgroundColor)
+        layer?.backgroundColor = color?.cgColor ?? NSColor.textBackgroundColor.cgColor
+        layer?.borderWidth = 0
+        layer?.borderColor = nil
+    }
+}
+
 final class SettingsGroupView: NSView {
     private let titleLabel: NSTextField
     private let showsTitle: Bool
-    private let backgroundEffectView: NSView = {
-        let view = NSView()
-        view.wantsLayer = true
-        view.layer?.backgroundColor = NSColor.clear.cgColor
+    private let backgroundView: AdaptiveSystemBackgroundView = {
+        let view = AdaptiveSystemBackgroundView()
         view.translatesAutoresizingMaskIntoConstraints = false
         return view
     }()
@@ -32,6 +60,8 @@ final class SettingsGroupView: NSView {
     }()
 
     private var rowCount = 0
+    private var contentRows: [NSView] = []
+    private var separators: [NSView] = []
 
     init(title: String?) {
         let normalizedTitle = (title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
@@ -39,22 +69,23 @@ final class SettingsGroupView: NSView {
         showsTitle = !normalizedTitle.isEmpty
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
 
-        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.textColor = .secondaryLabelColor
-        titleLabel.alignment = .center
+        titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        titleLabel.textColor = .labelColor
+        titleLabel.alignment = .left
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.isHidden = !showsTitle
 
         addSubview(titleLabel)
-        addSubview(backgroundEffectView)
+        addSubview(backgroundView)
         addSubview(contentContainerView)
         contentContainerView.addSubview(rowStack)
 
         var constraints: [NSLayoutConstraint] = [
-            backgroundEffectView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            backgroundEffectView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            backgroundEffectView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            backgroundView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            backgroundView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            backgroundView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             contentContainerView.leadingAnchor.constraint(equalTo: leadingAnchor),
             contentContainerView.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -69,18 +100,20 @@ final class SettingsGroupView: NSView {
         if showsTitle {
             constraints.append(contentsOf: [
                 titleLabel.topAnchor.constraint(equalTo: topAnchor),
-                titleLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-                titleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 8),
-                titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8),
-                backgroundEffectView.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 6),
-                contentContainerView.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 6)
+                titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+                titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16),
+                backgroundView.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
+                contentContainerView.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8)
             ])
         } else {
-            constraints.append(backgroundEffectView.topAnchor.constraint(equalTo: topAnchor))
+            constraints.append(backgroundView.topAnchor.constraint(equalTo: topAnchor))
             constraints.append(contentContainerView.topAnchor.constraint(equalTo: topAnchor))
         }
 
         NSLayoutConstraint.activate(constraints)
+        backgroundView.layer?.cornerRadius = 12
+        backgroundView.layer?.cornerCurve = .continuous
+        backgroundView.layer?.masksToBounds = true
     }
 
     @available(*, unavailable)
@@ -94,11 +127,29 @@ final class SettingsGroupView: NSView {
             rowStack.addArrangedSubview(separator)
             separator.translatesAutoresizingMaskIntoConstraints = false
             separator.widthAnchor.constraint(equalTo: rowStack.widthAnchor).isActive = true
+            separators.append(separator)
         }
         rowStack.addArrangedSubview(row)
         row.translatesAutoresizingMaskIntoConstraints = false
         row.widthAnchor.constraint(equalTo: rowStack.widthAnchor).isActive = true
+        contentRows.append(row)
         rowCount += 1
+        refreshSeparators()
+    }
+
+    func refreshSeparators() {
+        guard !separators.isEmpty else { return }
+
+        for (index, separator) in separators.enumerated() {
+            guard index + 1 < contentRows.count else {
+                separator.isHidden = true
+                continue
+            }
+
+            let previousRow = contentRows[index]
+            let nextRow = contentRows[index + 1]
+            separator.isHidden = previousRow.isHidden || nextRow.isHidden
+        }
     }
 
     private func makeSeparator() -> NSView {
@@ -110,8 +161,8 @@ final class SettingsGroupView: NSView {
         container.addSubview(separator)
 
         NSLayoutConstraint.activate([
-            separator.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
-            separator.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            separator.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            separator.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
             separator.topAnchor.constraint(equalTo: container.topAnchor),
             separator.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             container.heightAnchor.constraint(equalToConstant: 1)
@@ -141,6 +192,7 @@ final class AdaptiveSeparatorLineView: NSView {
     }
 
     override func updateLayer() {
-        layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.08).cgColor
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(isDark ? 0.12 : 0.16).cgColor
     }
 }

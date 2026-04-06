@@ -11,7 +11,6 @@ import AppKit
 
 struct ContentView: View {
     @EnvironmentObject var wallpaperManager: WallpaperManager
-    @Environment(\.openSettings) private var openSettings
     @State private var selectedItem: SelectedItem = .category(.myWallpapers)
     @State private var contentReloadToken = UUID()
     /// 上次发出工具栏模式通知时的模块 ID，用于幂等保护，避免视频库内部切换时反复触发工具栏重建
@@ -49,7 +48,7 @@ struct ContentView: View {
                 syncQuickLookPreviewIfNeeded()
             }
             .onReceive(NotificationCenter.default.publisher(for: .appOpenSettingsRequested)) { _ in
-                openSettings()
+                SettingsWindowController.shared.showWindow()
             }
             .simultaneousGesture(
                 TapGesture().onEnded {

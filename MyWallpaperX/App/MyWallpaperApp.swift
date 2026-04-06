@@ -8,125 +8,95 @@
 
 import SwiftUI
 
-private enum SettingsTab: String, CaseIterable, Identifiable {
-    case playback
-    case experience
-    case controls
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .playback: return "播放"
-        case .experience: return "体验"
-        case .controls: return "控制"
-        }
-    }
-
-    var symbolName: String {
-        switch self {
-        case .playback: return "play.circle"
-        case .experience: return "switch.2"
-        case .controls: return "keyboard"
-        }
-    }
-
-    var sections: Set<AppSettingsSection> {
-        switch self {
-        case .playback:
-            return [.playbackModes, .audio]
-        case .experience:
-            return [.system, .efficiency, .display]
-        case .controls:
-            return [.hotkeys, .maintenance]
-        }
-    }
-}
-
-private struct SettingsWindowConfigurator: NSViewRepresentable {
-    let targetSize: NSSize
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            configureWindowIfNeeded(for: view)
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async {
-            configureWindowIfNeeded(for: nsView)
-        }
-    }
-
-    private func configureWindowIfNeeded(for view: NSView) {
-        guard let window = view.window else { return }
-        window.title = ""
-        window.titleVisibility = .hidden
-        window.titlebarAppearsTransparent = false
-        window.toolbarStyle = .unified
-        window.isOpaque = true
-        window.backgroundColor = .windowBackgroundColor
-        window.minSize = targetSize
-
-        let currentSize = window.contentLayoutRect.size
-        let widthDelta = abs(currentSize.width - targetSize.width)
-        let heightDelta = abs(currentSize.height - targetSize.height)
-        if widthDelta > 24 || heightDelta > 24 {
-            window.setContentSize(targetSize)
-            window.center()
-        }
-    }
-}
-
 private struct SettingsSceneView: View {
     @EnvironmentObject private var wallpaperManager: WallpaperManager
-    @State private var selectedTab: SettingsTab = .playback
-
-    private let targetWindowSize = NSSize(width: 500, height: 440)
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 20) {
-                ForEach(SettingsTab.allCases) { tab in
-                    Button {
-                        selectedTab = tab
-                    } label: {
-                        Label(tab.title, systemImage: tab.symbolName)
-                            .labelStyle(.titleAndIcon)
-                            .frame(minWidth: 72, minHeight: 28)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.primary)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 10)
-            .padding(.bottom, 8)
-
-            Divider()
-
-            AppKitSettingsView(visibleSections: selectedTab.sections)
-                .environmentObject(wallpaperManager)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }
-        .background(SettingsWindowConfigurator(targetSize: targetWindowSize))
-        .frame(width: targetWindowSize.width, height: targetWindowSize.height)
+        AppKitSettingsView(
+            visibleSections: Set(AppSettingsSection.allCases),
+            topContentInset: 24
+        )
+        .environmentObject(wallpaperManager)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .ignoresSafeArea(.container, edges: .top)
     }
 }
 
 struct AppSettingsCommands: Commands {
-    @Environment(\.openSettings) private var openSettings
-
     var body: some Commands {
         CommandGroup(replacing: .appSettings) {
             Button("偏好设置") {
-                openSettings()
+                SettingsWindowController.shared.showWindow()
             }
             .keyboardShortcut(",", modifiers: .command)
         }
+    }
+}
+
+@MainActor
+final class SettingsWindowController: NSWindowController, NSWindowDelegate {
+    static let shared = SettingsWindowController()
+
+    private let targetWindowSize = NSSize(width: 500, height: 440)
+    private let hostingController: NSHostingController<AnyView>
+    private var hasShownWindow = false
+
+    private init() {
+        hostingController = NSHostingController(
+            rootView: AnyView(
+                SettingsSceneView()
+                    .environmentObject(WallpaperManager.shared)
+                    .frame(width: 500, height: 440)
+            )
+        )
+
+        let window = MainAppWindow(contentViewController: hostingController)
+        window.identifier = NSUserInterfaceItemIdentifier("SettingsWindow")
+        window.title = "设置"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        window.titleVisibility = .visible
+        window.titlebarAppearsTransparent = false
+        window.titlebarSeparatorStyle = .none
+        window.toolbarStyle = .unified
+        window.isOpaque = true
+        window.backgroundColor = .windowBackgroundColor
+        window.setContentSize(targetWindowSize)
+        window.minSize = targetWindowSize
+        window.maxSize = targetWindowSize
+        window.isReleasedWhenClosed = false
+        window.isRestorable = false
+        window.collectionBehavior.remove(.fullScreenAuxiliary)
+        window.collectionBehavior.remove(.moveToActiveSpace)
+        window.level = .normal
+        let toolbar = NSToolbar(identifier: "SettingsWindowToolbar")
+        toolbar.displayMode = .iconOnly
+        toolbar.allowsUserCustomization = false
+        window.toolbar = toolbar
+
+        super.init(window: window)
+        shouldCascadeWindows = false
+        self.window?.delegate = self
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func showWindow() {
+        hostingController.rootView = AnyView(
+            SettingsSceneView()
+                .environmentObject(WallpaperManager.shared)
+                .frame(width: targetWindowSize.width, height: targetWindowSize.height)
+        )
+
+        NSApp.activate(ignoringOtherApps: true)
+        guard let window else { return }
+        if !hasShownWindow {
+            window.center()
+            hasShownWindow = true
+        }
+        window.makeKeyAndOrderFront(nil)
     }
 }
 
@@ -141,8 +111,7 @@ struct MyWallpaperApp: App {
     
     var body: some Scene {
         Settings {
-            SettingsSceneView()
-                .environmentObject(wallpaperManager)
+            EmptyView()
         }
         .commands {
             AppSettingsCommands()

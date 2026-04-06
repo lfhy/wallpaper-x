@@ -9,8 +9,14 @@
 import AppKit
 
 func appModalHostWindow() -> NSWindow? {
-    // 弹窗优先挂到主窗口，其次才是当前 key/main window，避免 sheet 跑到错误窗口上。
-    MainWindowCoordinator.mainWindow() ?? NSApp.keyWindow ?? NSApp.mainWindow
+    // 反馈 UI 优先挂到当前正在交互的窗口，再回退到主窗口，避免设置页等二级窗口把 sheet 错挂到主窗口上。
+    if let keyWindow = NSApp.keyWindow, keyWindow.isVisible {
+        return keyWindow
+    }
+    if let mainWindow = NSApp.mainWindow, mainWindow.isVisible {
+        return mainWindow
+    }
+    return MainWindowCoordinator.mainWindow()
 }
 
 func makeAppAlert(

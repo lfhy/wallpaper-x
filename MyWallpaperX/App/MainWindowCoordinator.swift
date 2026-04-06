@@ -473,7 +473,9 @@ enum MainWindowCoordinator {
 
     static func activateMainWindow(select category: Category? = nil) {
         if category == .settings {
-            NotificationCenter.default.post(name: .appOpenSettingsRequested, object: nil)
+            DispatchQueue.main.async {
+                SettingsWindowController.shared.showWindow()
+            }
             return
         }
 
