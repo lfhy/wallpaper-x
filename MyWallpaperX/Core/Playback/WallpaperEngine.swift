@@ -59,6 +59,18 @@ public final class WallpaperEngine: NSObject {
     var currentVideoFillMode = VideoFillMode.aspectFill.rawValue
     var currentMultiDisplayEnabled = true
     var currentShouldLoopCurrentItem = false
+    var currentSystemAudioSpectrumEnabled = false
+    var currentSpectrumLevels: [Float]
+    var lastSpectrumPushAt: CFTimeInterval = 0
+    private lazy var systemAudioSpectrumService: SystemAudioSpectrumService = {
+        let service = SystemAudioSpectrumService(barCount: Self.spectrumBarCount)
+        service.onLevels = { [weak self] levels in
+            DispatchQueue.main.async {
+                self?.updateSystemAudioSpectrumLevels(levels)
+            }
+        }
+        return service
+    }()
 
     var pauseWhenOtherAppFocused = true
     var pauseWhenOtherAppFullscreen = true
@@ -88,8 +100,11 @@ public final class WallpaperEngine: NSObject {
     var lastFullscreenSpaceState: Bool?
     var lastFullscreenSpaceStateAt: CFTimeInterval = 0
     let fullscreenSpaceStateCacheTTL: TimeInterval = 0.25
+    static let spectrumBarCount = 28
+    let spectrumPushMinInterval: CFTimeInterval = 1.0 / 30.0
 
     override init() {
+        currentSpectrumLevels = Array(repeating: 0, count: WallpaperEngine.spectrumBarCount)
         super.init()
         setupNotifications()
         scanDisplays()
@@ -238,6 +253,7 @@ public final class WallpaperEngine: NSObject {
         pendingPlaybackStateRefreshWorkItem?.cancel()
         pendingPlaybackStateRefreshWorkItem = nil
         pendingPlaybackStateRefreshDeadline = nil
+        systemAudioSpectrumService.setEnabled(false)
         stopPlayback()
         NotificationCenter.default.removeObserver(self)
         DistributedNotificationCenter.default.removeObserver(self)
@@ -253,7 +269,7 @@ public final class WallpaperEngine: NSObject {
 
         // 统一给所有正在运行的 daemon 下发 pause，保持引擎状态机单一。
         for session in displaySessions.values where session.process.isRunning {
-            send(DaemonCommand(action: "pause", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: nil, requestID: nil), to: session)
+            send(DaemonCommand(action: "pause", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: nil, spectrumEnabled: nil, spectrumLevels: nil, requestID: nil), to: session)
         }
         playbackPaused = true
     }
@@ -264,7 +280,7 @@ public final class WallpaperEngine: NSObject {
 
         // 恢复时统一带回当前播放速率，避免不同 session 恢复节奏不一致。
         for session in displaySessions.values where session.process.isRunning {
-            send(DaemonCommand(action: "resume", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: targetPlaybackRate, requestID: nil), to: session)
+            send(DaemonCommand(action: "resume", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: targetPlaybackRate, spectrumEnabled: nil, spectrumLevels: nil, requestID: nil), to: session)
         }
         playbackPaused = false
     }
@@ -274,13 +290,13 @@ public final class WallpaperEngine: NSObject {
         currentVolumeNormalized = normalizedVolume
 
         for session in displaySessions.values where session.process.isRunning {
-            send(DaemonCommand(action: "setVolume", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: normalizedVolume, playbackRate: nil, requestID: nil), to: session)
+            send(DaemonCommand(action: "setVolume", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: normalizedVolume, playbackRate: nil, spectrumEnabled: nil, spectrumLevels: nil, requestID: nil), to: session)
         }
     }
 
     public func setFillMode(_ fillMode: String) {
         for session in displaySessions.values where session.process.isRunning {
-            send(DaemonCommand(action: "setFillMode", videoPath: nil, framePath: nil, fillMode: fillMode, shouldLoopCurrentItem: nil, volume: nil, playbackRate: nil, requestID: nil), to: session)
+            send(DaemonCommand(action: "setFillMode", videoPath: nil, framePath: nil, fillMode: fillMode, shouldLoopCurrentItem: nil, volume: nil, playbackRate: nil, spectrumEnabled: nil, spectrumLevels: nil, requestID: nil), to: session)
         }
     }
 
@@ -289,7 +305,7 @@ public final class WallpaperEngine: NSObject {
         // 不做去重，确保每次开关操作都能可靠送达 daemon。
         currentShouldLoopCurrentItem = shouldLoop
         for session in displaySessions.values where session.process.isRunning {
-            send(DaemonCommand(action: "setLoop", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: shouldLoop, volume: nil, playbackRate: nil, requestID: nil), to: session)
+            send(DaemonCommand(action: "setLoop", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: shouldLoop, volume: nil, playbackRate: nil, spectrumEnabled: nil, spectrumLevels: nil, requestID: nil), to: session)
         }
     }
 
@@ -299,7 +315,60 @@ public final class WallpaperEngine: NSObject {
         targetPlaybackRate = clampedRate
         guard !playbackPaused else { return }
         for session in displaySessions.values where session.process.isRunning {
-            send(DaemonCommand(action: "resume", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: clampedRate, requestID: nil), to: session)
+            send(DaemonCommand(action: "resume", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: clampedRate, spectrumEnabled: nil, spectrumLevels: nil, requestID: nil), to: session)
+        }
+    }
+
+    public func setSystemAudioSpectrumEnabled(_ enabled: Bool) {
+        currentSystemAudioSpectrumEnabled = enabled
+        currentSpectrumLevels = Array(repeating: 0, count: Self.spectrumBarCount)
+        systemAudioSpectrumService.setEnabled(enabled)
+
+        for session in displaySessions.values where session.process.isRunning {
+            send(
+                DaemonCommand(
+                    action: "setSpectrumEnabled",
+                    videoPath: nil,
+                    framePath: nil,
+                    fillMode: nil,
+                    shouldLoopCurrentItem: nil,
+                    volume: nil,
+                    playbackRate: nil,
+                    spectrumEnabled: enabled,
+                    spectrumLevels: currentSpectrumLevels,
+                    requestID: nil
+                ),
+                to: session
+            )
+        }
+    }
+
+    public func updateSystemAudioSpectrumLevels(_ levels: [Float]) {
+        guard currentSystemAudioSpectrumEnabled else { return }
+
+        let now = CACurrentMediaTime()
+        guard now - lastSpectrumPushAt >= spectrumPushMinInterval else { return }
+        lastSpectrumPushAt = now
+
+        let resizedLevels = resizedSpectrumLevels(levels, count: Self.spectrumBarCount)
+        currentSpectrumLevels = resizedLevels
+
+        for session in displaySessions.values where session.process.isRunning {
+            send(
+                DaemonCommand(
+                    action: "setSpectrumLevels",
+                    videoPath: nil,
+                    framePath: nil,
+                    fillMode: nil,
+                    shouldLoopCurrentItem: nil,
+                    volume: nil,
+                    playbackRate: nil,
+                    spectrumEnabled: nil,
+                    spectrumLevels: resizedLevels,
+                    requestID: nil
+                ),
+                to: session
+            )
         }
     }
 
@@ -449,7 +518,7 @@ public final class WallpaperEngine: NSObject {
         guard let session = displaySessions.removeValue(forKey: displayID) else { return }
 
         if session.process.isRunning {
-            send(DaemonCommand(action: "stop", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: nil, requestID: nil), to: session)
+            send(DaemonCommand(action: "stop", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: nil, spectrumEnabled: nil, spectrumLevels: nil, requestID: nil), to: session)
             session.process.terminate()
         }
         cleanupSessionIO(session)
@@ -474,6 +543,8 @@ public final class WallpaperEngine: NSObject {
                 shouldLoopCurrentItem: shouldLoopCurrentItem,
                 volume: currentVolumeNormalized,
                 playbackRate: targetPlaybackRate,
+                spectrumEnabled: currentSystemAudioSpectrumEnabled,
+                spectrumLevels: currentSpectrumLevels,
                 requestID: requestID
             ),
             to: session
@@ -488,6 +559,22 @@ public final class WallpaperEngine: NSObject {
             try session.inputPipe.fileHandleForWriting.write(contentsOf: data)
         } catch {
         }
+    }
+
+    private func resizedSpectrumLevels(_ levels: [Float], count: Int) -> [Float] {
+        guard count > 0 else { return [] }
+        guard !levels.isEmpty else { return Array(repeating: 0, count: count) }
+        if levels.count == count {
+            return levels.map { min(max($0, 0), 1) }
+        }
+
+        var output = Array(repeating: Float(0), count: count)
+        let scale = Double(levels.count) / Double(count)
+        for index in 0..<count {
+            let sourceIndex = min(levels.count - 1, Int((Double(index) * scale).rounded(.down)))
+            output[index] = min(max(levels[sourceIndex], 0), 1)
+        }
+        return output
     }
 
     private func consumeDaemonEvents(from data: Data, for session: DisplayDaemonSession) {

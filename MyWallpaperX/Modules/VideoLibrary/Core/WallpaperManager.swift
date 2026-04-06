@@ -208,6 +208,7 @@ class WallpaperManager: ObservableObject {
             }
             // 播放速率变化时立即同步到引擎。
             self.applyPlaybackRateToEngine()
+            self.applySystemAudioSpectrumToEngine()
         }
         .store(in: &cancellables)
 

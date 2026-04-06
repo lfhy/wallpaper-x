@@ -59,6 +59,7 @@ extension WallpaperManager {
         )
         lastAppliedEnginePauseSettings = EnginePauseSettingsSnapshot(settings: settings)
         WallpaperEngine.shared.setVolume(Float(settings.volume))
+        applySystemAudioSpectrumToEngine()
     }
 
     // 启动自动切换 timer（始终从 0 重新计时）
@@ -283,5 +284,9 @@ extension WallpaperManager {
         let effectiveRate = settings.playbackRateEnabled ? settings.playbackRate : 1.0
         let rate = Float(max(0.25, min(2.0, effectiveRate)))
         WallpaperEngine.shared.setPlaybackRate(rate)
+    }
+
+    func applySystemAudioSpectrumToEngine() {
+        WallpaperEngine.shared.setSystemAudioSpectrumEnabled(settings.systemAudioSpectrumEnabled)
     }
 }

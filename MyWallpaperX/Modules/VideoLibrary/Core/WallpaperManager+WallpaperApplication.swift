@@ -57,6 +57,7 @@ extension WallpaperManager {
         )
         lastAppliedEnginePauseSettings = EnginePauseSettingsSnapshot(settings: settings)
         WallpaperEngine.shared.setVolume(Float(settings.volume))
+        applySystemAudioSpectrumToEngine()
 
         if settings.autoSwitchEnabled && userInitiated {
             // 用户手动切换时立即重置 timer，从 0 重新计时。

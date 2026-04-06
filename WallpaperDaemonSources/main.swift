@@ -27,6 +27,7 @@ private final class WallpaperDaemon {
     private let secondaryPlayer: AVQueuePlayer
     private let primaryLayer: AVPlayerLayer
     private let secondaryLayer: AVPlayerLayer
+    private let spectrumContainerLayer: CALayer
 
     private var primaryLooper: AVPlayerLooper?
     private var secondaryLooper: AVPlayerLooper?
@@ -44,6 +45,10 @@ private final class WallpaperDaemon {
     private var paused = false
     private var currentFillMode: String = "填充屏幕"
     private let crossfadeDuration: TimeInterval = 0.25
+    private let spectrumBarCount = 28
+    private var spectrumBarLayers: [CALayer] = []
+    private var spectrumEnabled = false
+    private var spectrumLevels: [Float] = Array(repeating: 0, count: 28)
 
     init?(displayID: CGDirectDisplayID) {
         guard let screen = WallpaperDaemon.screen(for: displayID) else {
@@ -74,6 +79,7 @@ private final class WallpaperDaemon {
         self.fallbackLayer = CALayer()
         self.primaryLayer = AVPlayerLayer(player: primaryPlayer)
         self.secondaryLayer = AVPlayerLayer(player: secondaryPlayer)
+        self.spectrumContainerLayer = CALayer()
         fallbackLayer.frame = window.contentView?.bounds ?? CGRect(origin: .zero, size: screen.frame.size)
         fallbackLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
         fallbackLayer.opacity = 0
@@ -86,6 +92,7 @@ private final class WallpaperDaemon {
             layer.opacity = 0
             window.contentView?.layer?.addSublayer(layer)
         }
+        setupSpectrumLayers()
 
         window.orderFrontRegardless()
         emit(type: "launched", requestID: nil, message: nil, videoPath: nil)
@@ -112,6 +119,12 @@ private final class WallpaperDaemon {
             }
             if let volume = command.volume {
                 currentVolume = min(max(volume, 0), 1)
+            }
+            if let spectrumEnabled = command.spectrumEnabled {
+                setSpectrumEnabled(spectrumEnabled)
+            }
+            if let spectrumLevels = command.spectrumLevels {
+                updateSpectrumLevels(spectrumLevels)
             }
             play(
                 videoPath: videoPath,
@@ -185,6 +198,19 @@ private final class WallpaperDaemon {
                     // .pause：视频播完停在最后一帧并触发 didPlayToEndTime，让主进程收到 ended 事件切下一张。
                     activePlayer.actionAtItemEnd = .pause
                 }
+            }
+        case "setSpectrumEnabled":
+            if let spectrumEnabled = command.spectrumEnabled {
+                setSpectrumEnabled(spectrumEnabled)
+            }
+            if let spectrumLevels = command.spectrumLevels {
+                updateSpectrumLevels(spectrumLevels)
+            } else if command.spectrumEnabled == false {
+                updateSpectrumLevels(Array(repeating: 0, count: spectrumBarCount))
+            }
+        case "setSpectrumLevels":
+            if let spectrumLevels = command.spectrumLevels {
+                updateSpectrumLevels(spectrumLevels)
             }
         case "stop":
             daemonLog("received stop")
@@ -745,6 +771,7 @@ private final class WallpaperDaemon {
         inactiveLayer.frame = contentBounds
         inactiveLayer.opacity = 0
         CATransaction.commit()
+        updateSpectrumLayout()
     }
 
     /// 根据填充模式和可见区域计算目标 layer frame。
@@ -906,6 +933,97 @@ private final class WallpaperDaemon {
         }
         window.setFrame(screen.frame, display: true)
         updateLayerFrames()
+    }
+
+    private func setupSpectrumLayers() {
+        spectrumContainerLayer.zPosition = 50
+        spectrumContainerLayer.opacity = 0
+        spectrumContainerLayer.masksToBounds = false
+        window.contentView?.layer?.addSublayer(spectrumContainerLayer)
+
+        for _ in 0..<spectrumBarCount {
+            let barLayer = CALayer()
+            barLayer.anchorPoint = CGPoint(x: 0.5, y: 0.0)
+            barLayer.backgroundColor = NSColor.white.withAlphaComponent(0.82).cgColor
+            barLayer.cornerRadius = 2
+            barLayer.shadowColor = NSColor.systemCyan.withAlphaComponent(0.7).cgColor
+            barLayer.shadowOpacity = 0.22
+            barLayer.shadowRadius = 6
+            barLayer.shadowOffset = .zero
+            spectrumContainerLayer.addSublayer(barLayer)
+            spectrumBarLayers.append(barLayer)
+        }
+
+        updateSpectrumLayout()
+        applySpectrumLevels(animated: false)
+    }
+
+    private func setSpectrumEnabled(_ enabled: Bool) {
+        spectrumEnabled = enabled
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.18)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeInEaseOut))
+        spectrumContainerLayer.opacity = enabled ? 1 : 0
+        CATransaction.commit()
+    }
+
+    private func updateSpectrumLevels(_ levels: [Float]) {
+        if levels.isEmpty {
+            spectrumLevels = Array(repeating: 0, count: spectrumBarCount)
+        } else if levels.count == spectrumBarCount {
+            spectrumLevels = levels.map { min(max($0, 0), 1) }
+        } else {
+            spectrumLevels = (0..<spectrumBarCount).map { index in
+                let scale = Double(levels.count) / Double(spectrumBarCount)
+                let sourceIndex = min(levels.count - 1, Int((Double(index) * scale).rounded(.down)))
+                return min(max(levels[sourceIndex], 0), 1)
+            }
+        }
+        applySpectrumLevels(animated: true)
+    }
+
+    private func updateSpectrumLayout() {
+        guard let contentBounds = window.contentView?.bounds else { return }
+        guard let screen = WallpaperDaemon.screen(for: displayID) else { return }
+
+        let dockInset = max(0, screen.visibleFrame.minY - screen.frame.minY)
+        let bottomInset: CGFloat = dockInset > 0 ? dockInset + 10 : 18
+        let width = min(contentBounds.width * 0.42, 420)
+        let height: CGFloat = 44
+        let originX = (contentBounds.width - width) / 2
+        spectrumContainerLayer.frame = CGRect(x: originX, y: bottomInset, width: width, height: height)
+
+        let barWidth: CGFloat = 8
+        let spacing: CGFloat = 6
+        let totalBarsWidth = CGFloat(spectrumBarCount) * barWidth + CGFloat(max(0, spectrumBarCount - 1)) * spacing
+        let leadingX = max(0, (width - totalBarsWidth) / 2)
+
+        for (index, barLayer) in spectrumBarLayers.enumerated() {
+            let x = leadingX + CGFloat(index) * (barWidth + spacing)
+            barLayer.frame = CGRect(x: x, y: 0, width: barWidth, height: 4)
+        }
+    }
+
+    private func applySpectrumLevels(animated: Bool) {
+        let minimumHeight: CGFloat = 4
+        let maximumHeight = max(16, spectrumContainerLayer.bounds.height)
+
+        CATransaction.begin()
+        if animated {
+            CATransaction.setAnimationDuration(0.12)
+            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+        } else {
+            CATransaction.setDisableActions(true)
+        }
+
+        for (index, barLayer) in spectrumBarLayers.enumerated() {
+            let level = index < spectrumLevels.count ? spectrumLevels[index] : 0
+            let eased = pow(CGFloat(level), 0.82)
+            let height = minimumHeight + (maximumHeight - minimumHeight) * eased
+            barLayer.frame = CGRect(x: barLayer.frame.minX, y: 0, width: barLayer.frame.width, height: height)
+            barLayer.opacity = spectrumEnabled ? Float(0.45 + 0.55 * level) : 0
+        }
+        CATransaction.commit()
     }
 
     private static func makeQueuePlayer() -> AVQueuePlayer {

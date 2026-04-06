@@ -237,6 +237,7 @@ public struct WallpaperSettings: Codable {
     var toggleMuteHotkey: FunctionKeyShortcut = .none
     var playbackRate: Double = 1.0 // 播放速率（0.5 慢速 / 1.0 正常 / 3.0 快速）
     var playbackRateEnabled: Bool = false // 是否启用播放速率控制
+    var systemAudioSpectrumEnabled: Bool = false // 是否显示系统音频频谱（实验功能）
     var sortMode: WallpaperSortMode = .none // 壁纸排序方式
     var sortAscending: Bool = true // 排序方向：true=升序，false=降序
 
@@ -269,6 +270,7 @@ public struct WallpaperSettings: Codable {
         case toggleMuteHotkey
         case playbackRate
         case playbackRateEnabled
+        case systemAudioSpectrumEnabled
         case sortMode
         case sortAscending
     }

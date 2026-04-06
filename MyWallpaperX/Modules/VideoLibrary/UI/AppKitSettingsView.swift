@@ -97,6 +97,7 @@ final class AppKitSettingsContainerView: NSView {
 
     private let startOnBootSwitch = NSSwitch()
     private let syncSystemWallpaperSwitch = NSSwitch()
+    private let systemAudioSpectrumSwitch = NSSwitch()
     private let systemHotkeysSwitch = NSSwitch()
     private let hotkeyRowsStack = NSStackView()
     private var hotkeyRowsContainer: NSView?
@@ -187,6 +188,7 @@ final class AppKitSettingsContainerView: NSView {
 
         startOnBootSwitch.state = settings.startOnBoot ? .on : .off
         syncSystemWallpaperSwitch.state = settings.syncSystemWallpaper ? .on : .off
+        systemAudioSpectrumSwitch.state = settings.systemAudioSpectrumEnabled ? .on : .off
         systemHotkeysSwitch.state = settings.systemHotkeysEnabled ? .on : .off
         hotkeyRowsContainer?.isHidden = !settings.systemHotkeysEnabled
 
@@ -412,10 +414,12 @@ final class AppKitSettingsContainerView: NSView {
         // 系统集成区只放会影响全局快捷键、同步壁纸和开机行为的配置。
         startOnBootSwitch.toolTip = "开机时自动启动应用并恢复上次的壁纸设置"
         syncSystemWallpaperSwitch.toolTip = "每次切换壁纸时同步更新系统壁纸"
+        systemAudioSpectrumSwitch.toolTip = "实验功能：采集系统音频并在桌面底部显示频谱条"
         systemHotkeysSwitch.toolTip = "允许使用全局 F1-F12 快捷键控制壁纸"
 
         systemSection.addRow(makeSettingRow(title: "开机自启动", iconSystemName: "power", trailing: startOnBootSwitch))
         systemSection.addRow(makeSettingRow(title: "同步系统壁纸", iconSystemName: "photo.on.rectangle", trailing: syncSystemWallpaperSwitch))
+        systemSection.addRow(makeSettingRow(title: "系统音频频谱", iconSystemName: "chart.bar.xaxis", subtitle: "实验功能", trailing: systemAudioSpectrumSwitch))
         hotkeysSection.addRow(makeSettingRow(title: "响应系统快捷键", iconSystemName: "keyboard", trailing: systemHotkeysSwitch))
 
         hotkeyRowsStack.orientation = .vertical
@@ -518,6 +522,7 @@ final class AppKitSettingsContainerView: NSView {
             playbackRateSwitch,
             startOnBootSwitch,
             syncSystemWallpaperSwitch,
+            systemAudioSpectrumSwitch,
             systemHotkeysSwitch,
             pauseOtherAppFocusedSwitch,
             pauseOtherAppFullscreenSwitch,
@@ -566,6 +571,8 @@ final class AppKitSettingsContainerView: NSView {
         startOnBootSwitch.action = #selector(handleStartOnBootToggle)
         syncSystemWallpaperSwitch.target = self
         syncSystemWallpaperSwitch.action = #selector(handleSyncSystemWallpaperToggle)
+        systemAudioSpectrumSwitch.target = self
+        systemAudioSpectrumSwitch.action = #selector(handleSystemAudioSpectrumToggle)
         systemHotkeysSwitch.target = self
         systemHotkeysSwitch.action = #selector(handleSystemHotkeysToggle)
 
@@ -891,6 +898,12 @@ final class AppKitSettingsContainerView: NSView {
     @objc private func handleSyncSystemWallpaperToggle() {
         guard !isUpdatingUI else { return }
         wallpaperManager.setSyncSystemWallpaperEnabled(syncSystemWallpaperSwitch.state == .on)
+    }
+
+    @objc private func handleSystemAudioSpectrumToggle() {
+        guard !isUpdatingUI else { return }
+        wallpaperManager.settings.systemAudioSpectrumEnabled = (systemAudioSpectrumSwitch.state == .on)
+        wallpaperManager.applySystemAudioSpectrumToEngine()
     }
 
     @objc private func handleSystemHotkeysToggle() {

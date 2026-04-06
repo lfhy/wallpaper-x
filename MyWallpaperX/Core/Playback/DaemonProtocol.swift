@@ -20,6 +20,8 @@ struct DaemonCommand: Codable {
     let shouldLoopCurrentItem: Bool?
     let volume: Float?
     let playbackRate: Float?
+    let spectrumEnabled: Bool?
+    let spectrumLevels: [Float]?
     let requestID: Int?
 }
 
