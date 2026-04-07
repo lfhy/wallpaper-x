@@ -946,9 +946,8 @@ private final class WallpaperDaemon {
             barLayer.anchorPoint = CGPoint(x: 0.5, y: 0.0)
             barLayer.backgroundColor = NSColor.white.withAlphaComponent(0.82).cgColor
             barLayer.cornerRadius = 2
-            barLayer.shadowColor = NSColor.systemCyan.withAlphaComponent(0.7).cgColor
-            barLayer.shadowOpacity = 0.22
-            barLayer.shadowRadius = 6
+            barLayer.shadowOpacity = 0
+            barLayer.shadowRadius = 0
             barLayer.shadowOffset = .zero
             spectrumContainerLayer.addSublayer(barLayer)
             spectrumBarLayers.append(barLayer)
@@ -1010,7 +1009,7 @@ private final class WallpaperDaemon {
 
         CATransaction.begin()
         if animated {
-            CATransaction.setAnimationDuration(0.12)
+            CATransaction.setAnimationDuration(0.08)
             CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
         } else {
             CATransaction.setDisableActions(true)

@@ -101,7 +101,7 @@ public final class WallpaperEngine: NSObject {
     var lastFullscreenSpaceStateAt: CFTimeInterval = 0
     let fullscreenSpaceStateCacheTTL: TimeInterval = 0.25
     static let spectrumBarCount = 28
-    let spectrumPushMinInterval: CFTimeInterval = 1.0 / 30.0
+    let spectrumPushMinInterval: CFTimeInterval = 1.0 / 20.0
 
     override init() {
         currentSpectrumLevels = Array(repeating: 0, count: WallpaperEngine.spectrumBarCount)

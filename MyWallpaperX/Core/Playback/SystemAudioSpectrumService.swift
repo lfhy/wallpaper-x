@@ -10,10 +10,12 @@ import AudioToolbox
 
 final class SystemAudioSpectrumService: NSObject {
     private let barCount: Int
-    private let sampleQueue = DispatchQueue(label: "com.songziqiang.MyWallpaperX.system-audio-spectrum", qos: .userInitiated)
+    private let sampleQueue = DispatchQueue(label: "com.songziqiang.MyWallpaperX.system-audio-spectrum", qos: .utility)
+    private let processingMinInterval: TimeInterval = 1.0 / 20.0
     private var stream: SCStream?
     private var isEnabled = false
     private var smoothedLevels: [Float]
+    private var lastProcessedAt: TimeInterval = 0
 
     var onLevels: (([Float]) -> Void)?
 
@@ -58,7 +60,7 @@ final class SystemAudioSpectrumService: NSObject {
             configuration.showsCursor = false
             configuration.capturesAudio = true
             configuration.excludesCurrentProcessAudio = true
-            configuration.sampleRate = 48_000
+            configuration.sampleRate = 24_000
             configuration.channelCount = 2
 
             let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
@@ -83,10 +85,15 @@ final class SystemAudioSpectrumService: NSObject {
         }
         self.stream = nil
         smoothedLevels = Array(repeating: 0, count: barCount)
+        lastProcessedAt = 0
         onLevels?(smoothedLevels)
     }
 
     private func processAudioSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastProcessedAt >= processingMinInterval else { return }
+        lastProcessedAt = now
+
         guard let monoSamples = monoSamples(from: sampleBuffer), !monoSamples.isEmpty else {
             return
         }
