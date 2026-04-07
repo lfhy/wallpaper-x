@@ -213,6 +213,36 @@ public enum SystemHotkeyAction: String, CaseIterable, Identifiable {
     }
 }
 
+public enum SystemAudioSpectrumStyle: String, Codable, CaseIterable, Identifiable {
+    case balanced
+    case banded
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .balanced: return "均衡跳动"
+        case .banded: return "频带起伏"
+        }
+    }
+}
+
+public enum SystemAudioSpectrumSensitivity: String, Codable, CaseIterable, Identifiable {
+    case soft
+    case normal
+    case lively
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .soft: return "柔和"
+        case .normal: return "标准"
+        case .lively: return "增强"
+        }
+    }
+}
+
 public struct WallpaperSettings: Codable {
     var loopPlayback: Bool = true
     var randomPlayback: Bool = false
@@ -238,6 +268,12 @@ public struct WallpaperSettings: Codable {
     var playbackRate: Double = 1.0 // 播放速率（0.5 慢速 / 1.0 正常 / 3.0 快速）
     var playbackRateEnabled: Bool = false // 是否启用播放速率控制
     var systemAudioSpectrumEnabled: Bool = false // 是否显示系统音频频谱（实验功能）
+    var systemAudioSpectrumStyle: SystemAudioSpectrumStyle = .balanced
+    var systemAudioSpectrumSensitivity: SystemAudioSpectrumSensitivity = .normal
+    var systemAudioSpectrumColorHex: String = "#F4FBFF"
+    var systemAudioSpectrumOffsetX: Double = 0.0
+    var systemAudioSpectrumOffsetY: Double = 0.0
+    var systemAudioSpectrumBarCount: Int = 28
     var sortMode: WallpaperSortMode = .none // 壁纸排序方式
     var sortAscending: Bool = true // 排序方向：true=升序，false=降序
 
@@ -271,6 +307,12 @@ public struct WallpaperSettings: Codable {
         case playbackRate
         case playbackRateEnabled
         case systemAudioSpectrumEnabled
+        case systemAudioSpectrumStyle
+        case systemAudioSpectrumSensitivity
+        case systemAudioSpectrumColorHex
+        case systemAudioSpectrumOffsetX
+        case systemAudioSpectrumOffsetY
+        case systemAudioSpectrumBarCount
         case sortMode
         case sortAscending
     }

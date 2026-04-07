@@ -322,7 +322,7 @@ extension WallpaperEngine {
             // 只在未暂停状态下发 resume，避免覆盖 checkAndUpdatePlaybackState 刚刚执行的 pause。
             guard !playbackPaused else { return }
             for session in displaySessions.values where session.process.isRunning {
-                send(DaemonCommand(action: "resume", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: targetPlaybackRate, spectrumEnabled: nil, spectrumLevels: nil, requestID: nil), to: session)
+                send(DaemonCommand(action: "resume", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: targetPlaybackRate, spectrumEnabled: nil, spectrumLevels: nil, spectrumBarCount: nil, spectrumColorHex: nil, spectrumOffsetX: nil, spectrumOffsetY: nil, requestID: nil), to: session)
             }
         }
     }

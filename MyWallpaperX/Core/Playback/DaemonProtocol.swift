@@ -22,6 +22,10 @@ struct DaemonCommand: Codable {
     let playbackRate: Float?
     let spectrumEnabled: Bool?
     let spectrumLevels: [Float]?
+    let spectrumBarCount: Int?
+    let spectrumColorHex: String?
+    let spectrumOffsetX: Float?
+    let spectrumOffsetY: Float?
     let requestID: Int?
 }
 

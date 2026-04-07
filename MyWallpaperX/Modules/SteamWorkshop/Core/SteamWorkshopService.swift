@@ -157,6 +157,7 @@ final class SteamWorkshopService: ObservableObject {
     var loginOutputBuffer: String = ""
     var loginPasswordSent = false
     var loginSucceeded = false
+    var loginSubmittedGuardCode = false
     var pendingLoginUsername: String = ""
     var pendingLoginPassword: String = ""
     var pendingLoginCommand: String?

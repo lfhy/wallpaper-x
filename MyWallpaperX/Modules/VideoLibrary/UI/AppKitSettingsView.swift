@@ -98,6 +98,15 @@ final class AppKitSettingsContainerView: NSView {
     private let startOnBootSwitch = NSSwitch()
     private let syncSystemWallpaperSwitch = NSSwitch()
     private let systemAudioSpectrumSwitch = NSSwitch()
+    private let systemAudioSpectrumStylePopup = NSPopUpButton()
+    private let systemAudioSpectrumSensitivityPopup = NSPopUpButton()
+    private let systemAudioSpectrumBarCountPopup = NSPopUpButton()
+    private let systemAudioSpectrumColorWell = NSColorWell()
+    private let systemAudioSpectrumOffsetXSlider = NSSlider(value: 0, minValue: -30, maxValue: 30, target: nil, action: nil)
+    private let systemAudioSpectrumOffsetYSlider = NSSlider(value: 0, minValue: -20, maxValue: 20, target: nil, action: nil)
+    private let systemAudioSpectrumOffsetXValueLabel = NSTextField(labelWithString: "0%")
+    private let systemAudioSpectrumOffsetYValueLabel = NSTextField(labelWithString: "0%")
+    private var systemAudioSpectrumOptionsContainer: NSView?
     private let systemHotkeysSwitch = NSSwitch()
     private let hotkeyRowsStack = NSStackView()
     private var hotkeyRowsContainer: NSView?
@@ -189,6 +198,21 @@ final class AppKitSettingsContainerView: NSView {
         startOnBootSwitch.state = settings.startOnBoot ? .on : .off
         syncSystemWallpaperSwitch.state = settings.syncSystemWallpaper ? .on : .off
         systemAudioSpectrumSwitch.state = settings.systemAudioSpectrumEnabled ? .on : .off
+        systemAudioSpectrumOptionsContainer?.isHidden = !settings.systemAudioSpectrumEnabled
+        systemAudioSpectrumStylePopup.isEnabled = settings.systemAudioSpectrumEnabled
+        systemAudioSpectrumSensitivityPopup.isEnabled = settings.systemAudioSpectrumEnabled
+        systemAudioSpectrumBarCountPopup.isEnabled = settings.systemAudioSpectrumEnabled
+        systemAudioSpectrumColorWell.isEnabled = settings.systemAudioSpectrumEnabled
+        systemAudioSpectrumOffsetXSlider.isEnabled = settings.systemAudioSpectrumEnabled
+        systemAudioSpectrumOffsetYSlider.isEnabled = settings.systemAudioSpectrumEnabled
+        selectSystemAudioSpectrumStyle(settings.systemAudioSpectrumStyle)
+        selectSystemAudioSpectrumSensitivity(settings.systemAudioSpectrumSensitivity)
+        selectSystemAudioSpectrumBarCount(settings.systemAudioSpectrumBarCount)
+        systemAudioSpectrumColorWell.color = color(fromHex: settings.systemAudioSpectrumColorHex) ?? .white
+        systemAudioSpectrumOffsetXSlider.doubleValue = settings.systemAudioSpectrumOffsetX * 100
+        systemAudioSpectrumOffsetYSlider.doubleValue = settings.systemAudioSpectrumOffsetY * 100
+        systemAudioSpectrumOffsetXValueLabel.stringValue = "\(Int(round(settings.systemAudioSpectrumOffsetX * 100)))%"
+        systemAudioSpectrumOffsetYValueLabel.stringValue = "\(Int(round(settings.systemAudioSpectrumOffsetY * 100)))%"
         systemHotkeysSwitch.state = settings.systemHotkeysEnabled ? .on : .off
         hotkeyRowsContainer?.isHidden = !settings.systemHotkeysEnabled
 
@@ -420,6 +444,91 @@ final class AppKitSettingsContainerView: NSView {
         systemSection.addRow(makeSettingRow(title: "开机自启动", iconSystemName: "power", trailing: startOnBootSwitch))
         systemSection.addRow(makeSettingRow(title: "同步系统壁纸", iconSystemName: "photo.on.rectangle", trailing: syncSystemWallpaperSwitch))
         systemSection.addRow(makeSettingRow(title: "系统音频频谱", iconSystemName: "chart.bar.xaxis", subtitle: "实验功能", trailing: systemAudioSpectrumSwitch))
+        for style in SystemAudioSpectrumStyle.allCases {
+            systemAudioSpectrumStylePopup.addItem(withTitle: style.displayName)
+            systemAudioSpectrumStylePopup.lastItem?.representedObject = style
+        }
+        for sensitivity in SystemAudioSpectrumSensitivity.allCases {
+            systemAudioSpectrumSensitivityPopup.addItem(withTitle: sensitivity.displayName)
+            systemAudioSpectrumSensitivityPopup.lastItem?.representedObject = sensitivity
+        }
+        for barCount in [16, 20, 28, 36, 48] {
+            systemAudioSpectrumBarCountPopup.addItem(withTitle: "\(barCount) 根")
+            systemAudioSpectrumBarCountPopup.lastItem?.representedObject = barCount
+        }
+        systemAudioSpectrumColorWell.supportsAlpha = false
+        systemAudioSpectrumColorWell.color = .white
+        systemAudioSpectrumOffsetXSlider.translatesAutoresizingMaskIntoConstraints = false
+        systemAudioSpectrumOffsetXSlider.widthAnchor.constraint(equalToConstant: 180).isActive = true
+        systemAudioSpectrumOffsetYSlider.translatesAutoresizingMaskIntoConstraints = false
+        systemAudioSpectrumOffsetYSlider.widthAnchor.constraint(equalToConstant: 180).isActive = true
+        for label in [systemAudioSpectrumOffsetXValueLabel, systemAudioSpectrumOffsetYValueLabel] {
+            label.alignment = .right
+            label.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+            label.translatesAutoresizingMaskIntoConstraints = false
+            label.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        }
+
+        let spectrumStyleRow = makeSettingRow(
+            title: "-  动态风格",
+            iconSystemName: "waveform.path.ecg",
+            trailing: systemAudioSpectrumStylePopup
+        )
+        let spectrumSensitivityRow = makeSettingRow(
+            title: "-  灵敏度",
+            iconSystemName: "slider.horizontal.3",
+            trailing: systemAudioSpectrumSensitivityPopup
+        )
+        let spectrumBarCountRow = makeSettingRow(
+            title: "-  柱子数量",
+            iconSystemName: "square.split.2x1",
+            trailing: systemAudioSpectrumBarCountPopup
+        )
+        let spectrumColorRow = makeSettingRow(
+            title: "-  颜色",
+            iconSystemName: "paintpalette",
+            trailing: systemAudioSpectrumColorWell
+        )
+        let offsetXControls = NSStackView(views: [systemAudioSpectrumOffsetXValueLabel, systemAudioSpectrumOffsetXSlider])
+        offsetXControls.orientation = .horizontal
+        offsetXControls.alignment = .centerY
+        offsetXControls.spacing = 8
+        let offsetYControls = NSStackView(views: [systemAudioSpectrumOffsetYValueLabel, systemAudioSpectrumOffsetYSlider])
+        offsetYControls.orientation = .horizontal
+        offsetYControls.alignment = .centerY
+        offsetYControls.spacing = 8
+        let spectrumOffsetXRow = makeSettingRow(
+            title: "-  X 位置",
+            iconSystemName: "arrow.left.and.right",
+            trailing: offsetXControls
+        )
+        let spectrumOffsetYRow = makeSettingRow(
+            title: "-  Y 位置",
+            iconSystemName: "arrow.up.and.down",
+            trailing: offsetYControls
+        )
+        let spectrumOptionsStack = NSStackView(views: [
+            spectrumStyleRow,
+            makeInlineSeparator(horizontalInset: 14),
+            spectrumSensitivityRow,
+            makeInlineSeparator(horizontalInset: 14),
+            spectrumBarCountRow,
+            makeInlineSeparator(horizontalInset: 14),
+            spectrumColorRow,
+            makeInlineSeparator(horizontalInset: 14),
+            spectrumOffsetXRow,
+            makeInlineSeparator(horizontalInset: 14),
+            spectrumOffsetYRow
+        ])
+        spectrumOptionsStack.orientation = .vertical
+        spectrumOptionsStack.alignment = .leading
+        spectrumOptionsStack.distribution = .fill
+        spectrumOptionsStack.spacing = 0
+        spectrumOptionsStack.translatesAutoresizingMaskIntoConstraints = false
+        systemAudioSpectrumOptionsContainer = makeEmbeddedRow(content: spectrumOptionsStack)
+        if let systemAudioSpectrumOptionsContainer {
+            systemSection.addRow(systemAudioSpectrumOptionsContainer)
+        }
         hotkeysSection.addRow(makeSettingRow(title: "响应系统快捷键", iconSystemName: "keyboard", trailing: systemHotkeysSwitch))
 
         hotkeyRowsStack.orientation = .vertical
@@ -534,6 +643,7 @@ final class AppKitSettingsContainerView: NSView {
         hotkeyEnableSwitches.values.forEach { $0.controlSize = .mini }
 
         let popups: [NSPopUpButton] = [timeUnitPopup, idleTimeoutPopup] + hotkeyPopups.values
+            + [systemAudioSpectrumStylePopup, systemAudioSpectrumSensitivityPopup, systemAudioSpectrumBarCountPopup]
         popups.forEach { $0.controlSize = .small }
 
         intervalField.controlSize = .small
@@ -573,6 +683,18 @@ final class AppKitSettingsContainerView: NSView {
         syncSystemWallpaperSwitch.action = #selector(handleSyncSystemWallpaperToggle)
         systemAudioSpectrumSwitch.target = self
         systemAudioSpectrumSwitch.action = #selector(handleSystemAudioSpectrumToggle)
+        systemAudioSpectrumStylePopup.target = self
+        systemAudioSpectrumStylePopup.action = #selector(handleSystemAudioSpectrumStyleChange)
+        systemAudioSpectrumSensitivityPopup.target = self
+        systemAudioSpectrumSensitivityPopup.action = #selector(handleSystemAudioSpectrumSensitivityChange)
+        systemAudioSpectrumBarCountPopup.target = self
+        systemAudioSpectrumBarCountPopup.action = #selector(handleSystemAudioSpectrumBarCountChange)
+        systemAudioSpectrumColorWell.target = self
+        systemAudioSpectrumColorWell.action = #selector(handleSystemAudioSpectrumColorChange)
+        systemAudioSpectrumOffsetXSlider.target = self
+        systemAudioSpectrumOffsetXSlider.action = #selector(handleSystemAudioSpectrumOffsetChange)
+        systemAudioSpectrumOffsetYSlider.target = self
+        systemAudioSpectrumOffsetYSlider.action = #selector(handleSystemAudioSpectrumOffsetChange)
         systemHotkeysSwitch.target = self
         systemHotkeysSwitch.action = #selector(handleSystemHotkeysToggle)
 
@@ -904,11 +1026,87 @@ final class AppKitSettingsContainerView: NSView {
         guard !isUpdatingUI else { return }
         wallpaperManager.settings.systemAudioSpectrumEnabled = (systemAudioSpectrumSwitch.state == .on)
         wallpaperManager.applySystemAudioSpectrumToEngine()
+        refreshFromState()
+    }
+
+    @objc private func handleSystemAudioSpectrumStyleChange() {
+        guard !isUpdatingUI else { return }
+        guard let style = systemAudioSpectrumStylePopup.selectedItem?.representedObject as? SystemAudioSpectrumStyle else { return }
+        wallpaperManager.settings.systemAudioSpectrumStyle = style
+        wallpaperManager.applySystemAudioSpectrumToEngine()
+    }
+
+    @objc private func handleSystemAudioSpectrumSensitivityChange() {
+        guard !isUpdatingUI else { return }
+        guard let sensitivity = systemAudioSpectrumSensitivityPopup.selectedItem?.representedObject as? SystemAudioSpectrumSensitivity else { return }
+        wallpaperManager.settings.systemAudioSpectrumSensitivity = sensitivity
+        wallpaperManager.applySystemAudioSpectrumToEngine()
+    }
+
+    @objc private func handleSystemAudioSpectrumBarCountChange() {
+        guard !isUpdatingUI else { return }
+        guard let barCount = systemAudioSpectrumBarCountPopup.selectedItem?.representedObject as? Int else { return }
+        wallpaperManager.settings.systemAudioSpectrumBarCount = barCount
+        wallpaperManager.applySystemAudioSpectrumToEngine()
+    }
+
+    @objc private func handleSystemAudioSpectrumColorChange() {
+        guard !isUpdatingUI else { return }
+        wallpaperManager.settings.systemAudioSpectrumColorHex = hexString(from: systemAudioSpectrumColorWell.color)
+        wallpaperManager.applySystemAudioSpectrumToEngine()
+    }
+
+    @objc private func handleSystemAudioSpectrumOffsetChange() {
+        guard !isUpdatingUI else { return }
+        wallpaperManager.settings.systemAudioSpectrumOffsetX = systemAudioSpectrumOffsetXSlider.doubleValue / 100
+        wallpaperManager.settings.systemAudioSpectrumOffsetY = systemAudioSpectrumOffsetYSlider.doubleValue / 100
+        systemAudioSpectrumOffsetXValueLabel.stringValue = "\(Int(round(systemAudioSpectrumOffsetXSlider.doubleValue)))%"
+        systemAudioSpectrumOffsetYValueLabel.stringValue = "\(Int(round(systemAudioSpectrumOffsetYSlider.doubleValue)))%"
+        wallpaperManager.applySystemAudioSpectrumToEngine()
     }
 
     @objc private func handleSystemHotkeysToggle() {
         guard !isUpdatingUI else { return }
         wallpaperManager.settings.systemHotkeysEnabled = (systemHotkeysSwitch.state == .on)
+    }
+
+    private func selectSystemAudioSpectrumStyle(_ style: SystemAudioSpectrumStyle) {
+        if let item = systemAudioSpectrumStylePopup.itemArray.first(where: { ($0.representedObject as? SystemAudioSpectrumStyle) == style }) {
+            systemAudioSpectrumStylePopup.select(item)
+        }
+    }
+
+    private func selectSystemAudioSpectrumSensitivity(_ sensitivity: SystemAudioSpectrumSensitivity) {
+        if let item = systemAudioSpectrumSensitivityPopup.itemArray.first(where: { ($0.representedObject as? SystemAudioSpectrumSensitivity) == sensitivity }) {
+            systemAudioSpectrumSensitivityPopup.select(item)
+        }
+    }
+
+    private func selectSystemAudioSpectrumBarCount(_ barCount: Int) {
+        if let item = systemAudioSpectrumBarCountPopup.itemArray.first(where: { ($0.representedObject as? Int) == barCount }) {
+            systemAudioSpectrumBarCountPopup.select(item)
+        }
+    }
+
+    private func color(fromHex hex: String) -> NSColor? {
+        let trimmed = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        guard trimmed.count == 6 else { return nil }
+        var value: UInt64 = 0
+        guard Scanner(string: trimmed).scanHexInt64(&value) else { return nil }
+        return NSColor(
+            calibratedRed: CGFloat((value & 0xFF0000) >> 16) / 255,
+            green: CGFloat((value & 0x00FF00) >> 8) / 255,
+            blue: CGFloat(value & 0x0000FF) / 255,
+            alpha: 1
+        )
+    }
+
+    private func hexString(from color: NSColor) -> String {
+        let converted = color.usingColorSpace(.deviceRGB) ?? color
+        let red = Int(round(converted.redComponent * 255))
+        let green = Int(round(converted.greenComponent * 255))
+        let blue = Int(round(converted.blueComponent * 255))
+        return String(format: "#%02X%02X%02X", red, green, blue)
     }
 
     @objc private func handleHotkeyEnableToggle(_ sender: NSSwitch) {

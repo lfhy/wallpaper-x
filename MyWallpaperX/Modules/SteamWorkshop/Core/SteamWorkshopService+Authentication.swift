@@ -35,6 +35,15 @@ private final class SteamWorkshopProcessCaptureState: @unchecked Sendable {
     }
 }
 
+private enum SteamWorkshopInteractiveLoginResult {
+    case none
+    case passwordInvalid
+    case guardRequested
+    case guardInvalidRetry
+    case guardRateLimited
+    case success
+}
+
 extension SteamWorkshopService {
     func authenticateUser() {
         Task { @MainActor [weak self] in
@@ -106,6 +115,7 @@ extension SteamWorkshopService {
         authError = nil
         authSessionState = .authenticating
         isAuthenticating = true
+        loginSubmittedGuardCode = true
         authStatusMessage = "正在验证 Steam Guard 令牌…"
         inputHandle.write(Data("\(guardCode)\r".utf8))
     }
@@ -436,6 +446,7 @@ extension SteamWorkshopService {
         steamGuardCode = ""
         loginPasswordSent = false
         loginSucceeded = false
+        loginSubmittedGuardCode = false
         loginOutputBuffer = ""
 
         let process = Process()
@@ -542,22 +553,22 @@ extension SteamWorkshopService {
             sendPendingLoginCommandIfPossible()
         }
 
-        if authPhase != .awaitingGuardCode, outputRequestsGuardCode(lowered) {
-            authPhase = .awaitingGuardCode
-            authSessionState = .authenticating
-            isAuthenticating = false
-            isLoginSheetPresented = true
-            authStatusMessage = "Steam 已要求进行 Steam Guard 验证，请输入刚收到的令牌。"
+        switch resolveInteractiveLoginResult(from: lowered) {
+        case .none:
             return
-        }
-
-        if outputIndicatesLoginSuccess(lowered) {
+        case .passwordInvalid:
+            finalizeInteractiveLoginFailure(message: "Steam 用户名或密码不正确。")
+        case .guardRequested:
+            presentGuardPrompt(message: "Steam 已要求进行 Steam Guard 验证，请输入刚收到的令牌。")
+        case .guardInvalidRetry:
+            presentGuardPrompt(message: "Steam Guard 令牌错误，请重新输入。")
+        case .guardRateLimited:
+            finalizeInteractiveLoginFailure(
+                message: "Steam Guard 验证超出速率限制，请稍后再试。",
+                closeLoginSheet: true
+            )
+        case .success:
             finalizeInteractiveLoginSuccess()
-            return
-        }
-
-        if loginPasswordSent && authPhase != .awaitingGuardCode && outputIndicatesAuthenticationFailure(chunk) {
-            finalizeInteractiveLoginFailure(message: loginOutputBuffer)
         }
     }
 
@@ -580,8 +591,7 @@ extension SteamWorkshopService {
             return
         }
 
-        let message = loginOutputBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-        finalizeInteractiveLoginFailure(message: message.isEmpty ? "Steam 登录失败，请检查账号密码是否正确。" : message)
+        finalizeInteractiveLoginFailure(message: friendlyAuthFailureMessage(from: loginOutputBuffer))
     }
 
     func finalizeInteractiveLoginSuccess() {
@@ -606,7 +616,7 @@ extension SteamWorkshopService {
         }
     }
 
-    func finalizeInteractiveLoginFailure(message: String) {
+    func finalizeInteractiveLoginFailure(message: String, closeLoginSheet: Bool = false) {
         loginBootstrapTimeoutTask?.cancel()
         appendSteamAuthDebugLog("Login marked failed: \(sanitizeSteamOutput(message))")
         defaults.removeObject(forKey: Constants.defaultsLastAuthenticatedAt)
@@ -617,6 +627,9 @@ extension SteamWorkshopService {
         lastSuccessfulSessionValidationAt = nil
         isAuthenticating = false
         authError = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        steamGuardCode = ""
+        loginSubmittedGuardCode = false
+        isLoginSheetPresented = !closeLoginSheet
         authStatusMessage = "Steam 登录失败，请重新输入账号密码后再试。"
         cancelActiveLoginSession(keepStatus: true)
     }
@@ -637,6 +650,7 @@ extension SteamWorkshopService {
         loginOutputBuffer = ""
         loginPasswordSent = false
         loginSucceeded = false
+        loginSubmittedGuardCode = false
         pendingLoginUsername = ""
         pendingLoginPassword = ""
         pendingLoginCommand = nil
@@ -655,6 +669,17 @@ extension SteamWorkshopService {
         authStatusMessage = "SteamCMD 控制台已就绪，正在向 Steam 发起账号登录请求…"
         loginBootstrapTimeoutTask?.cancel()
         loginBootstrapTimeoutTask = nil
+    }
+
+    func presentGuardPrompt(message: String) {
+        loginSubmittedGuardCode = false
+        steamGuardCode = ""
+        authPhase = .awaitingGuardCode
+        authSessionState = .authenticating
+        isAuthenticating = false
+        authError = nil
+        isLoginSheetPresented = true
+        authStatusMessage = message
     }
 
     func resetSteamAuthDebugLog() {
@@ -774,11 +799,82 @@ extension SteamWorkshopService {
         || output.contains("two factor code")
         || output.contains("access code")
         || output.contains("email code")
+        || output.contains("steam guard code:")
     }
 
     func outputIndicatesLoginSuccess(_ output: String) -> Bool {
         output.contains("logged in ok")
         || output.contains("successfully logged in")
         || output.contains("waiting for user info...ok")
+        || outputIndicatesUsernamePasswordLoginSuccess(output)
+        || outputIndicatesGuardLoginSuccess(output)
+    }
+
+    func outputIndicatesUsernamePasswordLoginSuccess(_ output: String) -> Bool {
+        output.contains("logging in using username/password.")
+            && output.contains("logging in user")
+            && output.contains("to steam public...ok")
+            && output.contains("waiting for client config...ok")
+            && output.contains("waiting for user info...ok")
+            && output.contains("steam>")
+    }
+
+    func outputIndicatesGuardLoginSuccess(_ output: String) -> Bool {
+        loginSubmittedGuardCode
+            && output.contains("steam>")
+            && output.contains("ok")
+            && !outputIndicatesRateLimitExceeded(output)
+            && !outputIndicatesInvalidPassword(output)
+            && !outputIndicatesGuardRetryPrompt(output)
+    }
+
+    func outputIndicatesInvalidPassword(_ output: String) -> Bool {
+        output.contains("invalid password")
+    }
+
+    func outputIndicatesRateLimitExceeded(_ output: String) -> Bool {
+        output.contains("rate limit exceeded")
+    }
+
+    func outputIndicatesGuardRetryPrompt(_ output: String) -> Bool {
+        output.contains("please check your email for the message from steam")
+            && output.contains("steam guard code:")
+    }
+
+    private func resolveInteractiveLoginResult(from output: String) -> SteamWorkshopInteractiveLoginResult {
+        if outputIndicatesRateLimitExceeded(output) {
+            return .guardRateLimited
+        }
+        if outputIndicatesInvalidPassword(output) {
+            return .passwordInvalid
+        }
+        if outputIndicatesGuardRetryPrompt(output) {
+            return .guardInvalidRetry
+        }
+        if outputIndicatesLoginSuccess(output) {
+            return .success
+        }
+        if outputRequestsGuardCode(output) {
+            return .guardRequested
+        }
+        return .none
+    }
+
+    func friendlyAuthFailureMessage(from output: String) -> String {
+        let lowered = output.localizedLowercase
+        if outputIndicatesRateLimitExceeded(lowered) {
+            return "Steam Guard 验证超出速率限制，请稍后再试。"
+        }
+        if outputIndicatesInvalidPassword(lowered) {
+            return "Steam 用户名或密码不正确。"
+        }
+        if outputIndicatesGuardRetryPrompt(lowered) {
+            return "Steam Guard 令牌错误，请重新输入。"
+        }
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return "Steam 登录失败，请重试。"
+        }
+        return "Steam 登录未完成，请重试。"
     }
 }

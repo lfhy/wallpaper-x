@@ -287,6 +287,14 @@ extension WallpaperManager {
     }
 
     func applySystemAudioSpectrumToEngine() {
-        WallpaperEngine.shared.setSystemAudioSpectrumEnabled(settings.systemAudioSpectrumEnabled)
+        WallpaperEngine.shared.configureSystemAudioSpectrum(
+            enabled: settings.systemAudioSpectrumEnabled,
+            style: settings.systemAudioSpectrumStyle,
+            sensitivity: settings.systemAudioSpectrumSensitivity,
+            colorHex: settings.systemAudioSpectrumColorHex,
+            offsetX: Float(settings.systemAudioSpectrumOffsetX),
+            offsetY: Float(settings.systemAudioSpectrumOffsetY),
+            barCount: settings.systemAudioSpectrumBarCount
+        )
     }
 }
