@@ -54,6 +54,7 @@ final class AppKitSettingsContainerView: NSView {
     private let wallpaperManager: WallpaperManager
     private var cancellables = Set<AnyCancellable>()
     private var isUpdatingUI = false
+    private var isDocumentFrameUpdateScheduled = false
     private var scrollToTopObserver: NSObjectProtocol?
     private var visibleSections: Set<AppSettingsSection>
     private let topContentInset: CGFloat
@@ -106,10 +107,12 @@ final class AppKitSettingsContainerView: NSView {
     private let systemAudioSpectrumOffsetYSlider = NSSlider(value: 0, minValue: -20, maxValue: 20, target: nil, action: nil)
     private let systemAudioSpectrumOffsetXValueLabel = NSTextField(labelWithString: "0%")
     private let systemAudioSpectrumOffsetYValueLabel = NSTextField(labelWithString: "0%")
+    private let systemAudioSpectrumPeakCapsSwitch = NSSwitch()
     private var systemAudioSpectrumOptionsContainer: NSView?
     private let systemHotkeysSwitch = NSSwitch()
     private let hotkeyRowsStack = NSStackView()
     private var hotkeyRowsContainer: NSView?
+    private var systemAudioSpectrumRowView: NSView?
     private var hotkeyEnableSwitches: [SystemHotkeyAction: NSSwitch] = [:]
     private var hotkeyPopups: [SystemHotkeyAction: NSPopUpButton] = [:]
 
@@ -205,6 +208,7 @@ final class AppKitSettingsContainerView: NSView {
         systemAudioSpectrumColorWell.isEnabled = settings.systemAudioSpectrumEnabled
         systemAudioSpectrumOffsetXSlider.isEnabled = settings.systemAudioSpectrumEnabled
         systemAudioSpectrumOffsetYSlider.isEnabled = settings.systemAudioSpectrumEnabled
+        systemAudioSpectrumPeakCapsSwitch.isEnabled = settings.systemAudioSpectrumEnabled
         selectSystemAudioSpectrumStyle(settings.systemAudioSpectrumStyle)
         selectSystemAudioSpectrumSensitivity(settings.systemAudioSpectrumSensitivity)
         selectSystemAudioSpectrumBarCount(settings.systemAudioSpectrumBarCount)
@@ -213,6 +217,7 @@ final class AppKitSettingsContainerView: NSView {
         systemAudioSpectrumOffsetYSlider.doubleValue = settings.systemAudioSpectrumOffsetY * 100
         systemAudioSpectrumOffsetXValueLabel.stringValue = "\(Int(round(settings.systemAudioSpectrumOffsetX * 100)))%"
         systemAudioSpectrumOffsetYValueLabel.stringValue = "\(Int(round(settings.systemAudioSpectrumOffsetY * 100)))%"
+        systemAudioSpectrumPeakCapsSwitch.state = settings.systemAudioSpectrumPeakCapsEnabled ? .on : .off
         systemHotkeysSwitch.state = settings.systemHotkeysEnabled ? .on : .off
         hotkeyRowsContainer?.isHidden = !settings.systemHotkeysEnabled
 
@@ -357,10 +362,15 @@ final class AppKitSettingsContainerView: NSView {
         needsLayout = true
         contentContainer.needsLayout = true
         contentStack.needsLayout = true
+        scheduleDocumentFrameUpdate()
+    }
 
+    private func scheduleDocumentFrameUpdate() {
+        guard !isDocumentFrameUpdateScheduled else { return }
+        isDocumentFrameUpdateScheduled = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.layoutSubtreeIfNeeded()
+            self.isDocumentFrameUpdateScheduled = false
             self.updateDocumentFrame()
         }
     }
@@ -443,7 +453,15 @@ final class AppKitSettingsContainerView: NSView {
 
         systemSection.addRow(makeSettingRow(title: "开机自启动", iconSystemName: "power", trailing: startOnBootSwitch))
         systemSection.addRow(makeSettingRow(title: "同步系统壁纸", iconSystemName: "photo.on.rectangle", trailing: syncSystemWallpaperSwitch))
-        systemSection.addRow(makeSettingRow(title: "系统音频频谱", iconSystemName: "chart.bar.xaxis", subtitle: "实验功能", trailing: systemAudioSpectrumSwitch))
+        let systemAudioSpectrumRow = makeSettingRow(
+            title: "系统音频频谱",
+            iconSystemName: "chart.bar.xaxis",
+            subtitle: "实验功能：会增加GPU负载",
+            trailing: systemAudioSpectrumSwitch
+        )
+        systemAudioSpectrumRow.identifier = NSUserInterfaceItemIdentifier("settings.row.system-audio-spectrum")
+        systemAudioSpectrumRowView = systemAudioSpectrumRow
+        systemSection.addRow(systemAudioSpectrumRow)
         for style in SystemAudioSpectrumStyle.allCases {
             systemAudioSpectrumStylePopup.addItem(withTitle: style.displayName)
             systemAudioSpectrumStylePopup.lastItem?.representedObject = style
@@ -480,7 +498,7 @@ final class AppKitSettingsContainerView: NSView {
             trailing: systemAudioSpectrumSensitivityPopup
         )
         let spectrumBarCountRow = makeSettingRow(
-            title: "-  柱子数量",
+            title: "-  频柱数量",
             iconSystemName: "square.split.2x1",
             trailing: systemAudioSpectrumBarCountPopup
         )
@@ -507,6 +525,11 @@ final class AppKitSettingsContainerView: NSView {
             iconSystemName: "arrow.up.and.down",
             trailing: offsetYControls
         )
+        let spectrumPeakCapsRow = makeSettingRow(
+            title: "-  显示峰值帽",
+            iconSystemName: "rectangle.topthird.inset.filled",
+            trailing: systemAudioSpectrumPeakCapsSwitch
+        )
         let spectrumOptionsStack = NSStackView(views: [
             spectrumStyleRow,
             makeInlineSeparator(horizontalInset: 14),
@@ -518,7 +541,9 @@ final class AppKitSettingsContainerView: NSView {
             makeInlineSeparator(horizontalInset: 14),
             spectrumOffsetXRow,
             makeInlineSeparator(horizontalInset: 14),
-            spectrumOffsetYRow
+            spectrumOffsetYRow,
+            makeInlineSeparator(horizontalInset: 14),
+            spectrumPeakCapsRow
         ])
         spectrumOptionsStack.orientation = .vertical
         spectrumOptionsStack.alignment = .leading
@@ -527,6 +552,8 @@ final class AppKitSettingsContainerView: NSView {
         spectrumOptionsStack.translatesAutoresizingMaskIntoConstraints = false
         systemAudioSpectrumOptionsContainer = makeEmbeddedRow(content: spectrumOptionsStack)
         if let systemAudioSpectrumOptionsContainer {
+            systemAudioSpectrumOptionsContainer.identifier = NSUserInterfaceItemIdentifier("settings.row.system-audio-spectrum.options")
+            spectrumOptionsStack.identifier = NSUserInterfaceItemIdentifier("settings.stack.system-audio-spectrum.options")
             systemSection.addRow(systemAudioSpectrumOptionsContainer)
         }
         hotkeysSection.addRow(makeSettingRow(title: "响应系统快捷键", iconSystemName: "keyboard", trailing: systemHotkeysSwitch))
@@ -695,6 +722,8 @@ final class AppKitSettingsContainerView: NSView {
         systemAudioSpectrumOffsetXSlider.action = #selector(handleSystemAudioSpectrumOffsetChange)
         systemAudioSpectrumOffsetYSlider.target = self
         systemAudioSpectrumOffsetYSlider.action = #selector(handleSystemAudioSpectrumOffsetChange)
+        systemAudioSpectrumPeakCapsSwitch.target = self
+        systemAudioSpectrumPeakCapsSwitch.action = #selector(handleSystemAudioSpectrumPeakCapsToggle)
         systemHotkeysSwitch.target = self
         systemHotkeysSwitch.action = #selector(handleSystemHotkeysToggle)
 
@@ -788,6 +817,7 @@ final class AppKitSettingsContainerView: NSView {
 
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
+        container.identifier = NSUserInterfaceItemIdentifier("settings.row.\(sanitizedIdentifierComponent(from: title))")
         container.addSubview(rowStack)
         let topInset: CGFloat = 9
         let bottomInset: CGFloat = 9
@@ -830,8 +860,6 @@ final class AppKitSettingsContainerView: NSView {
         NSLayoutConstraint.activate([
             iconView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
             iconView.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 14),
-            iconView.heightAnchor.constraint(equalToConstant: 14),
             button.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 10),
             button.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -14),
             button.topAnchor.constraint(equalTo: container.topAnchor, constant: 10),
@@ -845,17 +873,33 @@ final class AppKitSettingsContainerView: NSView {
         guard let iconSystemName else { return content }
 
         let iconView = makeRowIconView(systemName: iconSystemName, tintColor: .secondaryLabelColor)
-        let stack = NSStackView(views: [iconView, content])
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.distribution = .fill
-        stack.spacing = 10
-        iconView.widthAnchor.constraint(equalToConstant: 14).isActive = true
-        iconView.heightAnchor.constraint(equalToConstant: 14).isActive = true
-        return stack
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.identifier = NSUserInterfaceItemIdentifier("settings.leading.\(iconSystemName)")
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        content.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(iconView)
+        container.addSubview(content)
+
+        NSLayoutConstraint.activate([
+            iconView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            iconView.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+            iconView.topAnchor.constraint(greaterThanOrEqualTo: container.topAnchor),
+            iconView.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor),
+            content.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 10),
+            content.topAnchor.constraint(equalTo: container.topAnchor),
+            content.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            content.trailingAnchor.constraint(equalTo: container.trailingAnchor)
+        ])
+
+        return container
     }
 
-    private func makeRowIconView(systemName: String, tintColor: NSColor) -> NSImageView {
+    private func makeRowIconView(systemName: String, tintColor: NSColor) -> NSView {
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.identifier = NSUserInterfaceItemIdentifier("settings.icon.\(systemName)")
+
         let imageView = NSImageView()
         imageView.translatesAutoresizingMaskIntoConstraints = false
         imageView.imageScaling = .scaleProportionallyDown
@@ -867,7 +911,27 @@ final class AppKitSettingsContainerView: NSView {
             imageView.image = image
         }
         imageView.contentTintColor = tintColor
-        return imageView
+        container.addSubview(imageView)
+
+        NSLayoutConstraint.activate([
+            container.widthAnchor.constraint(equalToConstant: 14),
+            imageView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            imageView.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            imageView.widthAnchor.constraint(equalToConstant: 12),
+            imageView.heightAnchor.constraint(equalToConstant: 12),
+            imageView.topAnchor.constraint(greaterThanOrEqualTo: container.topAnchor),
+            imageView.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor)
+        ])
+
+        return container
+    }
+
+    private func sanitizedIdentifierComponent(from title: String) -> String {
+        let normalized = title
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "-  ", with: "")
+            .replacingOccurrences(of: " ", with: "-")
+        return normalized.isEmpty ? "untitled" : normalized
     }
 
     private func makeEmbeddedRow(content: NSView, centered: Bool = false) -> NSView {
@@ -1026,7 +1090,6 @@ final class AppKitSettingsContainerView: NSView {
         guard !isUpdatingUI else { return }
         wallpaperManager.settings.systemAudioSpectrumEnabled = (systemAudioSpectrumSwitch.state == .on)
         wallpaperManager.applySystemAudioSpectrumToEngine()
-        refreshFromState()
     }
 
     @objc private func handleSystemAudioSpectrumStyleChange() {
@@ -1062,6 +1125,12 @@ final class AppKitSettingsContainerView: NSView {
         wallpaperManager.settings.systemAudioSpectrumOffsetY = systemAudioSpectrumOffsetYSlider.doubleValue / 100
         systemAudioSpectrumOffsetXValueLabel.stringValue = "\(Int(round(systemAudioSpectrumOffsetXSlider.doubleValue)))%"
         systemAudioSpectrumOffsetYValueLabel.stringValue = "\(Int(round(systemAudioSpectrumOffsetYSlider.doubleValue)))%"
+        wallpaperManager.applySystemAudioSpectrumToEngine()
+    }
+
+    @objc private func handleSystemAudioSpectrumPeakCapsToggle() {
+        guard !isUpdatingUI else { return }
+        wallpaperManager.settings.systemAudioSpectrumPeakCapsEnabled = (systemAudioSpectrumPeakCapsSwitch.state == .on)
         wallpaperManager.applySystemAudioSpectrumToEngine()
     }
 

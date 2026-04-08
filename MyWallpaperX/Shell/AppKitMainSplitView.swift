@@ -395,11 +395,11 @@ private final class InspectorDetailContainerViewController: NSViewController {
             overlayView.isActive = true
             overlayWidthConstraint.constant = hostWidth
             overlayTrailingConstraint.constant = panelOffset
-            view.layoutSubtreeIfNeeded()
+            view.needsLayout = true
 
             let animations = {
                 overlayTrailingConstraint.animator().constant = 0
-                self.view.layoutSubtreeIfNeeded()
+                self.view.needsLayout = true
             }
 
             if animated {
@@ -412,7 +412,7 @@ private final class InspectorDetailContainerViewController: NSViewController {
                 }
             } else {
                 overlayTrailingConstraint.constant = 0
-                view.layoutSubtreeIfNeeded()
+                view.needsLayout = true
                 completion?()
             }
             return
@@ -434,13 +434,13 @@ private final class InspectorDetailContainerViewController: NSViewController {
                 context.duration = inspectorHostAnimationDuration
                 context.timingFunction = inspectorHostSlideOutTiming
                 overlayTrailingConstraint.animator().constant = panelOffset
-                view.layoutSubtreeIfNeeded()
+                view.needsLayout = true
             } completionHandler: {
                 finishHide()
             }
         } else {
             overlayTrailingConstraint.constant = panelOffset
-            view.layoutSubtreeIfNeeded()
+            view.needsLayout = true
             finishHide()
         }
     }

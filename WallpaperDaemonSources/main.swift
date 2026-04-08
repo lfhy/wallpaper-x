@@ -49,11 +49,18 @@ private final class WallpaperDaemon {
     private var spectrumColorHex = "#F4FBFF"
     private var spectrumOffsetX: CGFloat = 0
     private var spectrumOffsetY: CGFloat = 0
+    private var spectrumPeakCapsEnabled = true
+    private var spectrumBaseColor = NSColor(calibratedRed: 0.96, green: 0.98, blue: 1.0, alpha: 1.0)
+    private var spectrumShadowColor = NSColor(calibratedRed: 0.96, green: 0.98, blue: 1.0, alpha: 0.65)
     private var spectrumBarLayers: [CALayer] = []
     private var spectrumPeakLayers: [CALayer] = []
     private var spectrumEnabled = false
     private var spectrumLevels: [Float] = Array(repeating: 0, count: 28)
     private var spectrumPeakLevels: [CGFloat] = Array(repeating: 0, count: 28)
+    private var lastRenderedBarHeights: [CGFloat] = Array(repeating: -1, count: 28)
+    private var lastRenderedBarOpacities: [Float] = Array(repeating: -1, count: 28)
+    private var lastRenderedPeakY: [CGFloat] = Array(repeating: -1, count: 28)
+    private var lastRenderedPeakOpacities: [Float] = Array(repeating: -1, count: 28)
 
     init?(displayID: CGDirectDisplayID) {
         guard let screen = WallpaperDaemon.screen(for: displayID) else {
@@ -967,21 +974,26 @@ private final class WallpaperDaemon {
         spectrumPeakLayers.removeAll()
         spectrumLevels = Array(repeating: 0, count: spectrumBarCount)
         spectrumPeakLevels = Array(repeating: 0, count: spectrumBarCount)
+        lastRenderedBarHeights = Array(repeating: -1, count: spectrumBarCount)
+        lastRenderedBarOpacities = Array(repeating: -1, count: spectrumBarCount)
+        lastRenderedPeakY = Array(repeating: -1, count: spectrumBarCount)
+        lastRenderedPeakOpacities = Array(repeating: -1, count: spectrumBarCount)
 
         for _ in 0..<spectrumBarCount {
             let barLayer = CALayer()
             barLayer.anchorPoint = CGPoint(x: 0.5, y: 0.0)
-            barLayer.backgroundColor = NSColor.white.withAlphaComponent(0.82).cgColor
+            barLayer.backgroundColor = spectrumBaseColor.cgColor
             barLayer.cornerRadius = 2
             barLayer.shadowOpacity = 0.18
             barLayer.shadowRadius = 6
             barLayer.shadowOffset = CGSize(width: 0, height: 1)
+            barLayer.shadowColor = spectrumShadowColor.cgColor
             spectrumContainerLayer.addSublayer(barLayer)
             spectrumBarLayers.append(barLayer)
 
             let peakLayer = CALayer()
             peakLayer.anchorPoint = CGPoint(x: 0.5, y: 0.0)
-            peakLayer.backgroundColor = NSColor.white.withAlphaComponent(0.95).cgColor
+            peakLayer.backgroundColor = spectrumBaseColor.cgColor
             peakLayer.cornerRadius = 1.5
             peakLayer.opacity = 0
             spectrumContainerLayer.addSublayer(peakLayer)
@@ -1003,6 +1015,22 @@ private final class WallpaperDaemon {
 
         if let colorHex = command.spectrumColorHex {
             spectrumColorHex = colorHex
+            let baseColor = nsColor(fromHex: colorHex) ?? NSColor(calibratedRed: 0.96, green: 0.98, blue: 1.0, alpha: 1.0)
+            let convertedColor = baseColor.usingColorSpace(.deviceRGB) ?? baseColor
+            spectrumBaseColor = NSColor(
+                calibratedRed: convertedColor.redComponent,
+                green: convertedColor.greenComponent,
+                blue: convertedColor.blueComponent,
+                alpha: 1
+            )
+            spectrumShadowColor = spectrumBaseColor.withAlphaComponent(0.65)
+            for barLayer in spectrumBarLayers {
+                barLayer.backgroundColor = spectrumBaseColor.cgColor
+                barLayer.shadowColor = spectrumShadowColor.cgColor
+            }
+            for peakLayer in spectrumPeakLayers {
+                peakLayer.backgroundColor = spectrumBaseColor.cgColor
+            }
         }
         if let offsetX = command.spectrumOffsetX {
             spectrumOffsetX = CGFloat(max(-0.35, min(0.35, offsetX)))
@@ -1011,6 +1039,9 @@ private final class WallpaperDaemon {
         if let offsetY = command.spectrumOffsetY {
             spectrumOffsetY = CGFloat(max(-0.35, min(0.35, offsetY)))
             requiresLayout = true
+        }
+        if let peakCapsEnabled = command.spectrumPeakCapsEnabled {
+            spectrumPeakCapsEnabled = peakCapsEnabled
         }
 
         if requiresLayout {
@@ -1072,8 +1103,9 @@ private final class WallpaperDaemon {
     }
 
     private func applySpectrumLevels(animated: Bool) {
-        let minimumHeight: CGFloat = 3
+        let minimumHeight: CGFloat = 0
         let maximumHeight = max(20, spectrumContainerLayer.bounds.height - 6)
+        let visibleLevelThreshold: Float = 0.015
 
         CATransaction.begin()
         if animated {
@@ -1085,41 +1117,49 @@ private final class WallpaperDaemon {
 
         for (index, barLayer) in spectrumBarLayers.enumerated() {
             let level = index < spectrumLevels.count ? spectrumLevels[index] : 0
+            let shouldHideBar = !spectrumEnabled || level <= visibleLevelThreshold
             let eased = pow(CGFloat(level), 0.72)
-            let height = minimumHeight + (maximumHeight - minimumHeight) * eased
-            barLayer.frame = CGRect(x: barLayer.frame.minX, y: 0, width: barLayer.frame.width, height: height)
-            let color = spectrumColor(intensity: CGFloat(level))
-            barLayer.backgroundColor = color.cgColor
-            barLayer.shadowColor = color.withAlphaComponent(0.65).cgColor
-            barLayer.cornerRadius = min(3, barLayer.frame.width * 0.5)
-            barLayer.opacity = spectrumEnabled ? Float(0.30 + 0.70 * level) : 0
+            let height = shouldHideBar ? 0 : (minimumHeight + (maximumHeight - minimumHeight) * eased)
+            if abs(lastRenderedBarHeights[index] - height) > 0.35 {
+                barLayer.frame = CGRect(x: barLayer.frame.minX, y: 0, width: barLayer.frame.width, height: height)
+                let cornerRadius = min(3, barLayer.frame.width * 0.5)
+                barLayer.cornerRadius = cornerRadius
+                barLayer.shadowPath = height > 0 ? CGPath(
+                    roundedRect: barLayer.bounds,
+                    cornerWidth: cornerRadius,
+                    cornerHeight: cornerRadius,
+                    transform: nil
+                ) : nil
+                lastRenderedBarHeights[index] = height
+            }
+            let barOpacity = shouldHideBar ? 0 : Float(0.30 + 0.70 * level)
+            if abs(lastRenderedBarOpacities[index] - barOpacity) > 0.015 {
+                barLayer.opacity = barOpacity
+                lastRenderedBarOpacities[index] = barOpacity
+            }
 
             let nextPeakLevel = max(CGFloat(level), max(0, spectrumPeakLevels[index] - 0.03))
             spectrumPeakLevels[index] = nextPeakLevel
-            let peakHeight = minimumHeight + (maximumHeight - minimumHeight) * pow(nextPeakLevel, 0.82)
+            let peakHeight = nextPeakLevel <= CGFloat(visibleLevelThreshold) ? 0 : (minimumHeight + (maximumHeight - minimumHeight) * pow(nextPeakLevel, 0.82))
             let peakLayer = spectrumPeakLayers[index]
-            peakLayer.frame = CGRect(
-                x: peakLayer.frame.minX,
-                y: min(maximumHeight, peakHeight + 2),
-                width: peakLayer.frame.width,
-                height: 2.5
-            )
-            peakLayer.backgroundColor = color.withAlphaComponent(0.95).cgColor
-            peakLayer.cornerRadius = 1.25
-            peakLayer.opacity = spectrumEnabled ? Float(0.5 + 0.4 * nextPeakLevel) : 0
+            let peakY = peakHeight > 0 ? min(maximumHeight, peakHeight + 2) : 0
+            if abs(lastRenderedPeakY[index] - peakY) > 0.35 {
+                peakLayer.frame = CGRect(
+                    x: peakLayer.frame.minX,
+                    y: peakY,
+                    width: peakLayer.frame.width,
+                    height: 2.5
+                )
+                peakLayer.cornerRadius = 1.25
+                lastRenderedPeakY[index] = peakY
+            }
+            let peakOpacity = (spectrumEnabled && spectrumPeakCapsEnabled && nextPeakLevel > CGFloat(visibleLevelThreshold)) ? Float(0.5 + 0.4 * nextPeakLevel) : 0
+            if abs(lastRenderedPeakOpacities[index] - peakOpacity) > 0.015 {
+                peakLayer.opacity = peakOpacity
+                lastRenderedPeakOpacities[index] = peakOpacity
+            }
         }
         CATransaction.commit()
-    }
-
-    private func spectrumColor(intensity: CGFloat) -> NSColor {
-        let clampedIntensity = min(max(intensity, 0), 1)
-        let baseColor = nsColor(fromHex: spectrumColorHex) ?? NSColor(calibratedRed: 0.96, green: 0.98, blue: 1.0, alpha: 1.0)
-        let convertedColor = baseColor.usingColorSpace(.deviceRGB) ?? baseColor
-        let red = convertedColor.redComponent
-        let green = convertedColor.greenComponent
-        let blue = convertedColor.blueComponent
-        let alpha = 0.42 + 0.42 * clampedIntensity
-        return NSColor(calibratedRed: red, green: green, blue: blue, alpha: alpha)
     }
 
     private func nsColor(fromHex hex: String) -> NSColor? {

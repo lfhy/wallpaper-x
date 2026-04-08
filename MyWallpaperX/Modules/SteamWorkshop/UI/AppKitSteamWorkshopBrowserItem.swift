@@ -180,7 +180,6 @@ final class SteamWorkshopMarqueeTextView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         needsLayout = true
-        layoutSubtreeIfNeeded()
     }
 
     func setActive(_ active: Bool) {

@@ -26,6 +26,7 @@ struct DaemonCommand: Codable {
     let spectrumColorHex: String?
     let spectrumOffsetX: Float?
     let spectrumOffsetY: Float?
+    let spectrumPeakCapsEnabled: Bool?
     let requestID: Int?
 }
 

@@ -4,9 +4,8 @@
 //
 
 import Foundation
-import ScreenCaptureKit
-import CoreMedia
 import AudioToolbox
+import CoreAudio
 import Accelerate
 
 final class SystemAudioSpectrumService: NSObject {
@@ -16,14 +15,23 @@ final class SystemAudioSpectrumService: NSObject {
     private let fftSetup: FFTSetup
     private let hannWindow: [Float]
     private let sampleQueue = DispatchQueue(label: "com.songziqiang.MyWallpaperX.system-audio-spectrum", qos: .utility)
-    private let processingMinInterval: TimeInterval = 1.0 / 20.0
-    private var stream: SCStream?
+    private let processingMinInterval: TimeInterval = 1.0 / 15.0
+    private let processingGate = DispatchSemaphore(value: 1)
+    private var tapID: AudioObjectID = kAudioObjectUnknown
+    private var aggregateDeviceID: AudioObjectID = kAudioObjectUnknown
+    private var ioProcID: AudioDeviceIOProcID?
+    private var tapStreamFormat = AudioStreamBasicDescription()
     private var isEnabled = false
     private var smoothedLevels: [Float]
     private var lastProcessedAt: TimeInterval = 0
     private var adaptiveCeiling: Float = 0.12
     private var style: SystemAudioSpectrumStyle = .balanced
     private var sensitivity: SystemAudioSpectrumSensitivity = .normal
+
+    private struct CopiedAudioFrame {
+        let buffers: [Data]
+        let streamDescription: AudioStreamBasicDescription
+    }
 
     var onLevels: (([Float]) -> Void)?
 
@@ -43,6 +51,7 @@ final class SystemAudioSpectrumService: NSObject {
     }
 
     deinit {
+        stopCapture()
         vDSP_destroy_fftsetup(fftSetup)
     }
 
@@ -50,13 +59,12 @@ final class SystemAudioSpectrumService: NSObject {
         guard isEnabled != enabled else { return }
         isEnabled = enabled
 
-        if enabled {
-            Task { [weak self] in
-                await self?.startCaptureIfNeeded()
-            }
-        } else {
-            Task { [weak self] in
-                await self?.stopCapture()
+        sampleQueue.async { [weak self] in
+            guard let self else { return }
+            if enabled {
+                self.startCaptureIfNeeded()
+            } else {
+                self.stopCapture()
             }
         }
     }
@@ -77,61 +85,220 @@ final class SystemAudioSpectrumService: NSObject {
         onLevels?(smoothedLevels)
     }
 
-    @MainActor
-    private func startCaptureIfNeeded() async {
-        guard stream == nil else { return }
-
-        do {
-            let shareableContent = try await SCShareableContent.current
-            guard let display = shareableContent.displays.first else {
-                onLevels?(Array(repeating: 0, count: barCount))
-                return
-            }
-
-            let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
-            let configuration = SCStreamConfiguration()
-            configuration.width = 2
-            configuration.height = 2
-            configuration.minimumFrameInterval = CMTime(value: 1, timescale: 2)
-            configuration.queueDepth = 1
-            configuration.showsCursor = false
-            configuration.capturesAudio = true
-            configuration.excludesCurrentProcessAudio = true
-            configuration.sampleRate = 24_000
-            configuration.channelCount = 2
-
-            let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
-            try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue)
-            try await stream.startCapture()
-            self.stream = stream
-        } catch {
-            onLevels?(Array(repeating: 0, count: barCount))
-        }
-    }
-
-    @MainActor
-    private func stopCapture() async {
-        guard let stream else {
+    private func startCaptureIfNeeded() {
+        guard tapID == kAudioObjectUnknown, aggregateDeviceID == kAudioObjectUnknown else { return }
+        guard #available(macOS 14.2, *) else {
             onLevels?(Array(repeating: 0, count: barCount))
             return
         }
 
         do {
-            try await stream.stopCapture()
+            let excludedProcessIDs = currentProcessObjectID().map { [$0] } ?? []
+            let tapDescription = CATapDescription(
+                stereoGlobalTapButExcludeProcesses: excludedProcessIDs
+            )
+            tapDescription.name = "MyWallpaperX System Audio Spectrum"
+            tapDescription.uuid = UUID()
+            tapDescription.isPrivate = true
+            tapDescription.muteBehavior = .unmuted
+            tapDescription.isProcessRestoreEnabled = false
+
+            let createdTapID = try createProcessTap(description: tapDescription)
+            tapID = createdTapID
+            let tapUID = try fetchTapUID(for: createdTapID)
+            tapStreamFormat = try fetchTapFormat(for: createdTapID)
+
+            let aggregateID = try createAggregateDevice(tapUID: tapUID)
+            aggregateDeviceID = aggregateID
+
+            var createdIOProcID: AudioDeviceIOProcID?
+            let ioStatus = AudioDeviceCreateIOProcIDWithBlock(
+                &createdIOProcID,
+                aggregateID,
+                nil
+            ) { [weak self] _, inInputData, _, _, _ in
+                self?.processAudioBufferList(inInputData)
+            }
+            guard ioStatus == noErr, let createdIOProcID else {
+                throw CaptureError.osStatus(ioStatus)
+            }
+            ioProcID = createdIOProcID
+
+            let startStatus = AudioDeviceStart(aggregateID, createdIOProcID)
+            guard startStatus == noErr else {
+                throw CaptureError.osStatus(startStatus)
+            }
         } catch {
+            stopCapture()
+            onLevels?(Array(repeating: 0, count: barCount))
         }
-        self.stream = nil
+    }
+
+    private func stopCapture() {
+        if aggregateDeviceID != kAudioObjectUnknown, let ioProcID {
+            AudioDeviceStop(aggregateDeviceID, ioProcID)
+            AudioDeviceDestroyIOProcID(aggregateDeviceID, ioProcID)
+            self.ioProcID = nil
+        }
+
+        if aggregateDeviceID != kAudioObjectUnknown {
+            AudioHardwareDestroyAggregateDevice(aggregateDeviceID)
+            aggregateDeviceID = kAudioObjectUnknown
+        }
+
+        if tapID != kAudioObjectUnknown {
+            if #available(macOS 14.2, *) {
+                AudioHardwareDestroyProcessTap(tapID)
+            }
+            tapID = kAudioObjectUnknown
+        }
+
+        tapStreamFormat = AudioStreamBasicDescription()
         smoothedLevels = Array(repeating: 0, count: barCount)
         lastProcessedAt = 0
         onLevels?(smoothedLevels)
     }
 
-    private func processAudioSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+    private func createProcessTap(description: CATapDescription) throws -> AudioObjectID {
+        var tapID = AudioObjectID(kAudioObjectUnknown)
+        let status = AudioHardwareCreateProcessTap(description, &tapID)
+        guard status == noErr else {
+            throw CaptureError.osStatus(status)
+        }
+        return tapID
+    }
+
+    private func currentProcessObjectID() -> AudioObjectID? {
+        var pid = pid_t(ProcessInfo.processInfo.processIdentifier)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var processObjectID = AudioObjectID(kAudioObjectUnknown)
+        var dataSize = UInt32(MemoryLayout<AudioObjectID>.size)
+        let status = withUnsafePointer(to: &pid) { pidPointer in
+            AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject),
+                &address,
+                UInt32(MemoryLayout<pid_t>.size),
+                pidPointer,
+                &dataSize,
+                &processObjectID
+            )
+        }
+
+        guard status == noErr, processObjectID != kAudioObjectUnknown else {
+            return nil
+        }
+
+        return processObjectID
+    }
+
+    private func createAggregateDevice(tapUID: CFString) throws -> AudioObjectID {
+        let tapList: [[String: Any]] = [[
+            kAudioSubTapUIDKey: tapUID,
+            kAudioSubTapDriftCompensationKey: NSNumber(value: false)
+        ]]
+        let aggregateDescription: [String: Any] = [
+            kAudioAggregateDeviceNameKey: "MyWallpaperX System Audio Spectrum",
+            kAudioAggregateDeviceUIDKey: "com.songziqiang.MyWallpaperX.system-audio-spectrum.\(UUID().uuidString)",
+            kAudioAggregateDeviceIsPrivateKey: NSNumber(value: 1),
+            kAudioAggregateDeviceTapListKey: tapList,
+            kAudioAggregateDeviceTapAutoStartKey: NSNumber(value: 1)
+        ]
+
+        var deviceID = AudioObjectID(kAudioObjectUnknown)
+        let status = AudioHardwareCreateAggregateDevice(aggregateDescription as CFDictionary, &deviceID)
+        guard status == noErr else {
+            throw CaptureError.osStatus(status)
+        }
+        return deviceID
+    }
+
+    private func fetchTapUID(for tapID: AudioObjectID) throws -> CFString {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioTapPropertyUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var tapUID: CFString = "" as CFString
+        var dataSize = UInt32(MemoryLayout<CFString>.size)
+        let status = withUnsafeMutablePointer(to: &tapUID) { pointer in
+            AudioObjectGetPropertyData(
+                tapID,
+                &address,
+                0,
+                nil,
+                &dataSize,
+                pointer
+            )
+        }
+        guard status == noErr else {
+            throw CaptureError.osStatus(status)
+        }
+        return tapUID
+    }
+
+    private func fetchTapFormat(for tapID: AudioObjectID) throws -> AudioStreamBasicDescription {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioTapPropertyFormat,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var format = AudioStreamBasicDescription()
+        var dataSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        let status = AudioObjectGetPropertyData(
+            tapID,
+            &address,
+            0,
+            nil,
+            &dataSize,
+            &format
+        )
+        guard status == noErr else {
+            throw CaptureError.osStatus(status)
+        }
+        return format
+    }
+
+    private func processAudioBufferList(_ inputData: UnsafePointer<AudioBufferList>) {
         let now = ProcessInfo.processInfo.systemUptime
         guard now - lastProcessedAt >= processingMinInterval else { return }
         lastProcessedAt = now
 
-        guard let audioFrame = monoSamples(from: sampleBuffer), !audioFrame.samples.isEmpty else {
+        guard processingGate.wait(timeout: .now()) == .success else { return }
+
+        guard let copiedFrame = copyAudioFrame(from: inputData, streamDescription: tapStreamFormat) else {
+            processingGate.signal()
+            return
+        }
+
+        sampleQueue.async { [weak self] in
+            guard let self else { return }
+            defer { self.processingGate.signal() }
+            self.processCopiedAudioFrame(copiedFrame)
+        }
+    }
+
+    private func copyAudioFrame(
+        from bufferListPointer: UnsafePointer<AudioBufferList>,
+        streamDescription: AudioStreamBasicDescription
+    ) -> CopiedAudioFrame? {
+        let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: bufferListPointer))
+        guard !buffers.isEmpty else { return nil }
+
+        let copiedBuffers = buffers.compactMap { buffer -> Data? in
+            guard let data = buffer.mData, buffer.mDataByteSize > 0 else { return nil }
+            return Data(bytes: data, count: Int(buffer.mDataByteSize))
+        }
+
+        guard !copiedBuffers.isEmpty else { return nil }
+        return CopiedAudioFrame(buffers: copiedBuffers, streamDescription: streamDescription)
+    }
+
+    private func processCopiedAudioFrame(_ copiedFrame: CopiedAudioFrame) {
+        guard let audioFrame = monoSamples(from: copiedFrame), !audioFrame.samples.isEmpty else {
             return
         }
 
@@ -152,60 +319,48 @@ final class SystemAudioSpectrumService: NSObject {
         onLevels?(nextLevels)
     }
 
-    private func monoSamples(from sampleBuffer: CMSampleBuffer) -> (samples: [Float], sampleRate: Float)? {
-        guard CMSampleBufferIsValid(sampleBuffer),
-              let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
-              let streamDescriptionPointer = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
-            return nil
-        }
+    private func monoSamples(
+        from copiedFrame: CopiedAudioFrame
+    ) -> (samples: [Float], sampleRate: Float)? {
+        guard !copiedFrame.buffers.isEmpty else { return nil }
 
-        let streamDescription = streamDescriptionPointer.pointee
+        let streamDescription = copiedFrame.streamDescription
         let channelCount = max(1, Int(streamDescription.mChannelsPerFrame))
+        let bytesPerFrame = max(1, Int(streamDescription.mBytesPerFrame))
         let sampleRate = Float(max(1, streamDescription.mSampleRate))
-        let maxBuffers = max(1, channelCount)
-        let audioBufferListSize = MemoryLayout<AudioBufferList>.size + MemoryLayout<AudioBuffer>.size * max(0, maxBuffers - 1)
-        let audioBufferListPointer = UnsafeMutableRawPointer.allocate(
-            byteCount: audioBufferListSize,
-            alignment: MemoryLayout<AudioBufferList>.alignment
-        )
-        defer { audioBufferListPointer.deallocate() }
-
-        let bufferList = audioBufferListPointer.bindMemory(to: AudioBufferList.self, capacity: 1)
-        var blockBuffer: CMBlockBuffer?
-        let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-            sampleBuffer,
-            bufferListSizeNeededOut: nil,
-            bufferListOut: bufferList,
-            bufferListSize: audioBufferListSize,
-            blockBufferAllocator: nil,
-            blockBufferMemoryAllocator: nil,
-            flags: UInt32(kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment),
-            blockBufferOut: &blockBuffer
-        )
-        guard status == noErr else { return nil }
-
-        let bufferListPointerView = UnsafeMutableAudioBufferListPointer(bufferList)
-        let frameCount = max(1, CMSampleBufferGetNumSamples(sampleBuffer))
+        let frameCount = max(1, copiedFrame.buffers[0].count / bytesPerFrame)
         let isFloat = (streamDescription.mFormatFlags & kAudioFormatFlagIsFloat) != 0
         let isSignedInteger = (streamDescription.mFormatFlags & kAudioFormatFlagIsSignedInteger) != 0
 
         if isFloat {
             return (
                 samples: monoFloatSamples(
-                from: bufferListPointerView,
-                channelCount: channelCount,
-                frameCount: frameCount
+                    from: copiedFrame.buffers,
+                    channelCount: channelCount,
+                    frameCount: frameCount
                 ),
                 sampleRate: sampleRate
             )
         }
 
         if isSignedInteger {
+            let bitsPerChannel = Int(streamDescription.mBitsPerChannel)
+            if bitsPerChannel <= 16 {
+                return (
+                    samples: monoInt16Samples(
+                        from: copiedFrame.buffers,
+                        channelCount: channelCount,
+                        frameCount: frameCount
+                    ),
+                    sampleRate: sampleRate
+                )
+            }
+
             return (
-                samples: monoInt16Samples(
-                from: bufferListPointerView,
-                channelCount: channelCount,
-                frameCount: frameCount
+                samples: monoInt32Samples(
+                    from: copiedFrame.buffers,
+                    channelCount: channelCount,
+                    frameCount: frameCount
                 ),
                 sampleRate: sampleRate
             )
@@ -215,15 +370,15 @@ final class SystemAudioSpectrumService: NSObject {
     }
 
     private func monoFloatSamples(
-        from buffers: UnsafeMutableAudioBufferListPointer,
+        from buffers: [Data],
         channelCount: Int,
         frameCount: Int
     ) -> [Float] {
         guard !buffers.isEmpty else { return [] }
         var mono = Array(repeating: Float(0), count: frameCount)
 
-        if buffers.count == 1, let data = buffers[0].mData {
-            let values = data.assumingMemoryBound(to: Float.self)
+        if buffers.count == 1 {
+            let values = buffers[0].withUnsafeBytes { $0.bindMemory(to: Float.self) }
             for frameIndex in 0..<frameCount {
                 var sum: Float = 0
                 for channelIndex in 0..<channelCount {
@@ -238,8 +393,7 @@ final class SystemAudioSpectrumService: NSObject {
             var sum: Float = 0
             var contributingChannels = 0
             for buffer in buffers {
-                guard let data = buffer.mData else { continue }
-                let values = data.assumingMemoryBound(to: Float.self)
+                let values = buffer.withUnsafeBytes { $0.bindMemory(to: Float.self) }
                 sum += abs(values[frameIndex])
                 contributingChannels += 1
             }
@@ -249,7 +403,7 @@ final class SystemAudioSpectrumService: NSObject {
     }
 
     private func monoInt16Samples(
-        from buffers: UnsafeMutableAudioBufferListPointer,
+        from buffers: [Data],
         channelCount: Int,
         frameCount: Int
     ) -> [Float] {
@@ -257,8 +411,8 @@ final class SystemAudioSpectrumService: NSObject {
         var mono = Array(repeating: Float(0), count: frameCount)
         let normalization = Float(Int16.max)
 
-        if buffers.count == 1, let data = buffers[0].mData {
-            let values = data.assumingMemoryBound(to: Int16.self)
+        if buffers.count == 1 {
+            let values = buffers[0].withUnsafeBytes { $0.bindMemory(to: Int16.self) }
             for frameIndex in 0..<frameCount {
                 var sum: Float = 0
                 for channelIndex in 0..<channelCount {
@@ -274,8 +428,42 @@ final class SystemAudioSpectrumService: NSObject {
             var sum: Float = 0
             var contributingChannels = 0
             for buffer in buffers {
-                guard let data = buffer.mData else { continue }
-                let values = data.assumingMemoryBound(to: Int16.self)
+                let values = buffer.withUnsafeBytes { $0.bindMemory(to: Int16.self) }
+                sum += abs(Float(values[frameIndex]) / normalization)
+                contributingChannels += 1
+            }
+            mono[frameIndex] = contributingChannels > 0 ? (sum / Float(contributingChannels)) : 0
+        }
+        return mono
+    }
+
+    private func monoInt32Samples(
+        from buffers: [Data],
+        channelCount: Int,
+        frameCount: Int
+    ) -> [Float] {
+        guard !buffers.isEmpty else { return [] }
+        var mono = Array(repeating: Float(0), count: frameCount)
+        let normalization = Float(Int32.max)
+
+        if buffers.count == 1 {
+            let values = buffers[0].withUnsafeBytes { $0.bindMemory(to: Int32.self) }
+            for frameIndex in 0..<frameCount {
+                var sum: Float = 0
+                for channelIndex in 0..<channelCount {
+                    let sample = Float(values[frameIndex * channelCount + channelIndex]) / normalization
+                    sum += abs(sample)
+                }
+                mono[frameIndex] = sum / Float(channelCount)
+            }
+            return mono
+        }
+
+        for frameIndex in 0..<frameCount {
+            var sum: Float = 0
+            var contributingChannels = 0
+            for buffer in buffers {
+                let values = buffer.withUnsafeBytes { $0.bindMemory(to: Int32.self) }
                 sum += abs(Float(values[frameIndex]) / normalization)
                 contributingChannels += 1
             }
@@ -475,20 +663,8 @@ final class SystemAudioSpectrumService: NSObject {
     }
 }
 
-extension SystemAudioSpectrumService: SCStreamOutput, SCStreamDelegate {
-    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .audio else { return }
-        processAudioSampleBuffer(sampleBuffer)
-    }
-
-    func stream(_ stream: SCStream, didStopWithError error: Error) {
-        Task { @MainActor [weak self] in
-            self?.stream = nil
-            if self?.isEnabled == true {
-                await self?.startCaptureIfNeeded()
-            } else {
-                self?.onLevels?(Array(repeating: 0, count: self?.barCount ?? 0))
-            }
-        }
+private extension SystemAudioSpectrumService {
+    enum CaptureError: Error {
+        case osStatus(OSStatus)
     }
 }

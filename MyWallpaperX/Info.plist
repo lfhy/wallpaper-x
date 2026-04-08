@@ -29,6 +29,8 @@
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>MyWallpaperX 需要访问系统音频以生成桌面频谱可视化。</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

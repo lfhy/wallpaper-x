@@ -274,6 +274,7 @@ public struct WallpaperSettings: Codable {
     var systemAudioSpectrumOffsetX: Double = 0.0
     var systemAudioSpectrumOffsetY: Double = 0.0
     var systemAudioSpectrumBarCount: Int = 28
+    var systemAudioSpectrumPeakCapsEnabled: Bool = true
     var sortMode: WallpaperSortMode = .none // 壁纸排序方式
     var sortAscending: Bool = true // 排序方向：true=升序，false=降序
 
@@ -313,6 +314,7 @@ public struct WallpaperSettings: Codable {
         case systemAudioSpectrumOffsetX
         case systemAudioSpectrumOffsetY
         case systemAudioSpectrumBarCount
+        case systemAudioSpectrumPeakCapsEnabled
         case sortMode
         case sortAscending
     }

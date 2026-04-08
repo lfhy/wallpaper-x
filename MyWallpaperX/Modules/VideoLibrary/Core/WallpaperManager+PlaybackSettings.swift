@@ -294,7 +294,8 @@ extension WallpaperManager {
             colorHex: settings.systemAudioSpectrumColorHex,
             offsetX: Float(settings.systemAudioSpectrumOffsetX),
             offsetY: Float(settings.systemAudioSpectrumOffsetY),
-            barCount: settings.systemAudioSpectrumBarCount
+            barCount: settings.systemAudioSpectrumBarCount,
+            peakCapsEnabled: settings.systemAudioSpectrumPeakCapsEnabled
         )
     }
 }

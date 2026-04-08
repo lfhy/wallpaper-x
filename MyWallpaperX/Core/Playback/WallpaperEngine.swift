@@ -64,6 +64,7 @@ public final class WallpaperEngine: NSObject {
     var currentSystemAudioSpectrumOffsetX: Float = 0
     var currentSystemAudioSpectrumOffsetY: Float = 0
     var currentSystemAudioSpectrumBarCount = WallpaperEngine.defaultSpectrumBarCount
+    var currentSystemAudioSpectrumPeakCapsEnabled = true
     var currentSpectrumLevels: [Float]
     var lastSpectrumPushAt: CFTimeInterval = 0
     private var systemAudioSpectrumService: SystemAudioSpectrumService
@@ -276,7 +277,7 @@ public final class WallpaperEngine: NSObject {
 
         // 统一给所有正在运行的 daemon 下发 pause，保持引擎状态机单一。
         for session in displaySessions.values where session.process.isRunning {
-            send(DaemonCommand(action: "pause", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: nil, spectrumEnabled: nil, spectrumLevels: nil, spectrumBarCount: nil, spectrumColorHex: nil, spectrumOffsetX: nil, spectrumOffsetY: nil, requestID: nil), to: session)
+            send(DaemonCommand(action: "pause", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: nil, spectrumEnabled: nil, spectrumLevels: nil, spectrumBarCount: nil, spectrumColorHex: nil, spectrumOffsetX: nil, spectrumOffsetY: nil, spectrumPeakCapsEnabled: nil, requestID: nil), to: session)
         }
         playbackPaused = true
     }
@@ -287,7 +288,7 @@ public final class WallpaperEngine: NSObject {
 
         // 恢复时统一带回当前播放速率，避免不同 session 恢复节奏不一致。
         for session in displaySessions.values where session.process.isRunning {
-            send(DaemonCommand(action: "resume", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: targetPlaybackRate, spectrumEnabled: nil, spectrumLevels: nil, spectrumBarCount: nil, spectrumColorHex: nil, spectrumOffsetX: nil, spectrumOffsetY: nil, requestID: nil), to: session)
+            send(DaemonCommand(action: "resume", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: targetPlaybackRate, spectrumEnabled: nil, spectrumLevels: nil, spectrumBarCount: nil, spectrumColorHex: nil, spectrumOffsetX: nil, spectrumOffsetY: nil, spectrumPeakCapsEnabled: nil, requestID: nil), to: session)
         }
         playbackPaused = false
     }
@@ -297,13 +298,13 @@ public final class WallpaperEngine: NSObject {
         currentVolumeNormalized = normalizedVolume
 
         for session in displaySessions.values where session.process.isRunning {
-            send(DaemonCommand(action: "setVolume", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: normalizedVolume, playbackRate: nil, spectrumEnabled: nil, spectrumLevels: nil, spectrumBarCount: nil, spectrumColorHex: nil, spectrumOffsetX: nil, spectrumOffsetY: nil, requestID: nil), to: session)
+            send(DaemonCommand(action: "setVolume", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: normalizedVolume, playbackRate: nil, spectrumEnabled: nil, spectrumLevels: nil, spectrumBarCount: nil, spectrumColorHex: nil, spectrumOffsetX: nil, spectrumOffsetY: nil, spectrumPeakCapsEnabled: nil, requestID: nil), to: session)
         }
     }
 
     public func setFillMode(_ fillMode: String) {
         for session in displaySessions.values where session.process.isRunning {
-            send(DaemonCommand(action: "setFillMode", videoPath: nil, framePath: nil, fillMode: fillMode, shouldLoopCurrentItem: nil, volume: nil, playbackRate: nil, spectrumEnabled: nil, spectrumLevels: nil, spectrumBarCount: nil, spectrumColorHex: nil, spectrumOffsetX: nil, spectrumOffsetY: nil, requestID: nil), to: session)
+            send(DaemonCommand(action: "setFillMode", videoPath: nil, framePath: nil, fillMode: fillMode, shouldLoopCurrentItem: nil, volume: nil, playbackRate: nil, spectrumEnabled: nil, spectrumLevels: nil, spectrumBarCount: nil, spectrumColorHex: nil, spectrumOffsetX: nil, spectrumOffsetY: nil, spectrumPeakCapsEnabled: nil, requestID: nil), to: session)
         }
     }
 
@@ -312,7 +313,7 @@ public final class WallpaperEngine: NSObject {
         // 不做去重，确保每次开关操作都能可靠送达 daemon。
         currentShouldLoopCurrentItem = shouldLoop
         for session in displaySessions.values where session.process.isRunning {
-            send(DaemonCommand(action: "setLoop", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: shouldLoop, volume: nil, playbackRate: nil, spectrumEnabled: nil, spectrumLevels: nil, spectrumBarCount: nil, spectrumColorHex: nil, spectrumOffsetX: nil, spectrumOffsetY: nil, requestID: nil), to: session)
+            send(DaemonCommand(action: "setLoop", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: shouldLoop, volume: nil, playbackRate: nil, spectrumEnabled: nil, spectrumLevels: nil, spectrumBarCount: nil, spectrumColorHex: nil, spectrumOffsetX: nil, spectrumOffsetY: nil, spectrumPeakCapsEnabled: nil, requestID: nil), to: session)
         }
     }
 
@@ -322,7 +323,7 @@ public final class WallpaperEngine: NSObject {
         targetPlaybackRate = clampedRate
         guard !playbackPaused else { return }
         for session in displaySessions.values where session.process.isRunning {
-            send(DaemonCommand(action: "resume", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: clampedRate, spectrumEnabled: nil, spectrumLevels: nil, spectrumBarCount: nil, spectrumColorHex: nil, spectrumOffsetX: nil, spectrumOffsetY: nil, requestID: nil), to: session)
+            send(DaemonCommand(action: "resume", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: clampedRate, spectrumEnabled: nil, spectrumLevels: nil, spectrumBarCount: nil, spectrumColorHex: nil, spectrumOffsetX: nil, spectrumOffsetY: nil, spectrumPeakCapsEnabled: nil, requestID: nil), to: session)
         }
     }
 
@@ -334,7 +335,8 @@ public final class WallpaperEngine: NSObject {
             colorHex: currentSystemAudioSpectrumColorHex,
             offsetX: currentSystemAudioSpectrumOffsetX,
             offsetY: currentSystemAudioSpectrumOffsetY,
-            barCount: currentSystemAudioSpectrumBarCount
+            barCount: currentSystemAudioSpectrumBarCount,
+            peakCapsEnabled: currentSystemAudioSpectrumPeakCapsEnabled
         )
     }
 
@@ -345,7 +347,8 @@ public final class WallpaperEngine: NSObject {
         colorHex: String,
         offsetX: Float,
         offsetY: Float,
-        barCount: Int
+        barCount: Int,
+        peakCapsEnabled: Bool
     ) {
         let normalizedBarCount = max(12, min(48, barCount))
         let previousBarCount = currentSystemAudioSpectrumBarCount
@@ -354,6 +357,7 @@ public final class WallpaperEngine: NSObject {
         currentSystemAudioSpectrumOffsetX = max(-0.35, min(0.35, offsetX))
         currentSystemAudioSpectrumOffsetY = max(-0.35, min(0.35, offsetY))
         currentSystemAudioSpectrumBarCount = normalizedBarCount
+        currentSystemAudioSpectrumPeakCapsEnabled = peakCapsEnabled
         currentSpectrumLevels = Array(repeating: 0, count: normalizedBarCount)
         lastSpectrumPushAt = 0
 
@@ -380,6 +384,7 @@ public final class WallpaperEngine: NSObject {
                     spectrumColorHex: colorHex,
                     spectrumOffsetX: currentSystemAudioSpectrumOffsetX,
                     spectrumOffsetY: currentSystemAudioSpectrumOffsetY,
+                    spectrumPeakCapsEnabled: peakCapsEnabled,
                     requestID: nil
                 ),
                 to: session
@@ -413,6 +418,7 @@ public final class WallpaperEngine: NSObject {
                     spectrumColorHex: nil,
                     spectrumOffsetX: nil,
                     spectrumOffsetY: nil,
+                    spectrumPeakCapsEnabled: nil,
                     requestID: nil
                 ),
                 to: session
@@ -566,7 +572,7 @@ public final class WallpaperEngine: NSObject {
         guard let session = displaySessions.removeValue(forKey: displayID) else { return }
 
         if session.process.isRunning {
-            send(DaemonCommand(action: "stop", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: nil, spectrumEnabled: nil, spectrumLevels: nil, spectrumBarCount: nil, spectrumColorHex: nil, spectrumOffsetX: nil, spectrumOffsetY: nil, requestID: nil), to: session)
+            send(DaemonCommand(action: "stop", videoPath: nil, framePath: nil, fillMode: nil, shouldLoopCurrentItem: nil, volume: nil, playbackRate: nil, spectrumEnabled: nil, spectrumLevels: nil, spectrumBarCount: nil, spectrumColorHex: nil, spectrumOffsetX: nil, spectrumOffsetY: nil, spectrumPeakCapsEnabled: nil, requestID: nil), to: session)
             session.process.terminate()
         }
         cleanupSessionIO(session)
@@ -597,6 +603,7 @@ public final class WallpaperEngine: NSObject {
                 spectrumColorHex: currentSystemAudioSpectrumColorHex,
                 spectrumOffsetX: currentSystemAudioSpectrumOffsetX,
                 spectrumOffsetY: currentSystemAudioSpectrumOffsetY,
+                spectrumPeakCapsEnabled: currentSystemAudioSpectrumPeakCapsEnabled,
                 requestID: requestID
             ),
             to: session
