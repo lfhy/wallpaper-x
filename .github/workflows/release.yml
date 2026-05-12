@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select latest stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Build Release app
+        run: |
+          xcodebuild \
+            -project MyWallpaperX.xcodeproj \
+            -scheme MyWallpaperX \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Package DMG
+        run: |
+          APP_PATH="build/Build/Products/Release/MyWallpaperX.app"
+          STAGING_DIR="dmg-staging"
+          DMG_PATH="MyWallpaperX-${GITHUB_REF_NAME}.dmg"
+
+          rm -rf "$STAGING_DIR" "$DMG_PATH"
+          mkdir -p "$STAGING_DIR"
+          ditto "$APP_PATH" "$STAGING_DIR/MyWallpaperX.app"
+          ln -s /Applications "$STAGING_DIR/Applications"
+          hdiutil create \
+            -volname "MyWallpaperX" \
+            -srcfolder "$STAGING_DIR" \
+            -ov \
+            -format UDZO \
+            "$DMG_PATH"
+
+      - name: Prepare release notes
+        run: |
+          VERSION="$GITHUB_REF_NAME"
+          cat > release-notes.md <<'EOF'
+          # MyWallpaperX __VERSION__
+
+          ## Download
+          - MyWallpaperX-__VERSION__.dmg
+
+          ## Build
+          - Tag: __VERSION__
+          - Configuration: Release
+          - Trigger: push tag
+
+          ## If macOS says "move to Trash"
+          This is macOS Gatekeeper quarantine behavior for unsigned apps.
+
+          Run this after copying the app to `/Applications`:
+
+          ```bash
+          xattr -dr com.apple.quarantine /Applications/MyWallpaperX.app
+          ```
+
+          If needed, you can also right-click the app and choose `Open` once.
+          EOF
+          sed -i '' "s/__VERSION__/${VERSION}/g" release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: MyWallpaperX ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: MyWallpaperX-${{ github.ref_name }}.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
